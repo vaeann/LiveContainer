@@ -147,6 +147,7 @@ jobs:
             - Bundle ID：`com.kdt.livecontainer`（与上游一致，可直接覆盖安装）
             - 上游：`${{ env.UPSTREAM_REPO }}`
             - 构建 commit：`${{ github.sha }}`
+            - **对应源码**：https://github.com/${{ github.repository }}/tree/${{ github.sha }}
             - 合并方式：${{ inputs.upstream_ref == '' && '直接构建' || format('先合并上游 {0}', inputs.upstream_ref) }}
 
             > 必须用**与已安装版本相同的 Apple ID** 签名，否则数据无法保留。
