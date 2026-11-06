@@ -1,0 +1,12 @@
+# 合并上游时，本仓库自己的文件永远保留本地版本，避免每次同步都要手工解冲突。
+# 需要让 CI 里的 merge 生效，工作流里已执行：git config merge.ours.driver true
+#
+# 如果你在本地合并上游，先执行一次：
+#   git config merge.ours.driver true
+
+.github/workflows/build.yml            merge=ours
+.github/workflows/check-upstream.yml   merge=ours
+.gitattributes                         merge=ours
+README.md                              merge=ours
+NOTICE.md                              merge=ours
+scripts/make-ipa.sh                    merge=ours
