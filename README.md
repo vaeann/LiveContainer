@@ -133,6 +133,45 @@ git push
 
 ---
 
+## 开发时注意
+
+### 引入第三方库
+
+AGPL-3.0 对许可证兼容性很严格，引入不兼容的库会导致整个项目不能合法分发。
+
+| 许可证 | 能否引入 |
+|---|---|
+| MIT / BSD-2 / BSD-3 / ISC | 可以 |
+| Apache-2.0 | 可以（与 AGPL-3.0 兼容）|
+| MPL-2.0 | 可以（文件级 copyleft）|
+| LGPL-2.1 / LGPL-3.0 | 谨慎，动态链接一般可以，静态链接有问题 |
+| GPL-2.0-only | **不行**，与 AGPL-3.0 不兼容 |
+| 任何「非商业」「仅个人使用」许可 | **不行**，那不是开源许可 |
+
+加库之前先看它的 LICENSE。SPM 项目可以用 `swift package show-dependencies` 列出全部依赖。
+
+### 改动放在哪里
+
+新功能尽量放在独立目录（比如 `MyFeature/`），不要改 `main.m`、`LiveContainerSwiftUI/`
+这些上游高频变动的文件，否则每次同步上游都要解冲突。
+
+`.gitattributes` 只保护列出的那些文件。**新建目录不会自动受保护**——如果上游恰好也起了同名路径，照样冲突。
+
+### 每次 push 会自动检查
+
+`guard.yml` 会拦下这些情况：
+
+- `LICENSE` 内容被改动（sha256 比对）
+- 仓库里出现 `.p12` / `.p8` / `.mobileprovision` / `.ipa` / `.env` 等
+- `xcconfigs/Global.xcconfig` 的 bundle id 或 Release 后缀被改
+- 关键文件被删除，或 workflow 被改名
+- `.gitmodules` 少了 submodule
+- README 丢了上游链接或 AGPL 声明
+
+红了就看 Guard 的日志，它会指出具体是哪一条。
+
+---
+
 ## 已移除的上游文件
 
 | 文件 | 原因 |

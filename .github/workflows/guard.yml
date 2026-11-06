@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
 
       - name: LICENSE 未被改动
         run: |
@@ -86,6 +88,19 @@ jobs:
           grep -q "LiveContainer/LiveContainer" README.md || { echo "::error::README 缺了上游链接，AGPL 要求标注出处"; fail=1; }
           grep -qi "AGPL" README.md || { echo "::error::README 缺了 AGPL 声明"; fail=1; }
           [ "$fail" = "0" ] && echo "OK: README 声明完整"
+
+      - name: 依赖变更时提醒检查许可证
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || true)
+          if echo "$CHANGED" | grep -qE 'Package\.resolved|Package\.swift|Podfile|Podfile\.lock|Cartfile'; then
+            echo "::warning::本次改动涉及依赖清单，请确认新依赖的许可证与 AGPL-3.0 兼容"
+            echo "可以：MIT / BSD / ISC / Apache-2.0 / MPL-2.0"
+            echo "不行：GPL-2.0-only、任何「非商业」「仅个人使用」类许可"
+            echo "涉及文件："
+            echo "$CHANGED" | grep -E 'Package\.resolved|Package\.swift|Podfile|Podfile\.lock|Cartfile' || true
+          else
+            echo "OK: 本次改动未涉及依赖清单"
+          fi
 
       - name: 汇总
         run: echo "全部基线检查通过"
