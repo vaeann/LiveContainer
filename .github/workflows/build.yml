@@ -30,7 +30,10 @@ env:
 jobs:
   build:
     name: Build unsigned IPA
-    runs-on: macos-latest
+    # macOS arm64 runner 容量紧张，排队久了会被系统放弃
+    # （The job was not acquired by Runner of type hosted even after multiple attempts）。
+    # Intel 镜像可用性明显更好，且交叉编译 iOS arm64 与宿主架构无关。
+    runs-on: macos-26-intel
     steps:
       - name: Checkout
         uses: actions/checkout@v6
