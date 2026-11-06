@@ -2,7 +2,6 @@ name: Check upstream commit
 
 on:
   schedule:
-    # 每天 03:17 UTC，避开整点拥堵
     - cron: '17 3 * * *'
   workflow_dispatch:
 
@@ -31,7 +30,7 @@ jobs:
             echo "date=${DATE}"
             echo "msg=${MSG}"
           } >> "$GITHUB_OUTPUT"
-          echo "上游 main：${SHA:0:7}  ${DATE}  ${MSG}"
+          echo "upstream main: ${SHA:0:7}  ${DATE}  ${MSG}"
 
       - name: Read local latest release
         id: local
@@ -40,10 +39,10 @@ jobs:
         run: |
           DATE=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.created_at' 2>/dev/null || echo "1970-01-01T00:00:00Z")
           echo "date=${DATE}" >> "$GITHUB_OUTPUT"
-          echo "本仓库最新 release：${DATE}"
+          echo "local latest release: ${DATE}"
 
       - name: Open notification issue
-        if: steps.up.outputs.date != '' && steps.up.outputs.date > steps.local.outputs.date
+        if: ${{ steps.up.outputs.date != '' && steps.up.outputs.date > steps.local.outputs.date }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UP_SHA: ${{ steps.up.outputs.sha }}
@@ -55,37 +54,36 @@ jobs:
           COUNT=$(gh issue list --repo "${{ github.repository }}" \
             --search "${TITLE} in:title" --state open --json number --jq 'length')
           if [ "$COUNT" != "0" ]; then
-            echo "已有未关闭的提醒 issue，跳过"
+            echo "already has an open issue, skip"
             exit 0
           fi
 
+          BODY="上游 ${UPSTREAM_REPO} 有比上次构建更新的提交。
+
+          上游 commit: ${UP_SHA:0:7}
+          提交时间:    ${UP_DATE}
+          上次构建:    ${LOCAL_DATE}
+          提交信息:    ${UP_MSG}
+
+          怎么应用：
+
+          1. 打开 Actions -> Build IPA
+          2. 点 Run workflow
+          3. upstream_ref 填 main
+          4. create_release 保持勾选
+          5. 运行
+
+          工作流会先合并上游 main，把结果推回仓库，再构建未签名 IPA 并发布 Release。
+          如果出现冲突，Merge upstream 那一步会失败并列出冲突文件。
+
+          构建前提醒：
+          - CFBundleVersion 会自动递增，保证能覆盖安装
+          - Bundle ID 保持 com.kdt.livecontainer 不变
+          - 签名必须用和已装版本相同的 Apple ID
+          - 只出单版本，不含 LiveContainer+SideStore.ipa
+
+          注：官方 Release tag 固定为 1.0 / nightly，所以这里按 commit 时间判断更新，不看 tag。"
+
           gh issue create --repo "${{ github.repository }}" \
             --title "${TITLE}" \
-            --body "上游 \`${UPSTREAM_REPO}\` 有比上次构建更新的提交。
-
-| 项 | 值 |
-|---|---|
-| 上游 commit | \`${UP_SHA:0:7}\` |
-| 上游提交时间 | ${UP_DATE} |
-| 上次构建 | ${LOCAL_DATE} |
-| 最新提交信息 | ${UP_MSG} |
-
-## 怎么应用
-
-1. 打开 [Actions → Build IPA](../../actions/workflows/build.yml)
-2. 点 **Run workflow**
-3. \`upstream_ref\` 填 \`main\`
-4. \`create_release\` 保持勾选
-5. 运行
-
-工作流会先 merge 上游 main，把合并结果推回仓库，再构建未签名 IPA 并发布 Release。
-
-如果 merge 出现冲突，任务会在 \`Merge upstream\` 步骤失败并列出冲突文件。
-
-> 官方的 Release tag 是固定的 \`1.0\` / \`nightly\`，所以这里按 **commit 时间**判断有没有更新，不看 tag。
-
-## 构建前提醒
-
-- \`CFBundleVersion\` 会自动改成 \`版本号.RunNumber\`，保证能覆盖安装
-- Bundle ID 保持 \`com.kdt.livecontainer\`，**签名必须用和已装版本相同的 Apple ID**
-- 只出单版本，不含 \`LiveContainer+SideStore.ipa\`"
+            --body "${BODY}"
