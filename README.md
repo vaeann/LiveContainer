@@ -79,6 +79,11 @@ CFBundleVersion            = 30811.42      （固定宽度版本号 . GitHub Run
 
 跑一次大约 8-12 分钟。公开仓库的 macOS runner 免费，不占额度。
 
+> **Runner 用的是 `macos-26-intel`，不是 `macos-latest`。** macOS arm64 runner 容量紧张，
+> 排队 15 分钟拿不到机器就会被系统直接放弃（注解原文：`The job was not acquired by
+> Runner of type hosted even after multiple attempts`）。Intel 镜像实测 10 秒内分配。
+> 交叉编译 iOS arm64 与宿主架构无关，产物一致。
+
 ---
 
 ## 同步上游
