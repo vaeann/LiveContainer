@@ -7,3 +7,27 @@ packages/
 xcuserdata
 Resources/Frameworks/OpenSSL.framework
 apps_nightly.json
+
+# ---- 以下为 fork 追加：禁止把签名材料与凭证提交进仓库 ----
+# 一旦提交到公开仓库，Git 历史里会永久保留，删文件也无效。
+*.p12
+*.p8
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+AuthKey_*
+*.keystore
+*.jks
+*.key
+.env
+.env.*
+*.ipa
+
+# ---- 本地构建产物 ----
+/Payload/
+/Payload.app/
+build/
+DerivedData/
+*.zsign_cache

@@ -6,7 +6,9 @@
 
 .github/workflows/build.yml            merge=ours
 .github/workflows/check-upstream.yml   merge=ours
+.github/workflows/guard.yml            merge=ours
 .gitattributes                         merge=ours
+.gitignore                             merge=ours
 README.md                              merge=ours
 NOTICE.md                              merge=ours
 scripts/make-ipa.sh                    merge=ours

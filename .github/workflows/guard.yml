@@ -1,0 +1,91 @@
+name: Guard
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: 合规与安全基线
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: LICENSE 未被改动
+        run: |
+          EXPECTED="8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"
+          ACTUAL=$(sha256sum LICENSE | awk '{print $1}')
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::LICENSE 被修改了。AGPL-3.0 全文必须原样保留，不能换协议、不能删改内容。"
+            echo "期望: $EXPECTED"
+            echo "实际: $ACTUAL"
+            echo "如果想声明自己的版权，请写在 README.md 或 NOTICE.md，不要动 LICENSE。"
+            exit 1
+          fi
+          echo "OK: LICENSE 与上游一致"
+
+      - name: 没有提交签名材料或凭证
+        run: |
+          HITS=$(find . -type f \
+            \( -iname "*.p12" -o -iname "*.p8" -o -iname "*.pfx" \
+            -o -iname "*.mobileprovision" -o -iname "*.provisionprofile" \
+            -o -iname "*.cer" -o -iname "*.key" -o -iname "*.keystore" -o -iname "*.jks" \
+            -o -iname "*.ipa" -o -name ".env" \) \
+            -not -path "./.git/*" 2>/dev/null || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::仓库里出现了不应提交的文件，请立刻移除并重写历史："
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK: 无敏感文件"
+
+      - name: Bundle ID 未被改动
+        run: |
+          grep -qF 'LIVECONTAINER_BUNDLE_IDENTIFIER = com.kdt.livecontainer$(DEVELOPMENT_TEAM_SUFFIX)' \
+            xcconfigs/Global.xcconfig || {
+            echo "::error::bundle id 被改了。它是覆盖安装后保住数据的唯一依据，不要动。"
+            exit 1
+          }
+          grep -qE '^DEVELOPMENT_TEAM_SUFFIX\[config=Release\][[:space:]]*=[[:space:]]*$' \
+            xcconfigs/Global.xcconfig || {
+            echo "::error::Release 的 DEVELOPMENT_TEAM_SUFFIX 必须为空，否则 bundle id 会带上 team 后缀。"
+            exit 1
+          }
+          echo "OK: bundle id 仍为 com.kdt.livecontainer"
+
+      - name: 关键文件存在且未被改名
+        run: |
+          fail=0
+          for f in scripts/make-ipa.sh .gitmodules xcconfigs/Global.xcconfig NOTICE.md LICENSE; do
+            if [ ! -f "$f" ]; then echo "::error::缺少关键文件：$f"; fail=1; fi
+          done
+          for f in build.yml check-upstream.yml guard.yml; do
+            if [ ! -f ".github/workflows/$f" ]; then
+              echo "::error::workflow 被改名或删除：.github/workflows/$f（.gitattributes 只保护内容，不保护文件名）"
+              fail=1
+            fi
+          done
+          [ "$fail" = "0" ] && echo "OK: 关键文件齐全"
+
+      - name: submodule 配置未被改动
+        run: |
+          fail=0
+          for s in fishhook OpenSSL litehook; do
+            grep -q "path = $s" .gitmodules || { echo "::error::.gitmodules 缺少 $s，构建会拉不到依赖"; fail=1; }
+          done
+          [ "$fail" = "0" ] && echo "OK: submodule 配置完整"
+
+      - name: README 保留出处与许可证声明
+        run: |
+          fail=0
+          grep -q "LiveContainer/LiveContainer" README.md || { echo "::error::README 缺了上游链接，AGPL 要求标注出处"; fail=1; }
+          grep -qi "AGPL" README.md || { echo "::error::README 缺了 AGPL 声明"; fail=1; }
+          [ "$fail" = "0" ] && echo "OK: README 声明完整"
+
+      - name: 汇总
+        run: echo "全部基线检查通过"

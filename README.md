@@ -1,5 +1,9 @@
 # LiveContainer 自建构建
 
+> **本仓库是 [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContainer) 的修改版本。**
+> 自 2026-11-06 起由 [@vaeann](https://github.com/vaeann) 维护，与上游的差异见文末
+> [本仓库的改动](#本仓库的改动)。按 **AGPL-3.0** 分发，完整许可证见 [LICENSE](LICENSE)。
+
 基于 [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContainer) 的私人构建仓库。
 
 只做一件事：把官方源码编译成**未签名**的 `LiveContainer.ipa`，由你自己签名安装。
@@ -135,6 +139,26 @@ git push
 |---|---|
 | `.github/workflows/build.yml` | 已被本仓库版本覆盖（上游是 `on: push` 全自动，会白白消耗构建时间并自动发 nightly release） |
 | `.github/workflows/update_source.yml` | 用于更新上游自己的 AltStore 源，本仓库不需要 |
+
+---
+
+## 本仓库的改动
+
+AGPL-3.0 第 5(a) 条要求标注修改并给出日期。以下是相对上游的全部差异：
+
+| 日期 | 文件 | 改动 |
+|---|---|---|
+| 2026-11-06 | `.github/workflows/build.yml` | 替换上游 `on: push` 全自动构建为手动触发；构建前注入递增的 `CFBundleVersion`；runner 改为 `macos-26-intel`；Release 描述附对应源码链接 |
+| 2026-11-06 | `.github/workflows/check-upstream.yml` | 新增。每日比对上游 main 的 commit 时间，有更新则开 issue 提醒 |
+| 2026-11-06 | `.github/workflows/guard.yml` | 新增。静态检查合规与安全基线（LICENSE 哈希、敏感文件、bundle id、关键文件） |
+| 2026-11-06 | `scripts/make-ipa.sh` | 新增。把 `.xcarchive` 打成未签名 IPA |
+| 2026-11-06 | `.github/workflows/update_source.yml` | 删除。该文件用于更新上游自己的 AltStore 源，本仓库不需要 |
+| 2026-11-06 | `.gitignore` | 追加签名材料与凭证的忽略规则 |
+| 2026-11-06 | `.gitattributes` | 新增。标记本仓库自有文件为 `merge=ours`，同步上游时不被覆盖 |
+| 2026-11-06 | `README.md` / `NOTICE.md` | 重写为面向本仓库的说明与署名 |
+
+**App 自身的业务代码（`LiveContainer/`、`LiveContainerSwiftUI/` 等）未做任何修改。**
+构建产物与上游 Release 一致：未签名、Bundle ID 为 `com.kdt.livecontainer`。
 
 ---
 
