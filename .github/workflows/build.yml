@@ -73,6 +73,37 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+      - name: 构建前置自检
+        run: |
+          # 这一关是闸门，不是提醒。不通过就不允许产包。
+          ACTUAL=$(sha256sum LICENSE | awk '{print $1}')
+          if [ "$ACTUAL" != "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef" ]; then
+            echo "::error::LICENSE 与上游不一致，拒绝构建（AGPL-3.0 必须原样保留）"
+            exit 1
+          fi
+
+          if ! grep -qF 'LIVECONTAINER_BUNDLE_IDENTIFIER = com.kdt.livecontainer$(DEVELOPMENT_TEAM_SUFFIX)' \
+              xcconfigs/Global.xcconfig; then
+            echo "::error::bundle id 被改动，拒绝构建（会让已装用户覆盖升级后丢数据）"
+            exit 1
+          fi
+
+          if ! grep -qE '^DEVELOPMENT_TEAM_SUFFIX\[config=Release\][[:space:]]*=[[:space:]]*$' \
+              xcconfigs/Global.xcconfig; then
+            echo "::error::Release 的 DEVELOPMENT_TEAM_SUFFIX 不为空，拒绝构建（bundle id 会带后缀）"
+            exit 1
+          fi
+
+          STRAY=$(find . -type f \( -iname "*.p12" -o -iname "*.p8" -o -iname "*.mobileprovision" \) \
+            -not -path "./.git/*" 2>/dev/null || true)
+          if [ -n "$STRAY" ]; then
+            echo "::error::仓库中出现签名材料，拒绝构建："
+            echo "$STRAY"
+            exit 1
+          fi
+
+          echo "OK: 前置自检通过（LICENSE / bundle id / 无签名材料）"
+
       - name: Setup Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
