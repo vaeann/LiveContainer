@@ -147,18 +147,34 @@ private struct LCGridTouchObserver: UIViewRepresentable {
 
 private final class LCGridTouchView: UIView {
     var onPressChange: ((Bool) -> Void)?
+    private var clearWorkItem: DispatchWorkItem?
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        clearWorkItem?.cancel()
+        clearWorkItem = nil
         onPressChange?(true)
         super.touchesBegan(touches, with: event)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        onPressChange?(false)
+        // The cell's single tap only fires once the double tap has
+        // failed (~0.3s after the finger lifts), and only then does the
+        // launch state take over the dimming. Hold the press dim for
+        // that disambiguation window so a quick tap flows straight from
+        // press dim into launch dim with no undimmed gap in between.
+        let work = DispatchWorkItem { [weak self] in
+            self?.onPressChange?(false)
+        }
+        clearWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
         super.touchesEnded(touches, with: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // A scroll or the context menu taking over cancels the touch:
+        // clear immediately, no linger.
+        clearWorkItem?.cancel()
+        clearWorkItem = nil
         onPressChange?(false)
         super.touchesCancelled(touches, with: event)
     }
