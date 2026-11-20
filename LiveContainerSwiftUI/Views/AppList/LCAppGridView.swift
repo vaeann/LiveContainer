@@ -130,26 +130,6 @@ private struct LCAppGridCell: View {
                     IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
                         .frame(width: iconSize, height: iconSize)
 
-                    if app.isSigningInProgress {
-                        ZStack {
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                            ProgressView(value: app.signProgress)
-                                .progressViewStyle(.circular)
-                        }
-                        .frame(width: iconSize, height: iconSize)
-                        .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
-                    } else if app.isAppRunning {
-                        ZStack {
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                        }
-                        .frame(width: iconSize, height: iconSize)
-                        .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
-                    }
-
                     if actions.isRunning(app) {
                         // Badge diameter scales with the icon (0.4x, clamped).
                         // The ZStack aligns the badge's top-trailing corner

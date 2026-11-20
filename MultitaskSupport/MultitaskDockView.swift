@@ -136,6 +136,22 @@ class AppInfoProvider {
     @Published var isDockHidden: Bool = false
     @Published var settingsChanged: Bool = false
 
+    /// The dock no longer hides off-screen: it stays visible at 60%
+    /// opacity and dims to 20% after 3 seconds without interaction.
+    @Published var isDockIdleDimmed: Bool = false
+    private var dockIdleTimer: Timer?
+
+    /// Reset the idle-dim countdown; any dock interaction counts.
+    public func noteDockInteraction() {
+        DispatchQueue.main.async {
+            self.isDockIdleDimmed = false
+            self.dockIdleTimer?.invalidate()
+            self.dockIdleTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                self.isDockIdleDimmed = true
+            }
+        }
+    }
+
     @objc public var windowHostingView = VirtualWindowsHostView()
     internal var hostingController: UIHostingController<AnyView>?
 
@@ -436,6 +452,7 @@ class AppInfoProvider {
         guard isDockEnabled() else { return }
         
         DispatchQueue.main.async {
+            self.noteDockInteraction()
             self.apps.removeAll { $0.appUUID == appUUID }
             
             if self.apps.isEmpty {
@@ -454,6 +471,7 @@ class AppInfoProvider {
         
         DispatchQueue.main.async {
             self.isVisible = true
+            self.noteDockInteraction()
             
             let screenBounds = keyWindow.bounds
             let currentDockWidth = self.dockWidth
@@ -589,6 +607,7 @@ class AppInfoProvider {
     
     // Find and bring corresponding multitask view to front
     func bringMultitaskViewToFront(uuid: String, from center: CGPoint? = nil) -> Bool {
+        noteDockInteraction()
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             return false
         }
@@ -706,6 +725,7 @@ class AppInfoProvider {
         let appModel = DockAppModel(appName: appName, appUUID: appUUID, appInfo: appInfo, view: view)
         
         DispatchQueue.main.async {
+            self.noteDockInteraction()
             self.apps.append(appModel)
             
             if self.apps.count == 1 {
@@ -717,6 +737,7 @@ class AppInfoProvider {
     }
     
     @objc public func minimizeAllWindows(except: DecoratedAppSceneViewController? = nil) {
+        noteDockInteraction()
         DispatchQueue.main.async {
             self.apps.forEach { app in
                 if let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController,
@@ -729,6 +750,7 @@ class AppInfoProvider {
     }
     
     @objc public func toggleDockCollapse() {
+        noteDockInteraction()
         DispatchQueue.main.async {
             self.isCollapsed.toggle()
             self.updateDockFrame()
@@ -746,12 +768,10 @@ class AppInfoProvider {
         }
     }
     
-    // Toggle dock hide/show state
+    // The dock stays on screen now (see isDockIdleDimmed); toggling
+    // visibility just counts as an interaction.
     @objc public func toggleDockVisibility() {
-        DispatchQueue.main.async {
-            self.isDockHidden.toggle()
-            self.updateDockFrame()
-        }
+        noteDockInteraction()
     }
     
     @objc public func showDockFromHidden() {
@@ -763,11 +783,8 @@ class AppInfoProvider {
     }
     
     @objc public func hideDockToSide() {
-        DispatchQueue.main.async {
-            self.isDockHidden = true
-            self.updateDockFrame()
-            self.setupEdgeGestureRecognizers()
-        }
+        // No longer hides: the dock is always visible, only dimmed when idle.
+        noteDockInteraction()
     }
     
     // Add edge gesture recognition areas when dock is hidden
@@ -829,7 +846,7 @@ public struct MultitaskDockSwiftView: View {
         GeometryReader { g in
             VStack(spacing: 8) {
                 if dockManager.isCollapsed {
-                    CollapsedDockView(isHidden: dockManager.isDockHidden)
+                    CollapsedDockView()
                         .onTapGesture {
                             dockManager.toggleDockCollapse()
                         }
@@ -867,7 +884,9 @@ public struct MultitaskDockSwiftView: View {
                 }
             }
             .scaleEffect(dockManager.isVisible ? 1.0 : 0.8)
-            .opacity(dockManager.isDockHidden ? (hideCollapsedDock && dockManager.isCollapsed ? 0.01 : 0.4) : 1.0)
+            // Always visible: 60% opacity, dimming to 20% after 3s idle.
+            .opacity(dockManager.isDockIdleDimmed ? 0.2 : 0.6)
+            .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
             .offset(dragOffset)
             .position(x: g.size.width / 2, y: g.size.height / 2)
         }
@@ -878,6 +897,7 @@ public struct MultitaskDockSwiftView: View {
         .gesture(
             DragGesture(minimumDistance: 5)
             .onChanged { value in
+                dockManager.noteDockInteraction()
                 self.isMoving = true
                 self.dragOffset = value.translation
             }
@@ -977,44 +997,37 @@ public struct MultitaskDockSwiftView: View {
 // MARK: - Collapsed Dock View
 @available(iOS 16.0, *)
 struct CollapsedDockView: View {
-    let isHidden: Bool
     @EnvironmentObject var dockManager: MultitaskDockManager
-    
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.blue.opacity(isHidden ? 0.4 : 0.8),
-                            Color.blue.opacity(isHidden ? 0.3 : 0.6)
-                        ]),
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-            
-            Group {
-                if isHidden {
-                    Image(systemName: "eye.slash")
-                        .foregroundColor(.white.opacity(0.8))
-                        .font(.system(size: dockManager.adaptiveIconSize * 0.35, weight: .bold))
-                } else {
-                    Image(systemName: "chevron.up")
-                        .foregroundColor(.white)
-                        .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .bold))
-                }
-            }
-            .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+            Image(systemName: "square.grid.2x2.fill")
+                .foregroundColor(.white)
+                .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
+                .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(isHidden ? 0.2 : 0.3), lineWidth: 1)
-        )
+        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
+        .modifier { content in
+            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
+            } else {
+                content.background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.blue.opacity(0.8), Color.blue.opacity(0.6)]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                        )
+                )
+            }
+        }
         .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
-        .scaleEffect(isHidden ? 0.9 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isHidden)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
@@ -1023,21 +1036,28 @@ struct CollapsedDockView: View {
 @available(iOS 16.0, *)
 struct CollapseButtonView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
-    
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)  
-                .fill(Color.gray.opacity(0.8))
-                .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-            
             Image(systemName: "chevron.down")
                 .foregroundColor(.white)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)  
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        )
+        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
+        .modifier { content in
+            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
+            } else {
+                content.background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                )
+            }
+        }
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
@@ -1046,21 +1066,29 @@ struct CollapseButtonView: View {
 @available(iOS 16.0, *)
 struct MinimizeAllButtonView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
-    
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(0.8))
-                .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-            
-            Image(systemName: "rectangle.stack.badge.minus")
+            // Same home icon the Weizhu floating menu uses for "back to LC".
+            Image(systemName: "house.fill")
                 .foregroundColor(.white)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        )
+        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
+        .modifier { content in
+            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
+            } else {
+                content.background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                )
+            }
+        }
     }
 }
 

@@ -491,7 +491,11 @@
     [self.view layoutIfNeeded];
     [UIView animateWithDuration:0.3 animations:^{
         BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-        BOOL hideWindowBar = MultitaskDockManager.shared.isCollapsed && self.isMaximized;
+        // When "launch multitask maximized" is on, maximized windows never
+        // show the window bar: the user opted out of the bar entirely and
+        // can bring it back by turning that setting off.
+        BOOL launchMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
+        BOOL hideWindowBar = self.isMaximized && (MultitaskDockManager.shared.isCollapsed || launchMaximized);
         CGFloat navBarHeight = hideWindowBar ? 0 : 44;
         self.navigationBar.alpha = hideWindowBar ? 0 : 1;
         self.navigationBar.hidden = hideWindowBar;
