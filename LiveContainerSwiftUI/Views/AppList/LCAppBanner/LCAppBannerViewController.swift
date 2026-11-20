@@ -20,7 +20,43 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     private let bannerView = LCAppBannerRootView()
     private var configuration: LCAppBannerConfiguration
     private var exportTemporaryDirectory: URL?
-    
+
+    // Home-screen style press feedback: the banner shrinks and dims while
+    // pressed, and stays that way while the app is launching.
+    private var touchIsDown = false
+    private var pressFeedbackApplied = false
+
+    private func applyPressFeedback(_ pressed: Bool) {
+        guard pressFeedbackApplied != pressed else { return }
+        pressFeedbackApplied = pressed
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.62, initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.bannerView.transform = pressed ? CGAffineTransform(scaleX: 0.96, y: 0.94) : .identity
+            self.bannerView.alpha = pressed ? 0.85 : 1
+        }
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        touchIsDown = true
+        applyPressFeedback(true)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        touchIsDown = false
+        if !configuration.model.isAppRunning {
+            applyPressFeedback(false)
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        touchIsDown = false
+        if !configuration.model.isAppRunning {
+            applyPressFeedback(false)
+        }
+    }
+
     init(delegate: LCAppBannerDelegate, config: LCAppBannerConfiguration) {
         self.delegate = delegate
         self.configuration = config
@@ -81,6 +117,13 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
             darkModeIcon: configuration.darkModeIcon,
             traitCollection: traitCollection
         )
+        // Keep the press feedback up for the whole launch (e.g. when the
+        // run button started it), release it once the launch is over.
+        if configuration.model.isAppRunning {
+            applyPressFeedback(true)
+        } else if !touchIsDown {
+            applyPressFeedback(false)
+        }
     }
 
     @objc private func bannerDoubleTapped(_ gestureRecognizer: UITapGestureRecognizer) {
