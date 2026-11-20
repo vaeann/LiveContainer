@@ -48,6 +48,63 @@ struct AltStoreSource: Identifiable, Hashable {
     let apps: [AltStoreSourceApp]
 }
 
+/// Segment-wise numeric version comparison (1.10 > 1.9); non-numeric
+/// segments count as 0.
+func lcIsVersion(_ a: String, newerThan b: String) -> Bool {
+    let aParts = a.split(separator: ".").map { Int($0) ?? 0 }
+    let bParts = b.split(separator: ".").map { Int($0) ?? 0 }
+    let count = max(aParts.count, bParts.count)
+    for i in 0..<count {
+        let av = i < aParts.count ? aParts[i] : 0
+        let bv = i < bParts.count ? bParts[i] : 0
+        if av != bv { return av > bv }
+    }
+    return false
+}
+
+/// "Ignore this version" storage: per bundle id, the source version the
+/// user chose to stop being reminded about. Ignoring only silences the
+/// reminder (the sources-page row and the badge count); the app stays in
+/// the Updates tab and in "Update All". A newer source version no longer
+/// matches the stored one and reminds again.
+enum LCSourceUpdateIgnore {
+    private static func key(for bundleIdentifier: String) -> String {
+        "LCIgnoredSourceUpdate-\(bundleIdentifier)"
+    }
+
+    static func ignoredVersion(for bundleIdentifier: String) -> String? {
+        UserDefaults.standard.string(forKey: key(for: bundleIdentifier))
+    }
+
+    static func setIgnoredVersion(_ version: String?, for bundleIdentifier: String) {
+        if let version {
+            UserDefaults.standard.set(version, forKey: key(for: bundleIdentifier))
+        } else {
+            UserDefaults.standard.removeObject(forKey: key(for: bundleIdentifier))
+        }
+    }
+
+    static func isIgnored(app: AltStoreSourceApp) -> Bool {
+        guard let latest = app.latestVersion else { return false }
+        return ignoredVersion(for: app.bundleIdentifier) == latest.version
+    }
+}
+
+/// What the single action button on a source app row offers.
+enum LCSourceAppButtonState {
+    case get
+    case open
+    case update
+
+    var title: String {
+        switch self {
+        case .get: return "lc.sources.action.get".loc
+        case .open: return "lc.sources.action.open".loc
+        case .update: return "lc.sources.action.update".loc
+        }
+    }
+}
+
 private struct AltStoreSourceResponse: Decodable {
     let name: String?
     let identifier: String?
@@ -490,56 +547,44 @@ struct LCSourcesView: View {
     @ObservedObject public var searchContext: SearchContext = SearchContext()
     @State private var expandedSources: Set<URL> = []
     @State private var isManagingSources = false
-    
+    @State private var selectedSegment = 0
+    @State private var ignoreTick = 0
+    @State private var lastAutoRefreshDate = Date.distantPast
+    @State private var didInitialLoad = false
+
     @EnvironmentObject private var sharedModel : SharedModel
-    
+
     @State private var isViewAppeared = false
-    
+
     var body: some View {
         NavigationView {
-            Group {
-                if viewModel.sources.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "link.badge.plus")
-                            .font(.system(size: 48))
-                            .foregroundColor(.secondary)
-                        Text("lc.sources.empty".loc)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                if !viewModel.sources.isEmpty {
+                    Picker("lc.sources.segment".loc, selection: $selectedSegment) {
+                        Text("lc.sources.segment.sources".loc).tag(0)
+                        Text("lc.sources.segment.updates".loc).tag(1)
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 16) {
-                            ForEach(viewModel.sources, id: \.id) { item in
-                                let apps = filteredApps(for: item)
-                                AltStoreSourceSectionView(
-                                    item: item,
-                                    filteredApps: apps,
-                                    isFiltering: isFiltering,
-                                    isExpanded: expandedSources.contains(item.id),
-                                    onRefresh: { Task { await viewModel.refreshSource(item) } },
-                                    onInstall: install(app:),
-                                    onRemove: { sourcePendingRemoval = item },
-                                    toggleExpanded: { toggleExpansion(for: item.id) }
-                                )
-                                .padding(.horizontal)
-                                .animation(.easeInOut, value: apps.count)
-                            }
-                            
-                            if totalFilteredAppCount == 0 {
-                                VStack(spacing: 8) {
-                                    Text("lc.sources.section.noApps".loc)
-                                        .foregroundStyle(.gray)
-                                        .multilineTextAlignment(.center)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(minHeight: 160, alignment: .center)
-                                .padding(.horizontal)
-                            }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                }
+
+                Group {
+                    if viewModel.sources.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "link.badge.plus")
+                                .font(.system(size: 48))
+                                .foregroundColor(.secondary)
+                            Text("lc.sources.empty".loc)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical)
+                        .padding()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    } else if selectedSegment == 1 {
+                        updatableContent
+                    } else {
+                        sourcesContent
                     }
                 }
             }
@@ -615,7 +660,14 @@ struct LCSourcesView: View {
         .onAppear {
             if sharedModel.selectedTab == .sources {
                 viewModel.loadSourcesIfNeeded()
+                if didInitialLoad {
+                    autoRefreshSourcesIfNeeded()
+                } else {
+                    didInitialLoad = true
+                    lastAutoRefreshDate = Date()
+                }
             }
+            publishBadgeCount()
             expandedSources = []
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .sources, let link = sharedModel.deepLink else { return }
@@ -627,7 +679,12 @@ struct LCSourcesView: View {
         .onChange(of: sharedModel.selectedTab) { tab in
             if tab == .sources {
                 viewModel.loadSourcesIfNeeded()
+                autoRefreshSourcesIfNeeded()
+                publishBadgeCount()
             }
+        }
+        .onChange(of: updateBadgeCount) { _ in
+            publishBadgeCount()
         }
         .onChange(of: viewModel.sources) { newSources in
             let newSet = Set(newSources.map { $0.id })
@@ -639,7 +696,240 @@ struct LCSourcesView: View {
             handleURL(url: link)
         }
     }
-    
+
+    // MARK: - Sources tab (flattened, lazily loaded)
+
+    /// Section headers and app rows are direct children of one LazyVStack,
+    /// so rows and icons load as they scroll into view and there is no
+    /// per-source app cap.
+    private var sourcesContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(viewModel.sources, id: \.id) { item in
+                    let apps = filteredApps(for: item)
+                    AltStoreSourceSectionHeaderView(
+                        item: item,
+                        isExpanded: expandedSources.contains(item.id),
+                        onRefresh: { Task { await viewModel.refreshSource(item) } },
+                        onRemove: { sourcePendingRemoval = item },
+                        toggleExpanded: { toggleExpansion(for: item.id) }
+                    )
+                    .padding(.horizontal)
+
+                    if let error = item.error {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("lc.sources.section.error".loc)
+                                .font(.subheadline)
+                                .bold()
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Button("lc.sources.refresh".loc) {
+                                Task { await viewModel.refreshSource(item) }
+                            }
+                            .font(.footnote)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                        )
+                        .padding(.horizontal)
+                    } else if let source = item.source, expandedSources.contains(item.id) || isFiltering {
+                        if apps.isEmpty {
+                            if source.apps.isEmpty || isFiltering {
+                                Text("lc.sources.section.noApps".loc)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal)
+                            }
+                        } else {
+                            ForEach(apps) { app in
+                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
+                                    .padding(.horizontal)
+                            }
+                        }
+                    } else if item.isLoading {
+                        ProgressView("lc.sources.loading".loc)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                    }
+                }
+
+                if totalFilteredAppCount == 0 {
+                    VStack(spacing: 8) {
+                        Text("lc.sources.section.noApps".loc)
+                            .foregroundStyle(.gray)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 160, alignment: .center)
+                    .padding(.horizontal)
+                }
+            }
+            .padding(.vertical)
+        }
+    }
+
+    // MARK: - Updates tab
+
+    private var updatableContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                if updatableApps.isEmpty {
+                    Text("lc.sources.updates.empty".loc)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                } else {
+                    Button {
+                        updateAll()
+                    } label: {
+                        Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
+                            .bold()
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .background(Capsule().fill(Color("FontColor")))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+
+                    ForEach(updatableApps, id: \.app.id) { pair in
+                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
+                            .padding(.horizontal)
+                    }
+                }
+            }
+            .padding(.vertical)
+        }
+    }
+
+    // MARK: - Row construction
+
+    @ViewBuilder
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool) -> some View {
+        let installed = installedModel(for: app.bundleIdentifier)
+        let update = hasUpdate(for: app)
+        let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
+        let state: LCSourceAppButtonState = installed == nil ? .get : (update && (inUpdatesTab || !ignored) ? .update : .open)
+        LCSourceAppBanner(
+            app: app,
+            source: source,
+            buttonState: state,
+            action: {
+                switch state {
+                case .open:
+                    launchInstalledApp(app)
+                case .get, .update:
+                    install(app: app)
+                }
+            },
+            copyAction: { copyLatestDownloadURL(app) },
+            ignoreAction: (update && !ignored) ? { ignoreUpdate(for: app) } : nil,
+            installVersionAction: { version in install(app: app, version: version) }
+        )
+    }
+
+    // MARK: - Update detection
+
+    func installedModel(for bundleIdentifier: String) -> LCAppModel? {
+        (sharedModel.apps + sharedModel.hiddenApps).first {
+            $0.appInfo.bundleIdentifier() == bundleIdentifier
+        }
+    }
+
+    func hasUpdate(for app: AltStoreSourceApp) -> Bool {
+        guard let latest = app.latestVersion,
+              let installed = installedModel(for: app.bundleIdentifier) else {
+            return false
+        }
+        return lcIsVersion(latest.version, newerThan: installed.version)
+    }
+
+    /// Installed apps whose source offers a newer version, across all
+    /// sources. One entry per bundle id (the newest offer wins), in
+    /// first-appearance order. Ignored versions stay in this list.
+    var updatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
+        _ = ignoreTick
+        var bestByBundle: [String: (source: AltStoreSource, app: AltStoreSourceApp)] = [:]
+        var order: [String] = []
+        for item in viewModel.sources {
+            guard let source = item.source else { continue }
+            for app in filteredApps(for: item) {
+                guard hasUpdate(for: app), let latest = app.latestVersion else { continue }
+                if let existing = bestByBundle[app.bundleIdentifier],
+                   let existingLatest = existing.app.latestVersion {
+                    if lcIsVersion(latest.version, newerThan: existingLatest.version) {
+                        bestByBundle[app.bundleIdentifier] = (source, app)
+                    }
+                } else {
+                    bestByBundle[app.bundleIdentifier] = (source, app)
+                    order.append(app.bundleIdentifier)
+                }
+            }
+        }
+        return order.compactMap { bestByBundle[$0] }
+    }
+
+    /// The red badge number: updatable apps the user has not ignored.
+    var updateBadgeCount: Int {
+        updatableApps.filter { !LCSourceUpdateIgnore.isIgnored(app: $0.app) }.count
+    }
+
+    func ignoreUpdate(for app: AltStoreSourceApp) {
+        guard let version = app.latestVersion?.version else { return }
+        LCSourceUpdateIgnore.setIgnoredVersion(version, for: app.bundleIdentifier)
+        ignoreTick += 1
+    }
+
+    // MARK: - Row actions
+
+    private func launchInstalledApp(_ app: AltStoreSourceApp) {
+        guard let model = installedModel(for: app.bundleIdentifier),
+              let relativePath = model.appInfo.relativeBundlePath,
+              let url = URL(string: "livecontainer://livecontainer-launch?bundle-name=\(relativePath)") else {
+            return
+        }
+        sharedModel.deepLink = url
+        withAnimation {
+            sharedModel.selectedTab = .apps
+        }
+    }
+
+    private func copyLatestDownloadURL(_ app: AltStoreSourceApp) {
+        if let url = app.latestVersion?.downloadURL {
+            UIPasteboard.general.string = url.absoluteString
+        }
+    }
+
+    private func updateAll() {
+        let urls = updatableApps.compactMap { $0.app.latestVersion?.downloadURL }
+        guard !urls.isEmpty else { return }
+        withAnimation {
+            DataManager.shared.model.selectedTab = .apps
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NotificationCenter.default.post(name: NSNotification.InstallAppQueueNotification, object: ["urls": urls])
+        }
+    }
+
+    /// Refresh all sources in the background at most once per 5 minutes
+    /// when the sources page is shown.
+    private func autoRefreshSourcesIfNeeded() {
+        guard sharedModel.selectedTab == .sources, !viewModel.isRefreshingAll else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastAutoRefreshDate) > 300 else { return }
+        lastAutoRefreshDate = now
+        Task { await viewModel.refreshAllSources() }
+    }
+
+    private func publishBadgeCount() {
+        UserDefaults.standard.set(updateBadgeCount, forKey: "LCSourceUpdateBadgeCount")
+    }
+
     private var isFiltering: Bool {
         !searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -687,19 +977,20 @@ struct LCSourcesView: View {
     }
     
     @MainActor
-    private func install(app: AltStoreSourceApp) {
-        guard let downloadURL = app.latestVersion?.downloadURL else {
+    private func install(app: AltStoreSourceApp, version: AltStoreSourceAppVersion? = nil) {
+        guard let downloadURL = (version ?? app.latestVersion)?.downloadURL else {
             errorMessage = "lc.sources.error.missingDownload".loc
             return
         }
+        // Installing over an installed app is an update: replace in place
+        // without the which-bundle prompt.
+        let autoReplace = installedModel(for: app.bundleIdentifier) != nil
         withAnimation {
             DataManager.shared.model.selectedTab = .apps
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: ["url": downloadURL])
+            NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: ["url": downloadURL, "autoReplace": autoReplace])
         }
-
-
     }
     
     private func toggleExpansion(for id: URL) {
@@ -861,16 +1152,13 @@ private struct ManageSourcesSheet: View {
     }
 }
 
-private struct AltStoreSourceSectionView: View {
+private struct AltStoreSourceSectionHeaderView: View {
     let item: AltStoreSourcesViewModel.SourceItem
-    let filteredApps: [AltStoreSourceApp]
-    let isFiltering: Bool
     let isExpanded: Bool
     let onRefresh: () -> Void
-    let onInstall: (AltStoreSourceApp) -> Void
     let onRemove: () -> Void
     let toggleExpanded: () -> Void
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
@@ -911,45 +1199,6 @@ private struct AltStoreSourceSectionView: View {
                     .foregroundStyle(.secondary)
             }
             
-            if let error = item.error {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("lc.sources.section.error".loc)
-                        .font(.subheadline)
-                        .bold()
-                    Text(error)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Button("lc.sources.refresh".loc, action: onRefresh)
-                        .font(.footnote)
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(Color(uiColor: UIColor.secondarySystemBackground))
-                )
-            } else if let source = item.source, isExpanded || isFiltering {
-                VStack(spacing: 12) {
-                    ForEach(filteredApps[0..<min(50, filteredApps.count)]) { app in
-                        LCSourceAppBanner(app: app, source: source, installAction: onInstall)
-                    }
-                    if filteredApps.isEmpty {
-                        if source.apps.isEmpty || isFiltering {
-                            Text("lc.sources.section.noApps".loc)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    } else if filteredApps.count > 50 {
-                        Text("lc.sources.section.tooManyApps".loc)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            } else if item.isLoading {
-                ProgressView("lc.sources.loading".loc)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
     }
 }
@@ -957,26 +1206,32 @@ private struct AltStoreSourceSectionView: View {
 private struct LCSourceAppBanner: View {
     let app: AltStoreSourceApp
     let source: AltStoreSource
-    let installAction: (AltStoreSourceApp) -> Void
-    
+    let buttonState: LCSourceAppButtonState
+    let action: () -> Void
+    let copyAction: () -> Void
+    let ignoreAction: (() -> Void)?
+    let installVersionAction: (AltStoreSourceAppVersion) -> Void
+
     @AppStorage("dynamicColors") private var dynamicColors = true
     @Environment(\.colorScheme) var colorScheme
-    
+    @State private var showDetail = false
+    @State private var copied = false
+
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
         return app.tintColor ?? source.tintColor ?? Color("FontColor")
     }
-    
+
     private var textColor: Color {
         _ = colorScheme == .dark // trigger refresh
         let color = dynamicColors ? primaryColor : Color("FontColor")
         return color.readableTextColor()
     }
-    
+
     private var backgroundColor: Color {
         dynamicColors ? primaryColor.opacity(0.5) : Color("AppBannerBG")
     }
-    
+
     private var metadataText: String {
         guard let latest = app.latestVersion else {
             return app.bundleIdentifier
@@ -986,7 +1241,7 @@ private struct LCSourceAppBanner: View {
         }
         return "\(latest.version) • \(app.bundleIdentifier)"
     }
-    
+
     private var subtitleText: String {
         if let subtitle = app.subtitle, !subtitle.isEmpty {
             return subtitle
@@ -996,7 +1251,7 @@ private struct LCSourceAppBanner: View {
         }
         return ""
     }
-    
+
     var body: some View {
         HStack {
             HStack(alignment: .center, spacing: 12) {
@@ -1031,9 +1286,22 @@ private struct LCSourceAppBanner: View {
             .allowsHitTesting(false)
             Spacer()
             Button {
-                installAction(app)
+                copyAction()
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    copied = false
+                }
             } label: {
-                Text("lc.common.install".loc)
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 14))
+                    .foregroundColor(textColor)
+                    .frame(width: 28, height: 32)
+            }
+            .buttonStyle(.plain)
+            Button {
+                action()
+            } label: {
+                Text(buttonState.title)
                     .bold()
                     .foregroundColor(.white)
                     .lineLimit(1)
@@ -1056,10 +1324,43 @@ private struct LCSourceAppBanner: View {
             RoundedRectangle(cornerSize: CGSize(width: 22, height: 22))
                 .fill(backgroundColor)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            showDetail = true
+        }
+        .contextMenu {
+            Button {
+                showDetail = true
+            } label: {
+                Label("lc.sources.detail".loc, systemImage: "info.circle")
+            }
+            if let ignoreAction {
+                Button {
+                    ignoreAction()
+                } label: {
+                    Label("lc.sources.ignoreVersion".loc, systemImage: "bell.slash")
+                }
+            }
+        }
+        .background {
+            NavigationLink(isActive: $showDetail) {
+                LCSourceAppDetailView(
+                    app: app,
+                    source: source,
+                    buttonState: buttonState,
+                    action: action,
+                    copyAction: copyAction,
+                    installVersionAction: installVersionAction
+                )
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+        }
     }
 }
 
-private struct SourceIconView: View {
+struct SourceIconView: View {
     let url: URL?
     
     var body: some View {

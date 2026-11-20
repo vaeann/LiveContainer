@@ -14,6 +14,7 @@ struct LCTabView: View {
     @State var errorInfo = ""
     
     @EnvironmentObject var sharedModel : SharedModel
+    @AppStorage("LCSourceUpdateBadgeCount") private var sourceUpdateBadgeCount = 0
     @EnvironmentObject var sceneDelegate: SceneDelegate
     @State var shouldToggleMainWindowOpen = false
     @Environment(\.scenePhase) var scenePhase
@@ -28,6 +29,7 @@ struct LCTabView: View {
                     .tabItem {
                         Label("lc.tabView.sources".loc, systemImage: "books.vertical")
                     }
+                    .badge(sourceUpdateBadgeCount)
                     .tag(LCTabIdentifier.sources)
             }
             LCAppListView()

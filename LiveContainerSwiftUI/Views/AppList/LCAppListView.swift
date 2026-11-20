@@ -47,7 +47,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var installprogressVisible = false
     @State var installProgressPercentage : Float = 0.0
     @State var installObserver : NSKeyValueObservation?
-    
+
+    // serial install queue (used by the sources page's "update all")
+    @State var installQueue: [URL] = []
+    @State var isInstallQueueRunning = false
+    // when true, the next install silently replaces the same-bundle app
+    // instead of asking which bundle to replace
+    @State var autoReplaceNextInstall = false
+
     @State var installOptions: [AppReplaceOption]
     @StateObject var installReplaceAlert = AlertHelper<AppReplaceOption>()
     
@@ -458,7 +465,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let installUrl = obj2["url"] as? URL {
-                Task { await installFromUrl(urlStr: installUrl.absoluteString) }
+                let autoReplace = obj2["autoReplace"] as? Bool ?? false
+                Task {
+                    autoReplaceNextInstall = autoReplace
+                    await installFromUrl(urlStr: installUrl.absoluteString)
+                    autoReplaceNextInstall = false
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppQueueNotification)) { obj in
+            if let obj2 = obj.object as? [String: Any], let installUrls = obj2["urls"] as? [URL] {
+                installQueue.append(contentsOf: installUrls)
+                Task { await processInstallQueue() }
             }
         }
         .searchable(text: $searchContext.query)
@@ -889,7 +907,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             
         }
         
-        if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
+        if autoReplaceNextInstall, let existingApp = sameBundleIdApp.first {
+            // Batch update from the sources page: replace the existing app in
+            // place without asking. Settings/data carry over via appToReplace.
+            appRelativePath = existingApp.appInfo.relativeBundlePath
+            if existingApp.uiIsShared {
+                outputFolder = LCPath.lcGroupBundlePath.appendingPathComponent(appRelativePath)
+            } else {
+                outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
+            }
+            appToReplace = existingApp
+            try fm.removeItem(at: outputFolder)
+        } else if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
             appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
             
             self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
@@ -999,6 +1028,21 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         await installFromUrl(urlStr: installUrlStr)
     }
     
+    /// Drain the serial install queue one app at a time. installFromUrl
+    /// drops requests while another install runs, so queued installs must
+    /// await each other; every queued install auto-replaces its old version.
+    func processInstallQueue() async {
+        guard !isInstallQueueRunning else { return }
+        isInstallQueueRunning = true
+        defer { isInstallQueueRunning = false }
+        while !installQueue.isEmpty {
+            let url = installQueue.removeFirst()
+            autoReplaceNextInstall = true
+            await installFromUrl(urlStr: url.absoluteString)
+            autoReplaceNextInstall = false
+        }
+    }
+
     func installFromPlist(urlStr: String) async {
         if self.installprogressVisible {
             return
