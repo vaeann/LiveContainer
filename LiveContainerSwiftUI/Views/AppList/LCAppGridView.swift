@@ -123,7 +123,6 @@ private struct LCAppGridCell: View {
     let darkModeIcon: Bool
     let actions: LCAppGridActions
     let onUninstall: () -> Void
-    @State private var isPressed = false
 
     var body: some View {
             VStack(spacing: 6) {
@@ -145,11 +144,11 @@ private struct LCAppGridCell: View {
                     }
                 }
                 .frame(width: iconSize, height: iconSize)
-                // Home-screen style press feedback: shrink + dim while the
-                // finger is down, stay dimmed while the app is launching.
-                .scaleEffect(isPressed ? 0.9 : 1)
-                .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
-                .animation(.spring(response: 0.28, dampingFraction: 0.62), value: isPressed)
+                // Launch feedback only: the icon dims while the app is
+                // launching. (Press tracking via a long-press gesture
+                // interfered with the cell's tap gestures, so it was
+                // removed; the list banner keeps its UIKit press effect.)
+                .opacity(app.isAppRunning ? 0.7 : 1)
                 .animation(.easeInOut(duration: 0.2), value: app.isAppRunning)
 
                 Text(app.displayName)
@@ -182,9 +181,6 @@ private struct LCAppGridCell: View {
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
-        .onLongPressGesture(minimumDuration: 0.05, maximumDistance: 20, pressing: { pressing in
-            isPressed = pressing
-        }, perform: {})
         .onTapGesture(count: 2) {
             actions.onOpenSettings(app)
         }

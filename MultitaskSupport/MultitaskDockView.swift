@@ -147,7 +147,11 @@ class AppInfoProvider {
             self.isDockIdleDimmed = false
             self.dockIdleTimer?.invalidate()
             self.dockIdleTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                self.isDockIdleDimmed = true
+                // Idle dimming applies to the collapsed button only; the
+                // expanded dock is always fully opaque.
+                if self.isCollapsed {
+                    self.isDockIdleDimmed = true
+                }
             }
         }
     }
@@ -856,15 +860,16 @@ public struct MultitaskDockSwiftView: View {
                             .onTapGesture {
                                 dockManager.toggleDockCollapse()
                             }
-                        
+
+                        ForEach(dockManager.apps) { app in
+                            AppIconView(app: app)
+                        }
+
+                        // Home button sits at the very bottom.
                         MinimizeAllButtonView()
                             .onTapGesture {
                                 dockManager.minimizeAllWindows()
                             }
-                        
-                        ForEach(dockManager.apps) { app in
-                            AppIconView(app: app)
-                        }
                     }
                 }
             }
@@ -884,9 +889,11 @@ public struct MultitaskDockSwiftView: View {
                 }
             }
             .scaleEffect(dockManager.isVisible ? 1.0 : 0.8)
-            // Always visible: 60% opacity, dimming to 20% after 3s idle.
-            .opacity(dockManager.isDockIdleDimmed ? 0.2 : 0.6)
+            // Collapsed button: 60% opacity, dimming to 20% after 3s idle.
+            // Expanded dock: fully opaque.
+            .opacity(dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0)
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
+            .animation(.easeInOut(duration: 0.35), value: dockManager.isCollapsed)
             .offset(dragOffset)
             .position(x: g.size.width / 2, y: g.size.height / 2)
         }
@@ -998,13 +1005,20 @@ public struct MultitaskDockSwiftView: View {
 @available(iOS 16.0, *)
 struct CollapsedDockView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
+    @State private var breathing = false
 
     var body: some View {
         ZStack {
+            // Purple breathing light, like the Weizhu floating button:
+            // the grid glyph pulses in opacity while a purple glow
+            // breathes behind it (1.15s ease-in-out, autoreversing).
             Image(systemName: "square.grid.2x2.fill")
-                .foregroundColor(.white)
+                .foregroundStyle(Color(red: 0.686, green: 0.322, blue: 0.871))
                 .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
-                .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+                .opacity(breathing ? 1.0 : 0.55)
+                .shadow(color: Color(red: 0.686, green: 0.322, blue: 0.871).opacity(breathing ? 0.9 : 0.3), radius: breathing ? 12 : 4, x: 0, y: 0)
+                .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true), value: breathing)
+                .onAppear { breathing = true }
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
         .modifier { content in
@@ -1032,6 +1046,26 @@ struct CollapsedDockView: View {
     }
 }
 
+// The Weizhu single-column compact tile: a translucent white rounded
+// plate (corner radius 26% of the tile, thin white border, soft shadow)
+// with a semibold white glyph. Reads much better than a flat gray fill.
+@available(iOS 16.0, *)
+private struct DockCompactTileBackground: ViewModifier {
+    let size: CGFloat
+
+    func body(content: Content) -> some View {
+        content.background(
+            RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                .fill(Color.white.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                        .stroke(Color.white.opacity(0.4), lineWidth: 0.8)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
+        )
+    }
+}
+
 // MARK: - Collapse Button View
 @available(iOS 16.0, *)
 struct CollapseButtonView: View {
@@ -1044,20 +1078,7 @@ struct CollapseButtonView: View {
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier { content in
-            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
-            } else {
-                content.background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                )
-            }
-        }
+        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
@@ -1075,20 +1096,7 @@ struct MinimizeAllButtonView: View {
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier { content in
-            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
-            } else {
-                content.background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                )
-            }
-        }
+        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
     }
 }
 

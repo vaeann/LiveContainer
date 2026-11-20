@@ -15,6 +15,7 @@
 @property(nonatomic) CGRect originalFrame;
 @property(nonatomic) UIBarButtonItem *maximizeButton;
 @property(nonatomic) bool isAppTerminationRequested;
+@property(nonatomic) bool skipExitAnimation;
 @end
 
 @implementation DecoratedAppSceneViewController
@@ -114,6 +115,13 @@
     // Navigation bar
     UINavigationBar *navigationBar = [[UINavigationBar alloc] initWithFrame:CGRectMake(0, 0, self.view.frame.size.width, navBarHeight)];
     navigationBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    // Start in the final state: updateVerticalConstraints animates over
+    // 0.3s, which made the bar flash on screen when a window opens
+    // maximized with the bar disabled.
+    if ([self shouldHideWindowBar]) {
+        navigationBar.alpha = 0;
+        navigationBar.hidden = YES;
+    }
     UINavigationItem *navigationItem = [[UINavigationItem alloc] initWithTitle:self.title];
     navigationBar.items = @[navigationItem];
     
@@ -248,6 +256,11 @@
     }
 }
 
+- (void)closeWindowWithoutAnimation {
+    self.skipExitAnimation = YES;
+    [self closeWindow];
+}
+
 - (void)minimizeWindow {
     if (self.view.hidden) return;
     [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
@@ -332,11 +345,16 @@
         [dock removeRunningApp:self.dataUUID];
         
         self.view.layer.masksToBounds = NO;
-        [UIView transitionWithView:self.view duration:0.4 options:UIViewAnimationOptionTransitionCurlUp animations:^{
+        if(self.skipExitAnimation) {
             self.view.hidden = YES;
-        } completion:^(BOOL b){
             [self.view removeFromSuperview];
-        }];
+        } else {
+            [UIView transitionWithView:self.view duration:0.4 options:UIViewAnimationOptionTransitionCurlUp animations:^{
+                self.view.hidden = YES;
+            } completion:^(BOOL b){
+                [self.view removeFromSuperview];
+            }];
+        }
         
         if(skipTerminationScreen) {
             [MultitaskRelaunchManager scheduleRelaunchIfNeededWithBundleId:self.appSceneVC.bundleId dataUUID:self.dataUUID isManualTermination:isManual];
@@ -487,15 +505,19 @@
     [self.view.superview bringSubviewToFront:self.view];
 }
 
+// When "launch multitask maximized" is on, maximized windows never show
+// the window bar: the user opted out of the bar entirely and can bring it
+// back by turning that setting off.
+- (BOOL)shouldHideWindowBar {
+    BOOL launchMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
+    return self.isMaximized && (MultitaskDockManager.shared.isCollapsed || launchMaximized);
+}
+
 - (void)updateVerticalConstraints {
     [self.view layoutIfNeeded];
     [UIView animateWithDuration:0.3 animations:^{
         BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-        // When "launch multitask maximized" is on, maximized windows never
-        // show the window bar: the user opted out of the bar entirely and
-        // can bring it back by turning that setting off.
-        BOOL launchMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
-        BOOL hideWindowBar = self.isMaximized && (MultitaskDockManager.shared.isCollapsed || launchMaximized);
+        BOOL hideWindowBar = [self shouldHideWindowBar];
         CGFloat navBarHeight = hideWindowBar ? 0 : 44;
         self.navigationBar.alpha = hideWindowBar ? 0 : 1;
         self.navigationBar.hidden = hideWindowBar;
