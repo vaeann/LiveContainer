@@ -158,7 +158,17 @@ struct LCSettingsView: View {
                         Text("lc.settings.multitaskDesc".loc)
                     }
                 }
-                
+
+                Section {
+                    NavigationLink {
+                        LCKeepAliveSettingView()
+                    } label: {
+                        Text("lc.keepAlive.title".loc)
+                    }
+                } footer: {
+                    Text("lc.keepAlive.entryDesc".loc)
+                }
+
                 Section {
                     if JITEnabler == .SideJITServer || JITEnabler == .JITStreamerEBLegacy {
                         HStack {

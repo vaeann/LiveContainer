@@ -30,7 +30,11 @@ import Intents
             LCUtils.appGroupUserDefault.removeObject(forKey: "symbolOffsetCache")
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
-        
+
+        // Host-side background keep-alive (see LCHostKeepAlive): stays idle
+        // until LC is backgrounded with guests still running.
+        LCHostKeepAlive.shared.start()
+
         return true
     }
     
