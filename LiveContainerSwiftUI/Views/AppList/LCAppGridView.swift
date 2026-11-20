@@ -117,6 +117,53 @@ struct LCAppGridView: View {
     }
 }
 
+/// Transparent UIKit layer that reports raw touch-down / touch-up on the
+/// grid icon, mirroring how LCAppBannerViewController tracks touches for
+/// the list's press feedback. It installs no gesture recognizers and does
+/// not override hit testing, so it never competes with the cell's taps,
+/// context menu or the scroll view — it only observes the touches that
+/// land on it and forwards them up the responder chain untouched.
+private struct LCGridTouchObserver: UIViewRepresentable {
+    @Binding var isPressed: Bool
+
+    func makeUIView(context: Context) -> LCGridTouchView {
+        let view = LCGridTouchView()
+        view.onPressChange = { [self] pressed in
+            if isPressed != pressed {
+                isPressed = pressed
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: LCGridTouchView, context: Context) {
+        uiView.onPressChange = { [self] pressed in
+            if isPressed != pressed {
+                isPressed = pressed
+            }
+        }
+    }
+}
+
+private final class LCGridTouchView: UIView {
+    var onPressChange: ((Bool) -> Void)?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onPressChange?(true)
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onPressChange?(false)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onPressChange?(false)
+        super.touchesCancelled(touches, with: event)
+    }
+}
+
 private struct LCAppGridCell: View {
     @ObservedObject var app: LCAppModel
     let iconSize: CGFloat
@@ -130,6 +177,19 @@ private struct LCAppGridCell: View {
                 ZStack(alignment: .topTrailing) {
                     IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
                         .frame(width: iconSize, height: iconSize)
+
+                    // UIKit touch tracking for the press feedback — the
+                    // same mechanism as the banner's touchesBegan/Ended,
+                    // which works. The earlier simultaneous DragGesture
+                    // observer never fired on device once the composed
+                    // tap gesture and the context menu competed in the
+                    // same cell. This transparent layer sits above the
+                    // icon but below the badge and only observes: it has
+                    // no gesture recognizers, so taps, double-taps, the
+                    // context menu and scrolling all work as before, and
+                    // a scroll cancels the touch (and the press) exactly
+                    // like on the home screen.
+                    LCGridTouchObserver(isPressed: $isPressed)
 
                     if actions.isRunning(app) {
                         // Badge diameter scales with the icon (0.4x, clamped).
@@ -148,12 +208,10 @@ private struct LCAppGridCell: View {
                 }
                 .frame(width: iconSize, height: iconSize)
                 // Feedback identical to the iOS home screen (and to
-                // the list banner's icon): no shrink — the icon just
-                // dims to 0.7 while pressed and stays dimmed for the
-                // whole launch.
+                // the list banner's icon): no shrink, no animation —
+                // the icon just dims to 0.7 the moment it is pressed
+                // and stays dimmed for the whole launch.
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
-                .animation(.spring(response: 0.28, dampingFraction: 0.62), value: isPressed)
-                .animation(.easeInOut(duration: 0.2), value: app.isAppRunning)
 
                 Text(app.displayName)
                     .font(.footnote)
@@ -201,19 +259,6 @@ private struct LCAppGridCell: View {
                     .onEnded {
                         actions.onLaunch(app)
                     })
-        )
-        // Press tracking that cannot swallow taps: a simultaneous
-        // zero-distance drag only observes the touch (the pattern the
-        // dock's AppIconView uses). The press ends as soon as the finger
-        // moves, so scrolling never leaves an icon dimmed.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    isPressed = value.translation == .zero
-                }
-                .onEnded { _ in
-                    isPressed = false
-                }
         )
         .contextMenu {
             contextMenuItems
