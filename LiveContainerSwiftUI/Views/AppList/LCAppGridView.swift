@@ -145,10 +145,10 @@ private struct LCAppGridCell: View {
                     }
                 }
                 .frame(width: iconSize, height: iconSize)
-                // Home-screen style press feedback, identical to the
-                // list banner's icon: shrink to 0.9 and dim to 0.7 while
-                // pressed, stay dimmed for the whole launch.
-                .scaleEffect(isPressed ? 0.9 : 1)
+                // Feedback identical to the iOS home screen (and to
+                // the list banner's icon): no shrink — the icon just
+                // dims to 0.7 while pressed and stays dimmed for the
+                // whole launch.
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
                 .animation(.spring(response: 0.28, dampingFraction: 0.62), value: isPressed)
                 .animation(.easeInOut(duration: 0.2), value: app.isAppRunning)
@@ -203,7 +203,7 @@ private struct LCAppGridCell: View {
         // Press tracking that cannot swallow taps: a simultaneous
         // zero-distance drag only observes the touch (the pattern the
         // dock's AppIconView uses). The press ends as soon as the finger
-        // moves, so scrolling never leaves an icon shrunk.
+        // moves, so scrolling never leaves an icon dimmed.
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in

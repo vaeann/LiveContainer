@@ -174,10 +174,10 @@ final class LCAppBannerRootView: UIView {
         detailStack.accessibilityLabel = accessibilityParts.joined(separator: ", ")
     }
 
-    /// Press feedback, driven by the view controller: scale and alpha
-    /// applied to the icon only, matching the grid cells' feedback.
-    func applyIconPressFeedback(scale: CGFloat, alpha: CGFloat) {
-        iconImageView.transform = CGAffineTransform(scaleX: scale, y: scale)
+    /// Press/launch dimming, driven by the view controller: the icon
+    /// darkens while pressed and for the whole launch, matching the
+    /// grid cells (and the iOS home screen).
+    func applyIconDim(alpha: CGFloat) {
         iconImageView.alpha = alpha
     }
 

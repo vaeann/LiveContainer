@@ -21,22 +21,19 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     private var configuration: LCAppBannerConfiguration
     private var exportTemporaryDirectory: URL?
 
-    // Press feedback, identical to the grid cells: the icon shrinks to
-    // 0.9 and dims to 0.7 while pressed, and stays dimmed (back at full
-    // size) for the whole launch. The banner itself no longer moves, so
-    // both layouts give exactly the same feedback.
+    // Press feedback, identical to the grid cells (and the iOS home
+    // screen): no shrink and the banner itself does not move — the icon
+    // just dims to 0.7 while pressed, and stays dimmed for the whole
+    // launch.
     private var touchIsDown = false
-    private var pressFeedbackScale: CGFloat = 1
     private var pressFeedbackAlpha: CGFloat = 1
 
     private func updatePressFeedback() {
-        let scale: CGFloat = touchIsDown ? 0.9 : 1
         let alpha: CGFloat = (touchIsDown || configuration.model.isAppRunning) ? 0.7 : 1
-        guard pressFeedbackScale != scale || pressFeedbackAlpha != alpha else { return }
-        pressFeedbackScale = scale
+        guard pressFeedbackAlpha != alpha else { return }
         pressFeedbackAlpha = alpha
         UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.62, initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.bannerView.applyIconPressFeedback(scale: scale, alpha: alpha)
+            self.bannerView.applyIconDim(alpha: alpha)
         }
     }
 
