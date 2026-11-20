@@ -125,6 +125,27 @@ class AppInfoProvider {
     }
 }
 
+/// Full-screen tap catcher installed above everything in the dock's
+/// window while the dock is expanded. Touches inside the dock's frame
+/// fall through to the dock below; every other touch is claimed by the
+/// overlay's tap recognizer. Sitting on top (instead of below the dock)
+/// makes dismissal independent of the window's subview order.
+private final class LCTapOutsideOverlayView: UIView {
+    weak var passthroughView: UIView?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let passthroughView, passthroughView.window == window {
+            // The overlay fills its window, so the point it receives is
+            // already in window coordinates.
+            let dockFrame = passthroughView.convert(passthroughView.bounds, to: nil)
+            if dockFrame.contains(point) {
+                return nil
+            }
+        }
+        return super.hitTest(point, with: event)
+    }
+}
+
 // MARK: - MultitaskDockView Manager
 @available(iOS 16.0, *)
 @objc public class MultitaskDockManager: NSObject, ObservableObject {
@@ -132,7 +153,10 @@ class AppInfoProvider {
     
     @Published var apps: [DockAppModel] = []
     @Published var isVisible: Bool = false
-    @Published @objc var isCollapsed: Bool = false
+    /// The dock's resting state is the collapsed button; expanding is a
+    /// deliberate double-tap, so a fresh multitask session never opens
+    /// with the dock already expanded.
+    @Published @objc var isCollapsed: Bool = true
     @Published var isDockHidden: Bool = false
     @Published var settingsChanged: Bool = false
 
@@ -141,10 +165,10 @@ class AppInfoProvider {
     @Published var isDockIdleDimmed: Bool = false
     private var dockIdleTimer: Timer?
 
-    /// Full-screen transparent overlay installed in the key window while
-    /// the dock is expanded; the first tap outside the dock collapses it
-    /// and is consumed (standard popover dismissal).
-    private var outsideTapOverlay: UIView?
+    /// Full-screen tap catcher installed on top of the dock's window
+    /// while the dock is expanded; the first tap outside the dock
+    /// collapses it and is consumed (standard popover dismissal).
+    private var outsideTapOverlay: LCTapOutsideOverlayView?
 
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
@@ -383,8 +407,9 @@ class AppInfoProvider {
                                     screenHeight: screenBounds.height)
         
         let newFrame = CGRect(x: targetX, y: targetY, width: currentDockWidth, height: dockHeight)
-        
+
         applyNewFrame(newFrame, for: hostingController, animated: animated)
+        syncOutsideTapOverlay()
     }
 
     // MARK: - Frame Calculation Helpers
@@ -483,8 +508,11 @@ class AppInfoProvider {
         
         DispatchQueue.main.async {
             self.isVisible = true
+            // A fresh multitask session always starts from the collapsed
+            // button, even if the previous session ended expanded.
+            self.isCollapsed = true
             self.noteDockInteraction()
-            
+
             let screenBounds = keyWindow.bounds
             let currentDockWidth = self.dockWidth
             let initialHeight = Constants.initialDockShowHeight
@@ -546,6 +574,8 @@ class AppInfoProvider {
                 hostingController.view.frame.origin = CGPoint(x: targetX, y: targetY)
             } completion: { _ in
                 self.isVisible = false
+                // The next session starts collapsed again (see showDock).
+                self.isCollapsed = true
                 hostingController.view.transform = .identity
             }
         }
@@ -809,20 +839,30 @@ class AppInfoProvider {
     }
 
     /// Keep the outside-tap overlay in sync with the dock state: present
-    /// exactly while the dock is visible and expanded, inserted directly
-    /// below the dock so the dock itself stays tappable.
+    /// exactly while the dock is visible and expanded, on top of the
+    /// dock's own window (its hit test lets the dock's frame fall
+    /// through). Re-run on every dock frame update, so the overlay
+    /// heals itself if the window hierarchy changed after installation.
     private func syncOutsideTapOverlay() {
-        if isVisible && !isCollapsed {
-            guard outsideTapOverlay == nil,
-                  let keyWindow = self.keyWindow,
-                  let dockView = hostingController?.view,
-                  dockView.superview != nil else { return }
-            let overlay = UIView(frame: keyWindow.bounds)
-            overlay.backgroundColor = .clear
-            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            overlay.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleOutsideTap)))
-            keyWindow.insertSubview(overlay, belowSubview: dockView)
-            outsideTapOverlay = overlay
+        if isVisible && !isCollapsed,
+           let dockView = hostingController?.view,
+           let window = dockView.window {
+            let overlay: LCTapOutsideOverlayView
+            if let existing = outsideTapOverlay {
+                overlay = existing
+            } else {
+                let created = LCTapOutsideOverlayView(frame: window.bounds)
+                created.backgroundColor = .clear
+                created.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                created.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleOutsideTap)))
+                outsideTapOverlay = created
+                overlay = created
+            }
+            overlay.passthroughView = dockView
+            if overlay.superview !== window {
+                window.addSubview(overlay)
+            }
+            window.bringSubviewToFront(overlay)
         } else {
             outsideTapOverlay?.removeFromSuperview()
             outsideTapOverlay = nil
