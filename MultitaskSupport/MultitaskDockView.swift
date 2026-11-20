@@ -1047,21 +1047,26 @@ struct CollapsedDockView: View {
 }
 
 // The Weizhu single-column compact tile: a translucent white rounded
-// plate (corner radius 26% of the tile, thin white border, soft shadow)
-// with a semibold white glyph. Reads much better than a flat gray fill.
+// plate (corner radius 26% of the tile, thin white border, soft shadow).
+// Crucially, Weizhu tints the glyph with its theme TEXT color, not fixed
+// white — a white glyph on the translucent white plate vanishes over
+// light app content. The buttons below therefore use Color.primary
+// (black in light mode, white in dark mode) for their glyphs.
 @available(iOS 16.0, *)
 private struct DockCompactTileBackground: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     let size: CGFloat
 
     func body(content: Content) -> some View {
-        content.background(
+        let dark = colorScheme == .dark
+        return content.background(
             RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                .fill(Color.white.opacity(0.15))
+                .fill(Color.white.opacity(dark ? 0.15 : 0.18))
                 .overlay(
                     RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                        .stroke(Color.white.opacity(0.4), lineWidth: 0.8)
+                        .stroke(Color.white.opacity(dark ? 0.5 : 0.3), lineWidth: 0.8)
                 )
-                .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
+                .shadow(color: .black.opacity(dark ? 0.2 : 0.12), radius: 3, x: 0, y: 1)
         )
     }
 }
@@ -1074,7 +1079,7 @@ struct CollapseButtonView: View {
     var body: some View {
         ZStack {
             Image(systemName: "chevron.down")
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
@@ -1092,7 +1097,7 @@ struct MinimizeAllButtonView: View {
         ZStack {
             // Same home icon the Weizhu floating menu uses for "back to LC".
             Image(systemName: "house.fill")
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
