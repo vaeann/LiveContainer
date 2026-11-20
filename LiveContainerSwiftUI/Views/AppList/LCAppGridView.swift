@@ -133,15 +133,17 @@ private struct LCAppGridCell: View {
 
                     if actions.isRunning(app) {
                         // Badge diameter scales with the icon (0.4x, clamped).
-                        // The ZStack aligns the badge's top-trailing corner
-                        // with the icon's; shifting by half the badge size
-                        // centers it exactly on the icon's top-right corner,
-                        // treating the icon as a square.
+                        // Like the iOS home screen's numeric badges, the
+                        // badge center sits a quarter of its diameter inside
+                        // the icon's top-right corner: the ZStack aligns the
+                        // badge's top-trailing corner with the icon's, and
+                        // shifting by a quarter badge (not half) pulls the
+                        // center in from the corner point.
                         let badgeSize = min(max(iconSize * 0.4, 18), 34)
                         LCRunningCloseBadge(size: badgeSize) {
                             actions.onCloseRunning(app)
                         }
-                        .offset(x: badgeSize / 2, y: -badgeSize / 2)
+                        .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
                     }
                 }
                 .frame(width: iconSize, height: iconSize)

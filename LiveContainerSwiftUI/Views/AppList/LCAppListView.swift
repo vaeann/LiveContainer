@@ -39,8 +39,9 @@ struct AppReplaceOption : Hashable {
 /// Red close badge shown on running apps (list and grid). Drawn as a real
 /// circle shape rather than an SF Symbol so the visible circle is exactly
 /// `size` wide and its center lands precisely where it is positioned —
-/// callers center it on the icon's top-right corner, treating the icon as
-/// a square, so the corner point cuts the badge into quarters.
+/// callers place it like the iOS home screen's numeric badges, its center
+/// a quarter of its diameter inside the icon's top-right corner, treating
+/// the icon as a square.
 struct LCRunningCloseBadge: View {
     let size: CGFloat
     let action: () -> Void
@@ -594,13 +595,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             .overlay(alignment: .topLeading) {
                 if isAppRunning(app) {
                     // The banner icon is a 60pt square at x 14, y 14 inside
-                    // the 88pt banner. Center the badge exactly on the icon's
-                    // top-right corner (74, 14), ignoring the icon's corner
-                    // radius: badge size is 0.4x the icon (24pt).
+                    // the 88pt banner, so its top-right corner is (74, 14).
+                    // Like the iOS home screen's numeric badges, the badge
+                    // center sits a quarter of its diameter inside that
+                    // corner (24 * 0.25 = 6): center (68, 20), so the 24pt
+                    // badge's top-left lands at (56, 8).
                     LCRunningCloseBadge(size: 24) {
                         closeRunningApp(app)
                     }
-                    .offset(x: 74 - 12, y: 14 - 12)
+                    .offset(x: 56, y: 8)
                 }
             }
     }
