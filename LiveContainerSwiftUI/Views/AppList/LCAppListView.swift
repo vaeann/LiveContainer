@@ -74,7 +74,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State private var helpPresent = false
     
     @State private var customSortViewPresent = false
-    
+
+    @State private var gridSettingsPresent = false
+    @State private var runningAppsTick = 0
+
+    @AppStorage("LCAppListGridMode", store: LCUtils.appGroupUserDefault) private var gridMode = false
+    @AppStorage("LCAppGridColumns", store: LCUtils.appGroupUserDefault) private var gridColumns = 5
+    @AppStorage("LCAppGridIconSize", store: LCUtils.appGroupUserDefault) private var gridIconSize = 0
+
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
     
@@ -131,30 +138,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 })
                 .hidden()
                 
-                LazyVStack {
-                    ForEach(filteredApps, id: \.self) { app in
-                        LCAppBanner(appModel: app, delegate: self)
-                    }
-                    .transition(.scale)
-                }
+                appCollection(apps: filteredApps)
                 .padding()
                 .animation(searchContext.isTyping ? nil : .easeInOut, value: filteredApps)
 
                 VStack {
                     if LCUtils.appGroupUserDefault.bool(forKey: "LCStrictHiding") {
                         if sharedModel.isHiddenAppUnlocked {
-                            LazyVStack {
+                            VStack {
                                 HStack {
                                     Text("lc.appList.hiddenApps".loc)
                                         .font(.system(.title2).bold())
                                     Spacer()
                                 }
-                                
-                                ForEach(filteredHiddenApps, id: \.self) { app in
-                                    LCAppBanner(appModel: app, delegate: self)
-                                }
-                                .transition(.scale)
-                                
+
+                                appCollection(apps: filteredHiddenApps)
+
                             }
                             .padding()
                             .transition(.opacity)
@@ -166,24 +165,35 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                             }
                         }
                     } else if sharedModel.hiddenApps.count > 0 {
-                        LazyVStack {
+                        VStack {
                             HStack {
                                 Text("lc.appList.hiddenApps".loc)
                                     .font(.system(.title2).bold())
                                 Spacer()
                             }
-                            ForEach(filteredHiddenApps, id: \.self) { app in
-                                if sharedModel.isHiddenAppUnlocked {
-                                    LCAppBanner(appModel: app, delegate: self)
-                                } else {
-                                    LCAppSkeletonBanner()
+                            if sharedModel.isHiddenAppUnlocked {
+                                appCollection(apps: filteredHiddenApps)
+                            } else if gridMode {
+                                LazyVGrid(columns: gridLayoutColumns, spacing: 12) {
+                                    ForEach(filteredHiddenApps, id: \.self) { _ in
+                                        LCAppGridSkeletonCell()
+                                    }
+                                }
+                                .onTapGesture {
+                                    Task { await authenticateUser() }
+                                }
+                            } else {
+                                LazyVStack {
+                                    ForEach(filteredHiddenApps, id: \.self) { _ in
+                                        LCAppSkeletonBanner()
+                                    }
+                                }
+                                .onTapGesture {
+                                    Task { await authenticateUser() }
                                 }
                             }
-                            .animation(.easeInOut, value: sharedModel.isHiddenAppUnlocked)
-                            .onTapGesture {
-                                Task { await authenticateUser() }
-                            }
                         }
+                        .animation(.easeInOut, value: sharedModel.isHiddenAppUnlocked)
                         .padding()
                         .animation(searchContext.isTyping ? nil : .easeInOut, value: filteredHiddenApps)
                     }
@@ -272,11 +282,25 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                         }
                         if sharedAppSortManager.appSortType == .custom {
                             Divider()
-                            
+
                             Button {
                                 customSortViewPresent = true
                             } label: {
                                 Label("lc.appList.sort.customManage".loc, systemImage: "slider.horizontal.3")
+                            }
+                        }
+                        Divider()
+
+                        Button {
+                            gridMode.toggle()
+                        } label: {
+                            Label(gridMode ? "lc.appList.layout.list".loc : "lc.appList.layout.grid".loc, systemImage: gridMode ? "list.bullet" : "square.grid.2x2")
+                        }
+                        if gridMode {
+                            Button {
+                                gridSettingsPresent = true
+                            } label: {
+                                Label("lc.appList.gridSettings".loc, systemImage: "square.grid.3x3.square")
                             }
                         }
                     } label: {
@@ -395,6 +419,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         .sheet(isPresented: $customSortViewPresent) {
             LCCustomSortView()
         }
+        .sheet(isPresented: $gridSettingsPresent) {
+            LCAppGridSettingsView()
+        }
         .onAppear() {
             if !isViewAppeared {
                 if let webpageUrlStr = UserDefaults.standard.string(forKey: "webPageToOpen") {
@@ -425,6 +452,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
             }
             return true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.MultitaskRunningAppsChanged)) { _ in
+            runningAppsTick += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let installUrl = obj2["url"] as? URL {
@@ -493,7 +523,210 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         didAppear = true
     }
-    
+
+    // MARK: - List / Grid shared content
+
+    var gridLayoutColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 16), count: gridColumns)
+    }
+
+    @ViewBuilder
+    func appCollection(apps: [LCAppModel]) -> some View {
+        if gridMode {
+            LCAppGridView(apps: apps, columns: gridColumns, iconSize: gridIconSize, darkModeIcon: darkModeIcon, actions: gridActions)
+        } else {
+            LazyVStack {
+                ForEach(apps, id: \.self) { app in
+                    appBannerWithClose(app)
+                }
+                .transition(.scale)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func appBannerWithClose(_ app: LCAppModel) -> some View {
+        LCAppBanner(appModel: app, delegate: self)
+            .overlay(alignment: .topLeading) {
+                if isAppRunning(app) {
+                    runningCloseButton(app: app)
+                        // The banner icon spans x 14...74, y 14...74; center the
+                        // button on its top-right corner at (74, 14).
+                        .offset(x: 59, y: -1)
+                }
+            }
+    }
+
+    @ViewBuilder
+    func runningCloseButton(app: LCAppModel) -> some View {
+        Button {
+            closeRunningApp(app)
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, .red)
+                .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    func isAppRunning(_ app: LCAppModel) -> Bool {
+        _ = runningAppsTick
+        guard let container = app.uiSelectedContainer?.folderName else {
+            return false
+        }
+        return MultitaskManager.isUsing(container: container)
+    }
+
+    func closeRunningApp(_ app: LCAppModel) {
+        guard let container = app.uiSelectedContainer?.folderName else {
+            return
+        }
+        _ = MultitaskManager.terminateApp(container: container)
+    }
+
+    var gridActions: LCAppGridActions {
+        LCAppGridActions(
+            onLaunch: { app in gridLaunchApp(app) },
+            onLaunchMultitaskToggle: { app in gridLaunchApp(app, multitask: !(app.shouldLaunchInMultitaskMode)) },
+            onOpenSettings: { app in
+                openNavigationView(view: AnyView(LCAppSettingsView(model: app)))
+            },
+            onOpenDataFolder: { app in gridOpenDataFolder(app) },
+            onCopyLaunchUrl: { app in gridCopyLaunchUrl(app) },
+            onSaveIcon: { app in await gridSaveIcon(app) },
+            onCreateAppClip: { app in await gridCreateAppClip(app) },
+            onUninstall: { app, deleteData in await gridUninstallApp(app, deleteData: deleteData) },
+            onError: { message in
+                errorInfo = message
+                errorShow = true
+            },
+            isRunning: { app in isAppRunning(app) },
+            onCloseRunning: { app in closeRunningApp(app) }
+        )
+    }
+
+    func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil) {
+        // Already running: bring it to the front, exactly like the banner's run button.
+        if multitask == nil, #available(iOS 16.0, *),
+           let folderName = app.uiSelectedContainer?.folderName,
+           MultitaskManager.isUsing(container: folderName) {
+            var found = false
+            if #available(iOS 16.1, *) {
+                found = MultitaskWindowManager.openExistingAppWindow(dataUUID: folderName)
+            }
+            if !found {
+                found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: folderName)
+            }
+            if found {
+                return
+            }
+        }
+
+        Task {
+            if app.appInfo.isLocked && !sharedModel.isHiddenAppUnlocked {
+                do {
+                    if !(try await LCUtils.authenticateUser()) {
+                        return
+                    }
+                } catch {
+                    errorInfo = error.localizedDescription
+                    errorShow = true
+                    return
+                }
+            }
+
+            do {
+                try await app.runApp(multitask: multitask)
+            } catch {
+                errorInfo = error.localizedDescription
+                errorShow = true
+            }
+        }
+    }
+
+    func gridOpenDataFolder(_ app: LCAppModel) {
+        guard let folderName = app.uiSelectedContainer?.folderName,
+              let url = URL(string: "shareddocuments://\(LCPath.dataPath.path)/\(folderName)") else {
+            return
+        }
+        UIApplication.shared.open(url)
+    }
+
+    func gridCopyLaunchUrl(_ app: LCAppModel) {
+        guard let relativeBundlePath = app.appInfo.relativeBundlePath else {
+            return
+        }
+        if let folderName = app.uiSelectedContainer?.folderName {
+            UIPasteboard.general.string = "livecontainer://livecontainer-launch?bundle-name=\(relativeBundlePath)&container-folder-name=\(folderName)"
+        } else {
+            UIPasteboard.general.string = "livecontainer://livecontainer-launch?bundle-name=\(relativeBundlePath)"
+        }
+    }
+
+    func gridSaveIcon(_ app: LCAppModel) async {
+        guard let style = await promptForGeneratedIconStyle() else {
+            return
+        }
+        do {
+            guard let image = app.appInfo.generateLiveContainerWrappedIcon(with: style),
+                  let imageData = image.pngData() else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let rawDisplayName = app.appInfo.displayName() ?? app.displayName
+            let displayName = rawDisplayName.replacingOccurrences(of: "/", with: "_")
+            try LCIconExportHelper.exportPNG(imageData: imageData, fileName: "\(displayName) Icon.png")
+        } catch {
+            errorInfo = error.localizedDescription
+            errorShow = true
+        }
+    }
+
+    func gridCreateAppClip(_ app: LCAppModel) async {
+        guard let style = await promptForGeneratedIconStyle() else {
+            return
+        }
+        do {
+            guard let profile = app.appInfo.generateWebClipConfig(
+                withContainerId: app.uiSelectedContainer?.folderName,
+                iconStyle: style
+            ) else {
+                throw CocoaError(.propertyListReadCorrupt)
+            }
+            let data = try PropertyListSerialization.data(fromPropertyList: profile, format: .xml, options: 0)
+            installMdm(data: data)
+        } catch {
+            errorInfo = error.localizedDescription
+            errorShow = true
+        }
+    }
+
+    func gridUninstallApp(_ app: LCAppModel, deleteData: Bool) async {
+        do {
+            guard let bundlePath = app.appInfo.bundlePath() else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            let fileManager = FileManager.default
+            try fileManager.removeItem(atPath: bundlePath)
+            removeApp(app: app)
+
+            if deleteData {
+                for container in app.appInfo.containers {
+                    let dataUUID = container.folderName
+                    try fileManager.removeItem(at: LCPath.dataPath.appendingPathComponent(dataUUID))
+                    LCUtils.removeAppKeychain(dataUUID: dataUUID)
+                    DataManager.shared.model.appDataFolderNames.removeAll { $0 == dataUUID }
+                }
+            }
+        } catch {
+            errorInfo = error.localizedDescription
+            errorShow = true
+        }
+    }
+
     
     func openWebView(urlString: String) async {
         guard var urlToOpen = URLComponents(string: urlString), urlToOpen.url != nil else {

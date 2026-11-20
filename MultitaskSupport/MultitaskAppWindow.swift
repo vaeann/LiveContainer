@@ -164,6 +164,14 @@ struct MultitaskAppWindow: View {
                     show = false
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.MultitaskCloseWindowRequested)) { out in
+                // Red-X close request from the app list: end this window's app.
+                if let dataUUID = out.userInfo?["dataUUID"] as? String, dataUUID == appInfo.dataUUID {
+                    didRequestManualClose = true
+                    show = false
+                    requestSceneDestruction(isManual: true)
+                }
+            }
             
         } else if skipTerminatedScreen && isVirtualWindowMode, appInfo != nil {
             Color.clear
