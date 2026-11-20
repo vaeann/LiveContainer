@@ -123,6 +123,7 @@ private struct LCAppGridCell: View {
     let darkModeIcon: Bool
     let actions: LCAppGridActions
     let onUninstall: () -> Void
+    @State private var isPressed = false
 
     var body: some View {
             VStack(spacing: 6) {
@@ -144,11 +145,12 @@ private struct LCAppGridCell: View {
                     }
                 }
                 .frame(width: iconSize, height: iconSize)
-                // Launch feedback only: the icon dims while the app is
-                // launching. (Press tracking via a long-press gesture
-                // interfered with the cell's tap gestures, so it was
-                // removed; the list banner keeps its UIKit press effect.)
-                .opacity(app.isAppRunning ? 0.7 : 1)
+                // Home-screen style press feedback, identical to the
+                // list banner's icon: shrink to 0.9 and dim to 0.7 while
+                // pressed, stay dimmed for the whole launch.
+                .scaleEffect(isPressed ? 0.9 : 1)
+                .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
+                .animation(.spring(response: 0.28, dampingFraction: 0.62), value: isPressed)
                 .animation(.easeInOut(duration: 0.2), value: app.isAppRunning)
 
                 Text(app.displayName)
@@ -197,6 +199,19 @@ private struct LCAppGridCell: View {
                     .onEnded {
                         actions.onLaunch(app)
                     })
+        )
+        // Press tracking that cannot swallow taps: a simultaneous
+        // zero-distance drag only observes the touch (the pattern the
+        // dock's AppIconView uses). The press ends as soon as the finger
+        // moves, so scrolling never leaves an icon shrunk.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    isPressed = value.translation == .zero
+                }
+                .onEnded { _ in
+                    isPressed = false
+                }
         )
         .contextMenu {
             contextMenuItems

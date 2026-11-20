@@ -21,40 +21,41 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     private var configuration: LCAppBannerConfiguration
     private var exportTemporaryDirectory: URL?
 
-    // Home-screen style press feedback: the banner shrinks and dims while
-    // pressed, and stays that way while the app is launching.
+    // Press feedback, identical to the grid cells: the icon shrinks to
+    // 0.9 and dims to 0.7 while pressed, and stays dimmed (back at full
+    // size) for the whole launch. The banner itself no longer moves, so
+    // both layouts give exactly the same feedback.
     private var touchIsDown = false
-    private var pressFeedbackApplied = false
+    private var pressFeedbackScale: CGFloat = 1
+    private var pressFeedbackAlpha: CGFloat = 1
 
-    private func applyPressFeedback(_ pressed: Bool) {
-        guard pressFeedbackApplied != pressed else { return }
-        pressFeedbackApplied = pressed
+    private func updatePressFeedback() {
+        let scale: CGFloat = touchIsDown ? 0.9 : 1
+        let alpha: CGFloat = (touchIsDown || configuration.model.isAppRunning) ? 0.7 : 1
+        guard pressFeedbackScale != scale || pressFeedbackAlpha != alpha else { return }
+        pressFeedbackScale = scale
+        pressFeedbackAlpha = alpha
         UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.62, initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.bannerView.transform = pressed ? CGAffineTransform(scaleX: 0.96, y: 0.94) : .identity
-            self.bannerView.alpha = pressed ? 0.85 : 1
+            self.bannerView.applyIconPressFeedback(scale: scale, alpha: alpha)
         }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
         touchIsDown = true
-        applyPressFeedback(true)
+        updatePressFeedback()
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
         touchIsDown = false
-        if !configuration.model.isAppRunning {
-            applyPressFeedback(false)
-        }
+        updatePressFeedback()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
         touchIsDown = false
-        if !configuration.model.isAppRunning {
-            applyPressFeedback(false)
-        }
+        updatePressFeedback()
     }
 
     init(delegate: LCAppBannerDelegate, config: LCAppBannerConfiguration) {
@@ -117,13 +118,9 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
             darkModeIcon: configuration.darkModeIcon,
             traitCollection: traitCollection
         )
-        // Keep the press feedback up for the whole launch (e.g. when the
-        // run button started it), release it once the launch is over.
-        if configuration.model.isAppRunning {
-            applyPressFeedback(true)
-        } else if !touchIsDown {
-            applyPressFeedback(false)
-        }
+        // Keep the icon dimmed for the whole launch (e.g. when the run
+        // button started it), release it once the launch is over.
+        updatePressFeedback()
     }
 
     @objc private func bannerDoubleTapped(_ gestureRecognizer: UITapGestureRecognizer) {

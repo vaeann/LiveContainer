@@ -174,6 +174,13 @@ final class LCAppBannerRootView: UIView {
         detailStack.accessibilityLabel = accessibilityParts.joined(separator: ", ")
     }
 
+    /// Press feedback, driven by the view controller: scale and alpha
+    /// applied to the icon only, matching the grid cells' feedback.
+    func applyIconPressFeedback(scale: CGFloat, alpha: CGFloat) {
+        iconImageView.transform = CGAffineTransform(scaleX: scale, y: scale)
+        iconImageView.alpha = alpha
+    }
+
     private static func extractMainHueColor(appInfo: LCAppInfo, icon: UIImage, darkModeIcon: Bool) -> UIColor {
         if darkModeIcon, let cachedColor = appInfo.cachedColorDark {
             return cachedColor
