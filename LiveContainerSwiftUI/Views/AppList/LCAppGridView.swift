@@ -181,12 +181,23 @@ private struct LCAppGridCell: View {
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            actions.onOpenSettings(app)
-        }
-        .onTapGesture(count: 1) {
-            actions.onLaunch(app)
-        }
+        // Single/double tap as ONE composed gesture: the double tap takes
+        // priority and the single tap fires only when the double tap fails
+        // (the SwiftUI equivalent of UIKit's require(toFail:)). Two
+        // independent .onTapGesture modifiers have no such dependency, and
+        // on device the taps never reached the actions once the context
+        // menu's long-press competed in the same cell — this composed form
+        // is what the zh fork's grid uses for the same banner behavior.
+        .gesture(
+            TapGesture(count: 2)
+                .onEnded {
+                    actions.onOpenSettings(app)
+                }
+                .exclusively(before: TapGesture(count: 1)
+                    .onEnded {
+                        actions.onLaunch(app)
+                    })
+        )
         .contextMenu {
             contextMenuItems
         }
