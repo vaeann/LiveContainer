@@ -141,6 +141,11 @@ class AppInfoProvider {
     @Published var isDockIdleDimmed: Bool = false
     private var dockIdleTimer: Timer?
 
+    /// Full-screen transparent overlay installed in the key window while
+    /// the dock is expanded; the first tap outside the dock collapses it
+    /// and is consumed (standard popover dismissal).
+    private var outsideTapOverlay: UIView?
+
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
         DispatchQueue.main.async {
@@ -266,9 +271,12 @@ class AppInfoProvider {
     }
 
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
-        let spacingCount = max(self.apps.count + 1, 0)
+        // Expanded dock contents: the app icons plus one cycle button at
+        // the bottom — (apps.count + 1) items, apps.count gaps between
+        // them, and a single button-height allowance.
+        let spacingCount = max(self.apps.count, 0)
         let totalSpacingHeight = CGFloat(spacingCount) * Constants.dockContentSpacing
-        return Constants.dockVerticalPadding + buttonSize * 2 + totalSpacingHeight
+        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight
     }
 
     private func expandedDockHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
@@ -492,9 +500,10 @@ class AppInfoProvider {
                 )
             }
             
-            self.updateDockFrame(animated: false) 
-            
+            self.updateDockFrame(animated: false)
+
             self.setupEdgeGestureRecognizers()
+            self.syncOutsideTapOverlay()
             
             hostingController.view.alpha = 0
             let initialScale = Constants.initialScale
@@ -515,8 +524,10 @@ class AppInfoProvider {
     
     @objc public func hideDock() {
         guard isVisible, let hostingController = hostingController else { return }
-        
+
         DispatchQueue.main.async {
+            self.outsideTapOverlay?.removeFromSuperview()
+            self.outsideTapOverlay = nil
             UIView.animate(
                 withDuration: Constants.standardAnimationDuration,
                 delay: 0,
@@ -759,7 +770,68 @@ class AppInfoProvider {
             self.isCollapsed.toggle()
             self.updateDockFrame()
             self.notifyDockCollapseChanged()
+            self.syncOutsideTapOverlay()
         }
+    }
+
+    // MARK: - Cycle & tap-outside dismissal
+
+    /// The app currently in front: among the dock's app windows, the
+    /// visible one with the highest z-order in their shared host view.
+    /// Nil when every window is minimized (the user is on the LC home
+    /// screen, or all apps are in the background).
+    private func frontAppIndex() -> Int? {
+        var best: (index: Int, zOrder: Int)?
+        for (index, app) in apps.enumerated() {
+            guard let view = app.view, !view.isHidden, view.alpha >= 0.1,
+                  let superview = view.superview,
+                  let zOrder = superview.subviews.firstIndex(of: view) else { continue }
+            if best == nil || zOrder > best!.zOrder {
+                best = (index, zOrder)
+            }
+        }
+        return best?.index
+    }
+
+    /// Cycle button: bring the next app in dock order to the front,
+    /// keeping the dock expanded so it can be tapped repeatedly to flip
+    /// through apps. With fewer than two apps there is nothing to cycle
+    /// to — a warning haptic says so instead.
+    @objc public func cycleToNextApp() {
+        noteDockInteraction()
+        guard apps.count > 1 else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        let nextIndex = ((frontAppIndex() ?? -1) + 1) % apps.count
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID)
+    }
+
+    /// Keep the outside-tap overlay in sync with the dock state: present
+    /// exactly while the dock is visible and expanded, inserted directly
+    /// below the dock so the dock itself stays tappable.
+    private func syncOutsideTapOverlay() {
+        if isVisible && !isCollapsed {
+            guard outsideTapOverlay == nil,
+                  let keyWindow = self.keyWindow,
+                  let dockView = hostingController?.view,
+                  dockView.superview != nil else { return }
+            let overlay = UIView(frame: keyWindow.bounds)
+            overlay.backgroundColor = .clear
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleOutsideTap)))
+            keyWindow.insertSubview(overlay, belowSubview: dockView)
+            outsideTapOverlay = overlay
+        } else {
+            outsideTapOverlay?.removeFromSuperview()
+            outsideTapOverlay = nil
+        }
+    }
+
+    @objc private func handleOutsideTap() {
+        // No haptic feedback for outside-tap dismissal.
+        toggleDockCollapse()
     }
     
     @objc public func notifyDockCollapseChanged() {
@@ -850,25 +922,38 @@ public struct MultitaskDockSwiftView: View {
         GeometryReader { g in
             VStack(spacing: 8) {
                 if dockManager.isCollapsed {
+                    // Single tap goes home (minimize all windows), double
+                    // tap expands. One composed gesture, as in the app
+                    // grid: the double tap takes priority and the single
+                    // tap fires only when it fails, so the single tap
+                    // lands ~0.3s late — acceptable for going home.
                     CollapsedDockView()
-                        .onTapGesture {
-                            dockManager.toggleDockCollapse()
-                        }
+                        .gesture(
+                            TapGesture(count: 2)
+                                .onEnded {
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    dockManager.toggleDockCollapse()
+                                }
+                                .exclusively(before: TapGesture(count: 1)
+                                    .onEnded {
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                        dockManager.minimizeAllWindows()
+                                    })
+                        )
                 } else {
                     VStack(spacing: 8) {
-                        CollapseButtonView()
-                            .onTapGesture {
-                                dockManager.toggleDockCollapse()
-                            }
-
                         ForEach(dockManager.apps) { app in
                             AppIconView(app: app)
                         }
 
-                        // Home button sits at the very bottom.
-                        MinimizeAllButtonView()
+                        // Cycle button at the bottom: flip to the next
+                        // app in dock order without collapsing. The old
+                        // collapse and home buttons are gone — collapsing
+                        // is done by tapping outside the dock, and going
+                        // home is the collapsed button's single tap.
+                        CycleButtonView()
                             .onTapGesture {
-                                dockManager.minimizeAllWindows()
+                                dockManager.cycleToNextApp()
                             }
                     }
                 }
@@ -1071,37 +1156,20 @@ private struct DockCompactTileBackground: ViewModifier {
     }
 }
 
-// MARK: - Collapse Button View
+// MARK: - Cycle Button View
 @available(iOS 16.0, *)
-struct CollapseButtonView: View {
+struct CycleButtonView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
 
     var body: some View {
         ZStack {
-            Image(systemName: "chevron.down")
+            Image(systemName: "arrow.triangle.2.circlepath")
                 .foregroundColor(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
         .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
-    }
-}
-
-// MARK: - Minimize All Button View
-@available(iOS 16.0, *)
-struct MinimizeAllButtonView: View {
-    @EnvironmentObject var dockManager: MultitaskDockManager
-
-    var body: some View {
-        ZStack {
-            // Same home icon the Weizhu floating menu uses for "back to LC".
-            Image(systemName: "house.fill")
-                .foregroundColor(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
-        }
-        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
     }
 }
 
