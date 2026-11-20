@@ -1204,6 +1204,7 @@ class IconCacheManager {
 struct AppIconView: View {
     let app: DockAppModel
     @State private var isPressed = false
+    @State private var closeTriggered = false
     @State private var appIcon: UIImage?
     @State private var isLoading = true
     @EnvironmentObject var dockManager: MultitaskDockManager
@@ -1233,15 +1234,34 @@ struct AppIconView: View {
             loadAppIcon()
         }
         .onPressGesture(
-            onPress: { 
+            onPress: {
                 isPressed = true
             },
-            onRelease: { location in 
+            onRelease: { location in
                 isPressed = false
+                // A long-press already closed this app; the release must
+                // not also bring it to the front.
+                if closeTriggered {
+                    closeTriggered = false
+                    return
+                }
                 let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
                 impactFeedback.impactOccurred()
                 let _ = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: location)
             }
+        )
+        // Long-press closes the app, through the very same path as the
+        // red X (terminateApp closes the window without the exit
+        // animation), with a medium haptic when it fires. Simultaneous,
+        // so it only observes alongside the press tracking above.
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5)
+                .onEnded { _ in
+                    closeTriggered = true
+                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                    impactFeedback.impactOccurred()
+                    _ = MultitaskManager.terminateApp(container: app.appUUID)
+                }
         )
         .contentShape(Rectangle())
     }
