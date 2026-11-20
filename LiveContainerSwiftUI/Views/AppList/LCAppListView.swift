@@ -36,6 +36,32 @@ struct AppReplaceOption : Hashable {
     var appToReplace: LCAppModel?
 }
 
+/// Red close badge shown on running apps (list and grid). Drawn as a real
+/// circle shape rather than an SF Symbol so the visible circle is exactly
+/// `size` wide and its center lands precisely where it is positioned —
+/// callers center it on the icon's top-right corner, treating the icon as
+/// a square, so the corner point cuts the badge into quarters.
+struct LCRunningCloseBadge: View {
+    let size: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.red)
+                Image(systemName: "xmark")
+                    .font(.system(size: size * 0.5, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: size, height: size)
+            .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var didAppear = false
     // ipa choosing stuff
@@ -567,28 +593,16 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         LCAppBanner(appModel: app, delegate: self)
             .overlay(alignment: .topLeading) {
                 if isAppRunning(app) {
-                    runningCloseButton(app: app)
-                        // The banner icon spans x 14...74, y 14...74; center the
-                        // button on its top-right corner at (74, 14).
-                        .offset(x: 59, y: -1)
+                    // The banner icon is a 60pt square at x 14, y 14 inside
+                    // the 88pt banner. Center the badge exactly on the icon's
+                    // top-right corner (74, 14), ignoring the icon's corner
+                    // radius: badge size is 0.4x the icon (24pt).
+                    LCRunningCloseBadge(size: 24) {
+                        closeRunningApp(app)
+                    }
+                    .offset(x: 74 - 12, y: 14 - 12)
                 }
             }
-    }
-
-    @ViewBuilder
-    func runningCloseButton(app: LCAppModel) -> some View {
-        Button {
-            closeRunningApp(app)
-        } label: {
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 22, weight: .semibold))
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .red)
-                .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
-                .frame(width: 30, height: 30)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
     }
 
     func isAppRunning(_ app: LCAppModel) -> Bool {

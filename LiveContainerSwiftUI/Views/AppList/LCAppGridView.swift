@@ -151,19 +151,16 @@ private struct LCAppGridCell: View {
                     }
 
                     if actions.isRunning(app) {
-                        Button {
+                        // Badge diameter scales with the icon (0.4x, clamped).
+                        // The ZStack aligns the badge's top-trailing corner
+                        // with the icon's; shifting by half the badge size
+                        // centers it exactly on the icon's top-right corner,
+                        // treating the icon as a square.
+                        let badgeSize = min(max(iconSize * 0.4, 18), 34)
+                        LCRunningCloseBadge(size: badgeSize) {
                             actions.onCloseRunning(app)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 20, weight: .semibold))
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .red)
-                                .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
-                                .frame(width: 28, height: 28)
-                                .contentShape(Circle())
                         }
-                        .buttonStyle(.plain)
-                        .offset(x: 7, y: -7)
+                        .offset(x: badgeSize / 2, y: -badgeSize / 2)
                     }
                 }
                 .frame(width: iconSize, height: iconSize)
