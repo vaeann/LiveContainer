@@ -1119,14 +1119,15 @@ struct CollapsedDockView: View {
 
     var body: some View {
         ZStack {
-            // Purple breathing light, like the Weizhu floating button:
-            // the grid glyph pulses in opacity while a purple glow
-            // breathes behind it (1.15s ease-in-out, autoreversing).
+            // Breathing with Weizhu's exact pulse parameters
+            // (FMApplyOrbLineAnimation): opacity only, 0.38 -> 1,
+            // 1.15s ease-in-out, autoreversing. Animating a single
+            // property is what makes it feel smooth; the glyph is the
+            // theme text color, like Weizhu's glyphs on glass.
             Image(systemName: "square.grid.2x2.fill")
-                .foregroundStyle(Color(red: 0.686, green: 0.322, blue: 0.871))
+                .foregroundStyle(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
-                .opacity(breathing ? 1.0 : 0.55)
-                .shadow(color: Color(red: 0.686, green: 0.322, blue: 0.871).opacity(breathing ? 0.9 : 0.3), radius: breathing ? 12 : 4, x: 0, y: 0)
+                .opacity(breathing ? 1.0 : 0.38)
                 .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true), value: breathing)
                 .onAppear { breathing = true }
         }
@@ -1212,25 +1213,17 @@ struct CollapseButtonView: View {
 
     var body: some View {
         ZStack {
-            // The same purple grid glyph as the collapsed button, so
-            // the pair reads as one toggle: tap it to expand, tap it
-            // again to collapse. Unlike the cycle button's pale plate,
-            // this one is a filled purple plate with a white glyph —
-            // on liquid glass the two buttons were otherwise hard to
-            // tell apart.
-            Image(systemName: "square.grid.2x2.fill")
-                .foregroundStyle(.white)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
+            // A chevron pointing at the edge the dock collapses into
+            // (the dock hugs the right edge; Weizhu's collapse
+            // affordance is the same chevron.right). Same tile and
+            // theme-text glyph as the cycle button — the arrow shape
+            // alone says "collapse", no special color needed.
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.primary)
+                .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .background(
-            RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.26, style: .continuous)
-                .fill(Color(red: 0.686, green: 0.322, blue: 0.871))
-                .overlay(
-                    RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.26, style: .continuous)
-                        .stroke(Color.white.opacity(0.35), lineWidth: 0.8)
-                )
-        )
+        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
         // The same drop shadow the app icons carry.
         .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
