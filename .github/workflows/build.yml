@@ -65,15 +65,15 @@ jobs:
             -mios-version-min=14.0 -fobjc-arc -dynamiclib \
             -framework UIKit -framework Foundation -framework AVFoundation \
             -o FMKeepAlive.dylib BundledTweaks/FMKeepAlive.m
-          # Ship the dylib compressed as data, not as a loose dylib:
-          # install-time re-signing rewrote the loose dylib's load
-          # commands on device (an injected @loader_path/Frameworks/
-          # <hash>.dylib reference), breaking the deployed copy. A
-          # data file passes through untouched; LC inflates it when
-          # deploying (LCKeepAliveSettingView.syncModule).
-          python3 -c "import zlib; open('FMKeepAlive.dylib.z','wb').write(zlib.compress(open('FMKeepAlive.dylib','rb').read(), 9))"
-          cp FMKeepAlive.dylib.z "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.z"
-          ls -la "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.z"
+          # Ship the dylib base64-encoded as text, not as a loose
+          # dylib: install-time re-signing rewrote the loose dylib's
+          # load commands on device (an injected @loader_path/
+          # Frameworks/<hash>.dylib reference), breaking the deployed
+          # copy. A text file passes through untouched; LC decodes
+          # it when deploying (LCKeepAliveSettingView.syncModule).
+          base64 -i FMKeepAlive.dylib -o FMKeepAlive.dylib.b64
+          cp FMKeepAlive.dylib.b64 "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.b64"
+          ls -la "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.b64"
       - name: Tar Build Artifact
         run: tar -cvf "$archive_path.xcarchive.tar" "$archive_path.xcarchive"
       - name: Upload a Build Artifact

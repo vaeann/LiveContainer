@@ -11,7 +11,6 @@
 //  itself.
 //
 
-import Compression
 import SwiftUI
 
 struct LCKeepAliveSettingView: View {
@@ -106,12 +105,13 @@ struct LCKeepAliveSettingView: View {
         // The module's host half only loads when LC injects tweaks
         // into itself (the same switch 微珠 relies on).
         UserDefaults.standard.set(true, forKey: "LCLoadTweaksToSelf")
-        // The dylib ships compressed (FMKeepAlive.dylib.z): as a
-        // loose dylib in the .app its load commands got rewritten by
-        // install-time re-signing, which broke the deployed copy.
-        guard let src = Bundle.main.url(forResource: "FMKeepAlive.dylib", withExtension: "z"),
+        // The dylib ships base64-encoded (FMKeepAlive.dylib.b64):
+        // as a loose dylib in the .app its load commands got
+        // rewritten by install-time re-signing, which broke the
+        // deployed copy. A text file passes through untouched.
+        guard let src = Bundle.main.url(forResource: "FMKeepAlive.dylib", withExtension: "b64"),
               let packed = try? Data(contentsOf: src),
-              let srcData = try? (packed as NSData).decompressed(using: .zlib)
+              let srcData = Data(base64Encoded: packed, options: [.ignoreUnknownCharacters])
         else { return }
         let fm = FileManager.default
         for folder in [LCPath.tweakPath, LCPath.lcGroupTweakPath] {
