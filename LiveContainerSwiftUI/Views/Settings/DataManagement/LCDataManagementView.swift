@@ -486,6 +486,8 @@ struct LCDataManagementView : View {
         for app in sharedModel.apps {
             app.appInfo.clearIconCache()
         }
+        // Source app icons live in their own cache; clear it too.
+        SourceIconCache.clearAll()
     }
 
 }

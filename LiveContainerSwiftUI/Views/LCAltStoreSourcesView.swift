@@ -789,10 +789,18 @@ struct LCSourcesView: View {
                     } label: {
                         Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
                             .bold()
-                            .foregroundColor(.white)
                             .frame(maxWidth: .infinity)
                             .frame(height: 40)
-                            .background(Capsule().fill(Color("FontColor")))
+                            .modifier { content in
+                                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                                    content
+                                        .glassEffect(.regular.interactive(true), in: .capsule)
+                                } else {
+                                    content
+                                        .foregroundColor(.white)
+                                        .background(Capsule().fill(Color("FontColor")))
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal)
@@ -1360,28 +1368,94 @@ private struct LCSourceAppBanner: View {
     }
 }
 
+/// Disk + memory cache for source app icons. AsyncImage alone went
+/// back to the network on nearly every refresh; icons are now kept
+/// in the app-group container, keyed by a hash of the icon URL, and
+/// served from memory or disk first. Cleared together with the app
+/// icon caches from Data Management (the clear icon cache button).
+final class SourceIconCache {
+    static let shared = SourceIconCache()
+
+    private let memoryCache = NSCache<NSString, UIImage>()
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let lock = NSLock()
+
+    private var cacheDirectory: URL {
+        LCPath.lcGroupDocPath.appendingPathComponent("SourceIconCache", isDirectory: true)
+    }
+
+    private func fileURL(for url: URL) -> URL {
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return cacheDirectory.appendingPathComponent(name)
+    }
+
+    func image(for url: URL) async -> UIImage? {
+        let key = url.absoluteString as NSString
+        if let image = memoryCache.object(forKey: key) {
+            return image
+        }
+        let file = fileURL(for: url)
+        if let data = try? Data(contentsOf: file), let image = UIImage(data: data) {
+            memoryCache.setObject(image, forKey: key)
+            return image
+        }
+        // Share one download between rows asking for the same icon.
+        let task: Task<UIImage?, Never>
+        lock.lock()
+        if let existing = inFlight[url.absoluteString] {
+            task = existing
+        } else {
+            let created = Task<UIImage?, Never> { [self] in
+                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                      let image = UIImage(data: data) else {
+                    return nil
+                }
+                try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+                try? data.write(to: file, options: .atomic)
+                return image
+            }
+            inFlight[url.absoluteString] = created
+            task = created
+        }
+        lock.unlock()
+        let image = await task.value
+        lock.lock()
+        inFlight[url.absoluteString] = nil
+        lock.unlock()
+        if let image {
+            memoryCache.setObject(image, forKey: key)
+        }
+        return image
+    }
+
+    static func clearAll() {
+        shared.memoryCache.removeAllObjects()
+        try? FileManager.default.removeItem(at: shared.cacheDirectory)
+    }
+}
+
 struct SourceIconView: View {
     let url: URL?
-    
+    @State private var image: UIImage?
+
     var body: some View {
-        if let url {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    placeholder
-                case .success(let image):
-                    image.resizable().scaledToFill()
-                case .failure:
-                    placeholder
-                @unknown default:
-                    placeholder
-                }
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
             }
-        } else {
-            placeholder
+        }
+        .task(id: url) {
+            image = nil
+            guard let url else { return }
+            image = await SourceIconCache.shared.image(for: url)
         }
     }
-    
+
     private var placeholder: some View {
         Image("DefaultIcon")
             .resizable()
