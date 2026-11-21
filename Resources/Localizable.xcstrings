@@ -31497,6 +31497,52 @@
         }
       }
     },
+    "lc.sources.segment.sourcesWithCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Sources (%lld)"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "软件源（%lld)"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "軟體源（%lld)"
+            }
+          }
+      }
+    },
+    "lc.sources.segment.updatesWithCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Updates (%lld)"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "待更新（%lld)"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "待更新（%lld)"
+            }
+          }
+      }
+    },
     "lc.sources.segment.sources" : {
       "extractionState" : "manual",
       "localizations" : {

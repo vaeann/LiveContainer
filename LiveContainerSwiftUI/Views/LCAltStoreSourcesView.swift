@@ -561,8 +561,8 @@ struct LCSourcesView: View {
             VStack(spacing: 0) {
                 if !viewModel.sources.isEmpty {
                     Picker("lc.sources.segment".loc, selection: $selectedSegment) {
-                        Text("lc.sources.segment.sources".loc).tag(0)
-                        Text("lc.sources.segment.updates".loc).tag(1)
+                        Text("lc.sources.segment.sourcesWithCount %lld".localizeWithFormat(viewModel.sources.count)).tag(0)
+                        Text("lc.sources.segment.updatesWithCount %lld".localizeWithFormat(updatableApps.count)).tag(1)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
