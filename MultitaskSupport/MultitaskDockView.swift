@@ -155,20 +155,6 @@ class AppInfoProvider {
     /// change.
     @Published var frontAppUUID: String?
 
-    /// The dock position the user last dragged to: which edge, and
-    /// the vertical center as a fraction of the screen height
-    /// (clamped to 0.1...0.9 when saved — Weizhu stores its orb
-    /// position the same way). Upstream LC only kept the position in
-    /// the view's frame, so it reset to the default on every launch;
-    /// persisting it makes the dock reappear where it was left. Nil
-    /// until the dock is dragged for the first time.
-    private var savedDockPosition: (onRight: Bool, centerYFraction: Double)? {
-        let defaults = LCUtils.appGroupUserDefault
-        let fraction = defaults.double(forKey: "LCMultitaskDockCenterYFraction")
-        guard fraction > 0 else { return nil }
-        return (defaults.bool(forKey: "LCMultitaskDockOnRight"), fraction)
-    }
-
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
         DispatchQueue.main.async {
@@ -395,11 +381,7 @@ class AppInfoProvider {
         let dockHeight = calculateTargetDockHeight(forWidth: currentDockWidth)
 
         let currentFrame = hostingController.view.frame
-        // First layout has no frame to inherit the side from: use
-        // the saved dragged side (upstream default: right).
-        let isOnRightSide = currentFrame.isEmpty
-            ? (savedDockPosition?.onRight ?? true)
-            : (currentFrame.midX > screenBounds.width / 2)
+        let isOnRightSide = (currentFrame.midX > screenBounds.width / 2) || (currentFrame.isEmpty)
         let targetX = calculateTargetX(isDockHidden: self.isDockHidden, 
                                     isOnRightSide: isOnRightSide, 
                                     dockWidth: currentDockWidth, 
@@ -460,9 +442,6 @@ class AppInfoProvider {
         
         if currentFrame.height > 0 {
             let desiredY = currentFrame.midY - dockHeight / 2
-            return max(safeAreaMinY, min(safeAreaMaxY, desiredY))
-        } else if let saved = savedDockPosition {
-            let desiredY = CGFloat(saved.centerYFraction) * screenHeight - dockHeight / 2
             return max(safeAreaMinY, min(safeAreaMaxY, desiredY))
         } else {
             let safeAreaCenterY = safeAreaMinY + (safeAreaMaxY - safeAreaMinY) / 2
@@ -605,15 +584,6 @@ class AppInfoProvider {
         let newFrame = hostingController.view.frame.offsetBy(dx: finalOffset.width, dy: finalOffset.height)
         
         hostingController.view.frame = newFrame
-
-        // Remember where the drag left the dock, so it reappears
-        // there on the next launch.
-        if let bounds = keyWindow?.bounds, bounds.width > 0, bounds.height > 0 {
-            let defaults = LCUtils.appGroupUserDefault
-            defaults.set(newFrame.midX > bounds.width / 2, forKey: "LCMultitaskDockOnRight")
-            let fraction = Double(newFrame.midY / bounds.height)
-            defaults.set(min(0.9, max(0.1, fraction)), forKey: "LCMultitaskDockCenterYFraction")
-        }
     }
 
     func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize) -> Bool {
