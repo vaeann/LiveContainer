@@ -22300,6 +22300,29 @@
         }
       }
     },
+    "lc.settings.hideCollapsedDock" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Collapsed Dock"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏折叠 Dock"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏折疊 Dock"
+          }
+        }
+      }
+    },
     "lc.settings.importCertFromBuiltinSideStore" : {
       "extractionState" : "stale",
       "localizations" : {
