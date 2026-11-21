@@ -202,7 +202,7 @@ struct LCKeepAliveSettingView: View {
             }
             let role = dict["role"] as? String ?? "guest"
             let dataUUID = dict["dataUUID"] as? String ?? ""
-            loaded.append(KeepAliveRecord(
+            let record = KeepAliveRecord(
                 id: role == "host" ? "host" : dataUUID,
                 role: role,
                 dataUUID: dataUUID,
@@ -214,12 +214,31 @@ struct LCKeepAliveSettingView: View {
                 playStart: date("playStart"),
                 lastEnd: date("lastEnd"),
                 lastSeconds: dict["lastSeconds"] as? Double ?? 0
-            ))
+            )
+            let freshest = max(record.beat ?? .distantPast, record.lastEnd ?? .distantPast)
+            // Prune state files of sessions that ended long ago, so the
+            // directory does not grow one stale file per app forever; a
+            // live process recreates its file on the next transition.
+            if !record.isAlive, Date().timeIntervalSince(freshest) > 48 * 3600 {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            // The panel is a status view, not a history log: live
+            // sessions, plus sessions that ended within the last
+            // 30 minutes so a just-finished (or timed-out) session can
+            // still be checked.
+            if record.isAlive || Date().timeIntervalSince(freshest) <= 30 * 60 {
+                loaded.append(record)
+            }
         }
-        // Host first, then guests by display name.
+        // Live sessions first (host ahead of guests), then the rest by
+        // most recent activity.
         loaded.sort {
+            if $0.isAlive != $1.isAlive { return $0.isAlive }
             if $0.isHost != $1.isHost { return $0.isHost }
-            return displayName(for: $0) < displayName(for: $1)
+            let a = max($0.beat ?? .distantPast, $0.lastEnd ?? .distantPast)
+            let b = max($1.beat ?? .distantPast, $1.lastEnd ?? .distantPast)
+            return a > b
         }
         records = loaded
     }
