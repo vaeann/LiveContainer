@@ -17,13 +17,10 @@ private struct KeepAliveRecord: Identifiable {
     var role: String
     var dataUUID: String
     var playing: Bool
-    var timedOut: Bool
     var watchdogEnabled: Bool
     var beat: Date?
     var watchdog: Date?
     var playStart: Date?
-    var lastEnd: Date?
-    var lastSeconds: TimeInterval
 
     /// A session only counts as live while its heartbeat is fresh: if the
     /// process died (jetsam, crash) the file stays behind with playing=true
@@ -148,25 +145,18 @@ struct LCKeepAliveSettingView: View {
                 Text(watchdogText(for: record))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if record.lastSeconds > 0 {
-                    Text(lastSessionText(for: record))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             }
         }
         .padding(.vertical, 2)
     }
 
     private func statusText(for record: KeepAliveRecord) -> String {
-        if record.isAlive, let playStart = record.playStart {
-            let elapsed = Self.durationFormatter.string(from: playStart, to: Date()) ?? ""
-            return "\("lc.keepAlive.status.active".loc) · \("lc.keepAlive.status.elapsed".loc) \(elapsed)"
+        // Only live sessions reach the panel (see reload()).
+        guard let playStart = record.playStart else {
+            return "lc.keepAlive.status.active".loc
         }
-        if record.timedOut {
-            return "lc.keepAlive.status.timedOut".loc
-        }
-        return "lc.keepAlive.status.idle".loc
+        let elapsed = Self.durationFormatter.string(from: playStart, to: Date()) ?? ""
+        return "\("lc.keepAlive.status.active".loc) · \("lc.keepAlive.status.elapsed".loc) \(elapsed)"
     }
 
     private func watchdogText(for record: KeepAliveRecord) -> String {
@@ -178,15 +168,6 @@ struct LCKeepAliveSettingView: View {
         }
         let relative = Self.relativeFormatter.localizedString(for: watchdog, relativeTo: Date())
         return "\("lc.keepAlive.status.lastWatchdog".loc): \(relative)"
-    }
-
-    private func lastSessionText(for record: KeepAliveRecord) -> String {
-        let duration = Self.durationFormatter.string(from: record.lastSeconds) ?? ""
-        if let lastEnd = record.lastEnd {
-            let relative = Self.relativeFormatter.localizedString(for: lastEnd, relativeTo: Date())
-            return "\("lc.keepAlive.status.lastSession".loc): \(duration) · \(relative)"
-        }
-        return "\("lc.keepAlive.status.lastSession".loc): \(duration)"
     }
 
     // MARK: Data
@@ -226,38 +207,29 @@ struct LCKeepAliveSettingView: View {
                 role: role,
                 dataUUID: dataUUID,
                 playing: dict["playing"] as? Bool ?? false,
-                timedOut: dict["timedOut"] as? Bool ?? false,
                 watchdogEnabled: dict["watchdogEnabled"] as? Bool ?? true,
                 beat: date("beat"),
                 watchdog: date("watchdog"),
-                playStart: date("playStart"),
-                lastEnd: date("lastEnd"),
-                lastSeconds: dict["lastSeconds"] as? Double ?? 0
+                playStart: date("playStart")
             )
-            let freshest = max(record.beat ?? .distantPast, record.lastEnd ?? .distantPast)
-            // Prune state files of sessions that ended long ago, so the
-            // directory does not grow one stale file per app forever; a
-            // live process recreates its file on the next transition.
-            if !record.isAlive, Date().timeIntervalSince(freshest) > 48 * 3600 {
+            // Prune state files of processes that died long ago, so
+            // the directory does not grow one stale file per app
+            // forever; a live process recreates its file on the next
+            // transition.
+            if !record.isAlive, let beat = record.beat, Date().timeIntervalSince(beat) > 48 * 3600 {
                 try? FileManager.default.removeItem(at: file)
                 continue
             }
-            // The panel is a status view, not a history log: live
-            // sessions, plus sessions that ended within the last
-            // 30 minutes so a just-finished (or timed-out) session can
-            // still be checked.
-            if record.isAlive || Date().timeIntervalSince(freshest) <= 30 * 60 {
+            // Only sessions keeping alive right now are listed —
+            // the panel mirrors 微珠: no history, no idle entries.
+            if record.isAlive {
                 loaded.append(record)
             }
         }
-        // Live sessions first (host ahead of guests), then the rest by
-        // most recent activity.
+        // Host ahead of guests, then by most recent heartbeat.
         loaded.sort {
-            if $0.isAlive != $1.isAlive { return $0.isAlive }
             if $0.isHost != $1.isHost { return $0.isHost }
-            let a = max($0.beat ?? .distantPast, $0.lastEnd ?? .distantPast)
-            let b = max($1.beat ?? .distantPast, $1.lastEnd ?? .distantPast)
-            return a > b
+            return ($0.beat ?? .distantPast) > ($1.beat ?? .distantPast)
         }
         records = loaded
     }

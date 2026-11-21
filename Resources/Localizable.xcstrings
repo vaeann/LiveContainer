@@ -18879,52 +18879,6 @@
         }
       }
     },
-    "lc.keepAlive.status.idle" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Not keeping alive"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未保活"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未保活"
-          }
-        }
-      }
-    },
-    "lc.keepAlive.status.lastSession" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last session"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上次保活"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "上次保活"
-          }
-        }
-      }
-    },
     "lc.keepAlive.status.lastWatchdog" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -18967,29 +18921,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暫無記錄"
-          }
-        }
-      }
-    },
-    "lc.keepAlive.status.timedOut" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stopped at the duration limit"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已达时长上限，已停止"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已達時長上限，已停止"
           }
         }
       }

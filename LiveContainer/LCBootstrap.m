@@ -339,6 +339,14 @@ NSString *LCRunGuestExtension(NSDictionary *request, int argc, char *argv[], cha
 // 1-second silent WAV through AVAudioPlayer so iOS does not suspend the
 // process; it stops as soon as the guest returns to the foreground.
 //
+// The state machine is a port of 微珠's FMKeepAlive (itself derived from
+// LiveContainer-zh's CZF keep-alive): every lifecycle signal funnels into
+// one refresh decision — enabled → in background → not timed out → play.
+// Playback starts early on WillResignActive, the category is set only when
+// the player is (re)created and never saved/restored, and stops simply
+// pause the player and deactivate the session. The host process runs the
+// twin keeper (LCHostKeepAlive) with the same structure.
+//
 // Settings live in the app-group defaults and are shared with the host-side
 // keeper: one global switch (LCKeepAliveEnabled, default ON — no per-app
 // switches), a session duration cap in minutes (LCKeepAliveDurationMinutes,
@@ -516,12 +524,12 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
     static NSDictionary *labels = nil;
     if (!labels) {
         labels = @{
+            @"UIApplicationWillResignActiveNotification": @"应用将失去活跃",
             @"UIApplicationDidEnterBackgroundNotification": @"应用进入后台",
             @"NSExtensionHostDidEnterBackgroundNotification": @"扩展宿主进入后台",
             @"UIApplicationWillEnterForegroundNotification": @"应用将回前台",
             @"UIApplicationDidBecomeActiveNotification": @"应用已活跃",
             @"NSExtensionHostWillEnterForegroundNotification": @"扩展宿主将回前台",
-            @"NSExtensionHostDidBecomeActiveNotification": @"扩展宿主已活跃",
             @"UIApplicationDidFinishLaunchingNotification": @"应用启动完成",
         };
     }
@@ -533,22 +541,14 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 @property (nonatomic, copy) NSString *bundleID;
 @property (nonatomic, strong) LCKAAudioPlayer *player;
 @property (nonatomic, strong) NSTimer *watchdogTimer;
-@property (nonatomic, strong) NSTimer *capTimer;
+@property (nonatomic, strong) NSTimer *timeoutTimer;
 @property (nonatomic, strong) NSMutableArray *observerTokens;
 @property (nonatomic, assign) BOOL observersRegistered;
 @property (nonatomic, assign) BOOL inBackground;
-@property (nonatomic, assign) BOOL keepingAlive;
-@property (nonatomic, assign) BOOL capReached;
-@property (nonatomic, assign) BOOL interrupted;
-@property (nonatomic, assign) BOOL sessionChanged;
-@property (nonatomic, copy) NSString *savedCategory;
-@property (nonatomic, copy) NSString *savedMode;
-@property (nonatomic, assign) NSUInteger savedOptions;
+@property (nonatomic, assign) BOOL timedOut;
+@property (nonatomic, strong) NSDate *backgroundStart;
 @property (nonatomic, strong) NSDate *sessionStart;
 @property (nonatomic, strong) NSDate *lastWatchdogConfirm;
-@property (nonatomic, strong) NSDate *lastEnd;
-@property (nonatomic, assign) NSTimeInterval lastSeconds;
-@property (nonatomic, assign) BOOL lastStopTimedOut;
 + (void)startForGuestWithDataUUID:(NSString *)dataUUID bundleID:(NSString *)bundleID;
 @end
 
@@ -563,7 +563,6 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
         });
         sharedEngine.dataUUID = dataUUID;
         sharedEngine.bundleID = bundleID;
-        [sharedEngine restoreLastRecord];
         [sharedEngine registerObserversIfNeeded];
         [sharedEngine writeState];
         [sharedEngine logEvent:@"引擎装载完成"];
@@ -573,49 +572,27 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 #pragma mark Settings (app-group defaults, shared with host)
 
 - (BOOL)keepAliveEnabled {
-    NSNumber *value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveEnabled"];
-    return value ? value.boolValue : YES;
+    id value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveEnabled"];
+    return value ? [value boolValue] : YES;
 }
 
 - (BOOL)watchdogEnabled {
-    NSNumber *value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveWatchdogEnabled"];
-    return value ? value.boolValue : YES;
+    id value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveWatchdogEnabled"];
+    return value ? [value boolValue] : YES;
 }
 
 - (NSInteger)durationMinutes {
-    NSNumber *value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveDurationMinutes"];
-    return value ? value.integerValue : 20;
+    id value = [[NSUserDefaults lcSharedDefaults] objectForKey:@"LCKeepAliveDurationMinutes"];
+    return value ? [value integerValue] : 20;
 }
 
 #pragma mark State file (read by the settings status panel)
 
 - (NSString *)stateFilePath {
-    NSString *groupPath = [NSUserDefaults lcAppGroupPath];
-    if (!groupPath || !self.dataUUID) {
-        return nil;
-    }
-    NSString *dir = [[groupPath stringByAppendingPathComponent:@"LiveContainer"] stringByAppendingPathComponent:@"KeepAliveState"];
+    NSString *dir = [[NSUserDefaults lcAppGroupPath] stringByAppendingPathComponent:@"LiveContainer/KeepAliveState"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    return [dir stringByAppendingPathComponent:[self.dataUUID stringByAppendingPathExtension:@"json"]];
-}
-
-- (void)restoreLastRecord {
-    @try {
-        NSString *path = [self stateFilePath];
-        NSData *data = path ? [NSData dataWithContentsOfFile:path] : nil;
-        if (!data) {
-            return;
-        }
-        NSDictionary *state = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if (![state isKindOfClass:NSDictionary.class]) {
-            return;
-        }
-        double lastEnd = [state[@"lastEnd"] doubleValue];
-        if (lastEnd > 0) {
-            self.lastEnd = [NSDate dateWithTimeIntervalSince1970:lastEnd];
-            self.lastSeconds = [state[@"lastSeconds"] doubleValue];
-        }
-    } @catch (__unused NSException *e) {}
+    NSString *name = self.dataUUID.length ? self.dataUUID : (self.bundleID ?: @"guest");
+    return [dir stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"json"]];
 }
 
 - (void)writeState {
@@ -629,22 +606,20 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
             @"bundleId": self.bundleID ?: @"",
             @"dataUUID": self.dataUUID ?: @"",
             @"pid": @(NSProcessInfo.processInfo.processIdentifier),
-            @"playing": @(self.keepingAlive),
+            @"playing": @(self.player.playing),
             @"background": @(self.inBackground),
-            @"timedOut": @(self.lastStopTimedOut),
             @"enabled": @([self keepAliveEnabled]),
             @"watchdogEnabled": @([self watchdogEnabled]),
             @"beat": @([[NSDate date] timeIntervalSince1970]),
             @"watchdog": @(self.lastWatchdogConfirm ? [self.lastWatchdogConfirm timeIntervalSince1970] : 0),
             @"playStart": @(self.sessionStart ? [self.sessionStart timeIntervalSince1970] : 0),
-            @"lastEnd": @(self.lastEnd ? [self.lastEnd timeIntervalSince1970] : 0),
-            @"lastSeconds": @(self.lastSeconds),
         };
         NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
         [data writeToFile:path atomically:YES];
     } @catch (__unused NSException *e) {}
 }
 
+// Temporary diagnostic log (removed once keep-alive is fixed).
 - (void)logEvent:(NSString *)event {
     LCKeepAliveLogEvent(self.bundleID ?: @"guest", event);
 }
@@ -652,206 +627,170 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 #pragma mark Audio session / player
 
 - (LCKAAudioSession *)audioSession {
-    Class cls = NSClassFromString(@"AVAudioSession");
-    if (!cls) {
-        return nil;
-    }
-    return [(id)cls sharedInstance];
+    return [(id)NSClassFromString(@"AVAudioSession") sharedInstance];
 }
 
-- (BOOL)startPlayback {
+// FMKeepAlive structure: the category is set only when the player is
+// (re)created and is never saved/restored; a stopped player is thrown
+// away by the watchdog and interruption paths, so a restart always
+// rebuilds the whole chain.
+- (void)startPlayback {
     if (self.player.playing) {
-        [self logEvent:@"启动播放：播放器已在播放，跳过"];
-        return YES;
-    }
-    LCKAAudioSession *session = [self audioSession];
-    if (!session) {
-        [self logEvent:@"启动播放失败：拿不到音频会话"];
-        return NO;
-    }
-    // The audio session is shared with the host and every sibling
-    // guest: another process may have changed (or restored) the
-    // category since this engine last set it, so verify the live
-    // values on every start instead of trusting sessionChanged —
-    // a non-playback category in the background means no keep-alive.
-    NSString *category = session.category;
-    NSUInteger options = session.categoryOptions;
-    if (![category isEqualToString:LCKACategoryPlayback] || !(options & LCKAOptionMixWithOthers)) {
-        [self logEvent:[NSString stringWithFormat:@"会话类目不对（当前 %@），重设为 Playback+混音", category ?: @"(空)"]];
-        if (!self.sessionChanged) {
-            // Remember the app's own configuration so stop can restore
-            // exactly what we changed — and nothing else.
-            self.savedCategory = category;
-            self.savedOptions = options;
-            self.savedMode = session.mode;
-            self.sessionChanged = YES;
-        }
-        NSError *categoryError = nil;
-        if (![session setCategory:LCKACategoryPlayback
-                             mode:self.savedMode ?: LCKAModeDefault
-                          options:(options | LCKAOptionMixWithOthers)
-                            error:&categoryError]) {
-            [self logEvent:[NSString stringWithFormat:@"设置类目失败：%@", categoryError.localizedDescription ?: @"未知错误"]];
-        }
-    } else {
-        [self logEvent:@"会话类目正常（Playback+混音）"];
-    }
-    NSError *activeError = nil;
-    if ([session setActive:YES withOptions:0 error:&activeError]) {
-        [self logEvent:@"会话已激活"];
-    } else {
-        [self logEvent:[NSString stringWithFormat:@"会话激活失败：%@", activeError.localizedDescription ?: @"未知错误"]];
+        return;
     }
     if (!self.player) {
+        LCKAAudioSession *session = [self audioSession];
+        if (!session) {
+            [self logEvent:@"启动播放失败：拿不到音频会话"];
+            return;
+        }
+        NSString *category = session.category;
+        if (![category isEqualToString:LCKACategoryPlayback] || !(session.categoryOptions & LCKAOptionMixWithOthers)) {
+            [self logEvent:[NSString stringWithFormat:@"会话类目不对（当前 %@），重设为 Playback+混音", category ?: @"(空)"]];
+            NSError *categoryError = nil;
+            if (![session setCategory:LCKACategoryPlayback mode:session.mode options:LCKAOptionMixWithOthers error:&categoryError]) {
+                [self logEvent:[NSString stringWithFormat:@"设置类目失败：%@", categoryError.localizedDescription ?: @"未知错误"]];
+            }
+        } else {
+            [self logEvent:@"会话类目正常（Playback+混音）"];
+        }
         Class playerClass = NSClassFromString(@"AVAudioPlayer");
         if (!playerClass) {
             [self logEvent:@"启动播放失败：拿不到 AVAudioPlayer 类"];
-            return NO;
+            return;
         }
         NSError *error = nil;
         self.player = [[(id)playerClass alloc] initWithData:LCKASilentWAVData() error:&error];
         if (!self.player) {
             [self logEvent:[NSString stringWithFormat:@"播放器创建失败：%@", error.localizedDescription ?: @"未知错误"]];
-            return NO;
+            return;
         }
         self.player.numberOfLoops = -1; // loop forever
         self.player.volume = 0.0;
         [self.player prepareToPlay];
         [self logEvent:@"播放器已创建"];
     }
+    NSError *activeError = nil;
+    if ([[self audioSession] setActive:YES withOptions:0 error:&activeError]) {
+        [self logEvent:@"会话已激活"];
+    } else {
+        [self logEvent:[NSString stringWithFormat:@"会话激活失败：%@", activeError.localizedDescription ?: @"未知错误"]];
+    }
     BOOL playing = [self.player play];
     [self logEvent:playing ? @"播放器开始播放" : @"播放器启动失败（play 返回否）"];
-    return playing;
-}
-
-- (void)restoreAudioSession:(BOOL)wasKeepingAlive {
-    // While still in the background, leave the shared session exactly
-    // as it is: it is one session for the host and all guests, so
-    // restoring the category or deactivating here would cut the
-    // ground from under every sibling still keeping alive. The full
-    // restore runs on the foreground stop (enterForeground clears
-    // inBackground before stopping).
-    if (self.inBackground) {
-        [self logEvent:@"恢复会话：仍在后台，跳过（不碰共享会话）"];
-        return;
-    }
-    LCKAAudioSession *session = [self audioSession];
-    if (!session) {
-        return;
-    }
-    if (self.sessionChanged) {
-        [session setCategory:self.savedCategory
-                        mode:self.savedMode ?: LCKAModeDefault
-                     options:self.savedOptions
-                       error:nil];
-        self.sessionChanged = NO;
-        [self logEvent:@"恢复会话：已还原音频类目"];
-    }
-    // Deactivate only when nothing else is playing: if the guest app itself
-    // (or another app) has audio running, its session stays untouched.
-    if (wasKeepingAlive && !session.isOtherAudioPlaying) {
-        [session setActive:NO withOptions:LCKASetActiveNotifyOthers error:nil];
-        [self logEvent:@"恢复会话：已停用音频会话"];
-    } else if (wasKeepingAlive) {
-        [self logEvent:@"恢复会话：其他音频播放中，不停用会话"];
+    if (playing && !self.sessionStart) {
+        self.sessionStart = [NSDate date];
+        [self logEvent:@"保活开始"];
+        NSInteger minutes = [self durationMinutes];
+        [self logEvent:[NSString stringWithFormat:@"会话参数：时长上限 %@，看门狗 %@",
+                         minutes > 0 ? [NSString stringWithFormat:@"%ld 分钟", (long)minutes] : @"不限",
+                         [self watchdogEnabled] ? @"开" : @"关"]];
     }
 }
 
-#pragma mark Session control
+- (void)stopPlaybackWithReason:(NSString *)reason {
+    [self.watchdogTimer invalidate];
+    self.watchdogTimer = nil;
+    [self.timeoutTimer invalidate];
+    self.timeoutTimer = nil;
+    BOOL hadSession = self.sessionStart != nil;
+    NSTimeInterval seconds = hadSession ? -[self.sessionStart timeIntervalSinceNow] : 0;
+    self.sessionStart = nil;
+    [self.player pause];
+    // No category save/restore (FMKeepAlive parity): the session is
+    // deactivated as-is; a guest app that needs foreground audio
+    // re-configures its own session.
+    [[self audioSession] setActive:NO withOptions:LCKASetActiveNotifyOthers error:nil];
+    if (hadSession) {
+        [self logEvent:[NSString stringWithFormat:@"保活停止：%@（本次 %d 秒）", reason, (int)seconds]];
+    } else {
+        [self logEvent:[NSString stringWithFormat:@"停止请求：当前未在保活（%@）", reason]];
+    }
+    [self writeState];
+}
 
-- (void)tryStartSession {
+#pragma mark Decision (single entry point, FMKeepAlive's refresh)
+
+- (void)refresh {
     @try {
-        if (!self.inBackground) {
-            [self logEvent:@"尝试开始：不在后台状态，跳过"];
-            return;
-        }
-        if (self.capReached) {
-            [self logEvent:@"跳过保活：已达到时长上限"];
-            return;
-        }
-        if (self.interrupted) {
-            [self logEvent:@"跳过保活：正被音频打断"];
-            return;
-        }
         if (![self keepAliveEnabled]) {
-            [self logEvent:@"跳过保活：保活总开关已关闭"];
+            [self stopPlaybackWithReason:@"保活总开关被关闭"];
             return;
         }
-        if ([self startPlayback]) {
-            if (!self.keepingAlive) {
-                self.keepingAlive = YES;
-                self.lastStopTimedOut = NO;
-                self.sessionStart = [NSDate date];
-                [self scheduleCapTimer];
-                [self logEvent:@"保活开始"];
-                NSInteger minutes = [self durationMinutes];
-                [self logEvent:[NSString stringWithFormat:@"会话参数：时长上限 %@，看门狗 %@",
-                                 minutes > 0 ? [NSString stringWithFormat:@"%ld 分钟", (long)minutes] : @"不限",
-                                 [self watchdogEnabled] ? @"开" : @"关"]];
-            }
+        if (!self.inBackground) {
+            [self stopPlaybackWithReason:@"回到前台"];
+            return;
+        }
+        if (self.timedOut) {
+            [self stopPlaybackWithReason:@"达到时长上限"];
+            return;
+        }
+        [self startPlayback];
+        if (!self.watchdogTimer) {
             [self scheduleWatchdog];
-            [self writeState];
-        } else {
-            [self logEvent:@"保活开始失败：音频未能启动"];
         }
     } @catch (__unused NSException *e) {}
 }
 
-- (void)stopSessionWithTimedOut:(BOOL)timedOut reason:(NSString *)reason {
-    @try {
-        BOOL wasKeepingAlive = self.keepingAlive;
-        self.keepingAlive = NO;
-        [self.capTimer invalidate];
-        self.capTimer = nil;
-        [self.watchdogTimer invalidate];
-        self.watchdogTimer = nil;
-        [self.player pause];
-        [self restoreAudioSession:wasKeepingAlive];
-        if (wasKeepingAlive && self.sessionStart) {
-            self.lastSeconds = -[self.sessionStart timeIntervalSinceNow];
-            self.lastEnd = [NSDate date];
-        }
-        self.sessionStart = nil;
-        if (timedOut) {
-            self.capReached = YES;
-        }
-        self.lastStopTimedOut = timedOut;
-        [self writeState];
-        if (wasKeepingAlive) {
-            [self logEvent:[NSString stringWithFormat:@"保活停止：%@（本次 %d 秒）", reason, (int)self.lastSeconds]];
-        } else {
-            [self logEvent:[NSString stringWithFormat:@"停止请求：当前未在保活（%@）", reason]];
-        }
-    } @catch (__unused NSException *e) {}
+#pragma mark Background / foreground transitions
+
+- (void)enterBackground {
+    if (self.inBackground) {
+        [self refresh];
+        return;
+    }
+    self.inBackground = YES;
+    self.backgroundStart = [NSDate date];
+    self.timedOut = NO;
+    [self startTimeoutTimer];
+    [self writeState];
+    [self refresh];
 }
 
 - (void)enterForeground {
+    if (!self.inBackground) {
+        return;
+    }
     self.inBackground = NO;
-    self.capReached = NO;
-    self.interrupted = NO;
-    [self stopSessionWithTimedOut:NO reason:@"回到前台"];
+    self.timedOut = NO;
+    [self writeState];
+    [self stopPlaybackWithReason:@"回到前台"];
 }
 
 #pragma mark Duration cap (independent timer, not the watchdog)
 
-- (void)scheduleCapTimer {
-    [self.capTimer invalidate];
-    self.capTimer = nil;
+- (void)startTimeoutTimer {
+    [self.timeoutTimer invalidate];
+    self.timeoutTimer = nil;
     NSInteger minutes = [self durationMinutes];
     if (minutes <= 0) {
         return; // unlimited
     }
-    NSTimer *timer = [NSTimer timerWithTimeInterval:minutes * 60.0
+    NSTimeInterval remaining = minutes * 60.0 + [self.backgroundStart timeIntervalSinceNow];
+    if (remaining <= 0) {
+        self.timedOut = YES;
+        [self logEvent:@"保活达到时长上限"];
+        [self stopPlaybackWithReason:@"达到时长上限"];
+        return;
+    }
+    NSTimer *timer = [NSTimer timerWithTimeInterval:remaining
                                              target:self
-                                           selector:@selector(capTimerFired)
+                                           selector:@selector(timeoutTimerFired)
                                            userInfo:nil
                                             repeats:NO];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-    self.capTimer = timer;
+    self.timeoutTimer = timer;
 }
 
-- (void)capTimerFired {
-    [self stopSessionWithTimedOut:YES reason:@"达到时长上限"];
+- (void)timeoutTimerFired {
+    if (!self.inBackground) {
+        [self.timeoutTimer invalidate];
+        self.timeoutTimer = nil;
+        return;
+    }
+    self.timedOut = YES;
+    [self logEvent:@"保活达到时长上限"];
+    [self stopPlaybackWithReason:@"达到时长上限"];
 }
 
 #pragma mark Watchdog (adaptive interval, heartbeat for the status panel)
@@ -859,10 +798,11 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 - (void)scheduleWatchdog {
     [self.watchdogTimer invalidate];
     self.watchdogTimer = nil;
-    if (!self.keepingAlive || ![self watchdogEnabled]) {
+    if (![self watchdogEnabled]) {
         return;
     }
-    NSTimeInterval elapsed = self.sessionStart ? -[self.sessionStart timeIntervalSinceNow] : 0;
+    // Shorter interval early in the session, longer later.
+    NSTimeInterval elapsed = self.backgroundStart ? -[self.backgroundStart timeIntervalSinceNow] : 0;
     NSTimeInterval interval = elapsed < 300 ? 30.0 : (elapsed < 600 ? 45.0 : 60.0);
     NSTimer *timer = [NSTimer timerWithTimeInterval:interval
                                              target:self
@@ -876,32 +816,37 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 
 - (void)watchdogTick {
     @try {
-        if (!self.keepingAlive) {
+        if (!self.inBackground) {
+            [self.watchdogTimer invalidate];
+            self.watchdogTimer = nil;
             return;
         }
         if (![self keepAliveEnabled]) {
             // The global switch is the fuse: turning it off stops everything.
-            [self stopSessionWithTimedOut:NO reason:@"保活总开关被关闭"];
+            [self stopPlaybackWithReason:@"保活总开关被关闭"];
             return;
         }
         self.lastWatchdogConfirm = [NSDate date];
-        if (self.inBackground && !self.capReached && !self.interrupted && !self.player.playing) {
-            // Rebuild the player from scratch on the re-verified
-            // session: re-playing a player whose session was
-            // deactivated under it does not reliably recover.
+        if (!self.timedOut && !self.player.playing) {
+            [self logEvent:@"看门狗发现播放已停止，已重新启动"];
             self.player = nil;
-            if ([self startPlayback]) {
-                [self logEvent:@"看门狗发现播放已停止，已重新启动"];
-            } else {
-                [self logEvent:@"看门狗恢复播放失败"];
-            }
+            [self startPlayback];
         }
-        // Heartbeat probe: the player's own clock is the ground
-        // truth for "is audio really playing" — if currentTime does
-        // not advance between ticks, playback is an illusion and the
-        // process is coasting on borrowed time.
-        [self logEvent:[NSString stringWithFormat:@"心跳：播放器 %@，进度 %.1f 秒",
-                        self.player.playing ? @"播放中" : @"未播放", self.player.currentTime]];
+        // Heartbeat probe, double-sampled: the silent file loops
+        // every second, so a single currentTime reading wraps and
+        // proves nothing — two readings half a second apart that
+        // differ mean the player is really rendering; identical
+        // readings mean playback is an illusion.
+        NSTimeInterval first = self.player.currentTime;
+        __weak LCKeepAliveEngine *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            LCKeepAliveEngine *engine = weakSelf;
+            if (!engine) {
+                return;
+            }
+            [engine logEvent:[NSString stringWithFormat:@"心跳：播放器 %@，进度 %.1f → %.1f 秒",
+                              engine.player.playing ? @"播放中" : @"未播放", first, engine.player.currentTime]];
+        });
         [self writeState];
         [self scheduleWatchdog];
     } @catch (__unused NSException *e) {}
@@ -921,81 +866,65 @@ static NSString *LCKeepAliveNotificationLabel(NSString *name) {
 
     void (^backgroundBlock)(NSNotification *) = ^(NSNotification *note) {
         [weakSelf logEvent:[NSString stringWithFormat:@"收到通知：%@", LCKeepAliveNotificationLabel(note.name)]];
-        weakSelf.inBackground = YES;
-        [weakSelf tryStartSession];
+        [weakSelf enterBackground];
     };
     void (^foregroundBlock)(NSNotification *) = ^(NSNotification *note) {
         [weakSelf logEvent:[NSString stringWithFormat:@"收到通知：%@", LCKeepAliveNotificationLabel(note.name)]];
         [weakSelf enterForeground];
     };
 
-    // Start only when the whole app has entered the background
-    // (DidEnterBackground, not WillResignActive): a guest merely
-    // resigning active — switching to another guest, minimizing to
-    // the LC home screen — needs no protection, because the system
-    // cannot reclaim guests while LC itself is in the foreground.
-    // DidBecomeActive stops the session when the app comes back.
+    // FMKeepAlive parity: start early on WillResignActive (the audio
+    // is already rolling when backgrounding completes) and confirm
+    // on DidEnterBackground; any foreground signal stops. The
+    // extension-host notifications are the reliable path for
+    // LiveProcess guests, whose UIApplication notifications do not
+    // always arrive.
+    [self.observerTokens addObject:[center addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:queue usingBlock:foregroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:queue usingBlock:foregroundBlock]];
-
-    // Extension-hosted guests (LiveProcess) do not always receive the
-    // UIApplication background notifications; the extension host ones are
-    // the reliable path there.
     [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostDidEnterBackgroundNotification" object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostWillEnterForegroundNotification" object:nil queue:queue usingBlock:foregroundBlock]];
-    [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostDidBecomeActiveNotification" object:nil queue:queue usingBlock:foregroundBlock]];
 
-    // Already in the background when the guest finished launching (rare).
+    // The guest finished launching while already in the background (rare).
     [self.observerTokens addObject:[center addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:queue usingBlock:^(NSNotification *note) {
         @try {
             id app = [(id)NSClassFromString(@"UIApplication") sharedApplication];
             // UIApplicationStateBackground == 2
             if ([[app valueForKey:@"applicationState"] integerValue] == 2) {
                 [weakSelf logEvent:@"收到通知：应用启动完成（启动时已在后台）"];
-                weakSelf.inBackground = YES;
-                [weakSelf tryStartSession];
+                [weakSelf enterBackground];
             }
         } @catch (__unused NSException *e) {}
     }]];
 
-    // Audio interruptions (calls, Siri): pause is automatic; resume when the
-    // interruption ends with ShouldResume, otherwise the watchdog recovers.
+    // Audio interruption ended: throw the player away and re-decide
+    // (FMKeepAlive ignores the Began half entirely — the system
+    // pauses playback on its own).
     [self.observerTokens addObject:[center addObserverForName:@"AVAudioSessionInterruptionNotification" object:nil queue:queue usingBlock:^(NSNotification *note) {
         @try {
             NSNumber *type = note.userInfo[@"AVAudioSessionInterruptionTypeKey"];
-            if (!type) {
+            if (!type || type.unsignedIntegerValue != 1) { // Ended only
                 return;
             }
-            if (type.unsignedIntegerValue == 0) { // AVAudioSessionInterruptionTypeBegan
-                weakSelf.interrupted = YES;
-                [weakSelf logEvent:@"音频被打断"];
-            } else if (type.unsignedIntegerValue == 1) { // AVAudioSessionInterruptionTypeEnded
-                weakSelf.interrupted = NO;
-                NSNumber *options = note.userInfo[@"AVAudioSessionInterruptionOptionKey"];
-                if (options && (options.unsignedIntegerValue & 0x1)) { // ShouldResume
-                    [weakSelf logEvent:@"音频打断结束，尝试恢复保活"];
-                    [weakSelf tryStartSession];
-                } else {
-                    [weakSelf logEvent:@"音频打断结束（未要求恢复，等看门狗巡检）"];
-                }
+            if (!weakSelf.inBackground || weakSelf.timedOut) {
+                return;
             }
+            [weakSelf logEvent:@"音频打断结束，尝试恢复保活"];
+            weakSelf.player = nil;
+            [weakSelf refresh];
         } @catch (__unused NSException *e) {}
     }]];
 
-    // The media server died or reset: the player and session configuration
-    // are gone — rebuild both on the next start instead of trusting the
-    // watchdog to notice a dead player.
-    void (^mediaServicesBlock)(NSNotification *) = ^(NSNotification *note) {
-        weakSelf.player = nil;
-        weakSelf.sessionChanged = NO;
-        if (weakSelf.keepingAlive) {
-            [weakSelf logEvent:@"媒体服务丢失或重置，已重建播放器"];
-            [weakSelf tryStartSession];
+    // The media server reset: every session is invalid — rebuild.
+    [self.observerTokens addObject:[center addObserverForName:@"AVAudioSessionMediaServicesWereResetNotification" object:nil queue:queue usingBlock:^(NSNotification *note) {
+        if (!weakSelf.inBackground || weakSelf.timedOut) {
+            return;
         }
-    };
-    [self.observerTokens addObject:[center addObserverForName:@"AVAudioSessionMediaServicesWereLostNotification" object:nil queue:queue usingBlock:mediaServicesBlock]];
-    [self.observerTokens addObject:[center addObserverForName:@"AVAudioSessionMediaServicesWereResetNotification" object:nil queue:queue usingBlock:mediaServicesBlock]];
+        [weakSelf logEvent:@"媒体服务丢失或重置，已重建播放器"];
+        weakSelf.player = nil;
+        [weakSelf refresh];
+    }]];
 }
 
 @end
