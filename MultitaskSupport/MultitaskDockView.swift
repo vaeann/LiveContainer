@@ -259,12 +259,14 @@ class AppInfoProvider {
     }
 
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
-        // Expanded dock contents: the app icons plus one cycle button at
-        // the bottom — (apps.count + 1) items, apps.count gaps between
-        // them, and a single button-height allowance.
-        let spacingCount = max(self.apps.count, 0)
+        // Expanded dock contents: the collapse button on top, the app
+        // icons, and the cycle button at the bottom — (apps.count + 2)
+        // items, (apps.count + 1) gaps between them, and two
+        // button-height allowances. (This budget predates the collapse
+        // button and undercounted by one button plus one gap.)
+        let spacingCount = max(self.apps.count + 1, 0)
         let totalSpacingHeight = CGFloat(spacingCount) * Constants.dockContentSpacing
-        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight
+        return Constants.dockVerticalPadding + 2 * buttonSize + totalSpacingHeight
     }
 
     private func expandedDockHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
