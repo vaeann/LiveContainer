@@ -26,6 +26,7 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
 @property bool helperProcessesSupport;
 @property bool classicMode;
 @property (nonatomic, readonly) NSUInteger defaultClassicMode;
+@property bool statusBarFix;
 @property bool isLocked;
 @property bool isHidden;
 @property bool doSymlinkInbox;

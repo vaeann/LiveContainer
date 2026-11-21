@@ -170,6 +170,13 @@ private final class LCTapOutsideOverlayView: UIView {
     /// collapses it and is consumed (standard popover dismissal).
     private var outsideTapOverlay: LCTapOutsideOverlayView?
 
+    /// Status bar fix state: whether the host status bar override is
+    /// currently applied, plus the status bar height captured while it
+    /// was visible (its frame collapses once hidden, which would
+    /// otherwise destabilize the smart trigger in updateStatusBarFix).
+    private var statusBarFixApplied = false
+    private var statusBarFixCachedBarHeight: CGFloat = 0
+
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
         DispatchQueue.main.async {
@@ -410,6 +417,7 @@ private final class LCTapOutsideOverlayView: UIView {
 
         applyNewFrame(newFrame, for: hostingController, animated: animated)
         syncOutsideTapOverlay()
+        updateStatusBarFix()
     }
 
     // MARK: - Frame Calculation Helpers
@@ -497,6 +505,7 @@ private final class LCTapOutsideOverlayView: UIView {
             } else if self.isVisible {
                 self.updateDockFrame()
             }
+            self.updateStatusBarFix()
         }
     }
     
@@ -661,6 +670,7 @@ private final class LCTapOutsideOverlayView: UIView {
             if let targetView = findMultitaskView(in: window, withUUID: uuid) {
                 passURLSchemeToView(targetView)
                 animateViewAppearance(targetView, from: center, in: window)
+                updateStatusBarFix()
                 return true
             }
         }
@@ -778,6 +788,7 @@ private final class LCTapOutsideOverlayView: UIView {
             } else if self.isVisible {
                 self.updateDockFrame()
             }
+            self.updateStatusBarFix()
         }
     }
     
@@ -821,6 +832,49 @@ private final class LCTapOutsideOverlayView: UIView {
             }
         }
         return best?.index
+    }
+
+    /// Status bar fix (状态栏修复): while the front multitask app has
+    /// the per-app fix enabled and its window is maximized — or, when
+    /// windowed, its top edge reaches into the status bar area — hide
+    /// the host status bar so it cannot cover the app's top controls.
+    /// The guest already lays out edge-to-edge (LC sends
+    /// statusBarDisabled with zero metrics), so hiding the host bar is
+    /// the only missing piece; this mirrors the compatibility switch in
+    /// 微珠. Flip-only: the private override is applied solely when the
+    /// desired state changes, and it is restored as soon as another app
+    /// comes to front, everything minimizes to the LC home screen, or
+    /// the window closes.
+    @objc public func updateStatusBarFix() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.updateStatusBarFix() }
+            return
+        }
+        // Cache the status bar height while it is visible; once hidden,
+        // its frame collapses and the cached value keeps the windowed
+        // trigger condition stable.
+        if !statusBarFixApplied,
+           let manager = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.statusBarManager,
+           manager.statusBarFrame.height > 0 {
+            statusBarFixCachedBarHeight = manager.statusBarFrame.height
+        }
+        var hide = false
+        if let index = frontAppIndex() {
+            let app = apps[index]
+            if let info = app.appInfo, info.statusBarFix,
+               let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController {
+                if vc.isMaximized {
+                    hide = true
+                } else if let view = app.view {
+                    let topY = view.convert(view.bounds, to: nil).minY
+                    hide = topY < statusBarFixCachedBarHeight - 0.5
+                }
+            }
+        }
+        if hide != statusBarFixApplied,
+           LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
+            statusBarFixApplied = hide
+        }
     }
 
     /// Cycle button: bring the next app in dock order to the front,

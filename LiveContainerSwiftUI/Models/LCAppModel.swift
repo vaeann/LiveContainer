@@ -33,6 +33,16 @@ class LCAppModel: ObservableObject, Hashable {
             appInfo.classicMode = uiClassicMode
         }
     }
+    @Published var uiStatusBarFix : Bool {
+        didSet {
+            appInfo.statusBarFix = uiStatusBarFix
+            // If this app is in front in multitask right now, the host
+            // status bar override follows the new value immediately.
+            if #available(iOS 16.0, *) {
+                MultitaskDockManager.shared.updateStatusBarFix()
+            }
+        }
+    }
     @Published var uiIsHidden : Bool
     @Published var uiIsLocked : Bool
     @Published var uiIsShared : Bool
@@ -180,6 +190,7 @@ class LCAppModel: ObservableObject, Hashable {
         self.uiIsJITNeeded = appInfo.isJITNeeded
         self.uiHelperProcessesSupport = appInfo.helperProcessesSupport
         self.uiClassicMode = appInfo.classicMode
+        self.uiStatusBarFix = appInfo.statusBarFix
         self.uiIsHidden = appInfo.isHidden
         self.uiIsLocked = appInfo.isLocked
         self.uiIsShared = appInfo.isShared

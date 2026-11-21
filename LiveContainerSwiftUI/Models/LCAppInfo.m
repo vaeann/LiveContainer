@@ -481,6 +481,15 @@
     
 }
 
+- (bool)statusBarFix {
+    return [_info[@"statusBarFix"] boolValue];
+}
+
+- (void)setStatusBarFix:(bool)statusBarFix {
+    _info[@"statusBarFix"] = @(statusBarFix);
+    [self save];
+}
+
 - (bool)classicMode {
     return [_info[@"classicMode"] boolValue];
 }

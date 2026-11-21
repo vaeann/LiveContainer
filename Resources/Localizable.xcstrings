@@ -6591,6 +6591,52 @@
         }
       }
     },
+    "lc.appSettings.statusBarFix" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status Bar Fix"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状态栏修复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "狀態欄修復"
+          }
+        }
+      }
+    },
+    "lc.appSettings.statusBarFixDesc" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In multitask, hide the status bar while this app is in front and its window is maximized or reaches the top of the screen, so the status bar cannot cover the app's top controls."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多任务中此 App 处于前台且窗口最大化或顶边到达屏幕顶部时，隐藏状态栏，避免顶部按钮被状态栏盖住。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多任務中此 App 處於前台且視窗最大化或頂邊到達螢幕頂部時，隱藏狀態欄，避免頂部按鈕被狀態欄蓋住。"
+          }
+        }
+      }
+    },
     "lc.appSettings.dontInjectTweakLoader" : {
       "extractionState" : "manual",
       "localizations" : {

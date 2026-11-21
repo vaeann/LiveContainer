@@ -271,6 +271,7 @@
         self.view.hidden = YES;
         self.view.transform = CGAffineTransformIdentity;
         [self.view.superview sendSubviewToBack:self.view];
+        [[MultitaskDockManager shared] updateStatusBarFix];
     }];
 }
 
@@ -312,6 +313,7 @@
             UIImage *maximizeImage = [UIImage systemImageNamed:@"arrow.up.left.and.arrow.down.right.circle"];
             UIImageConfiguration *maximizeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
             self.maximizeButton.image = [maximizeImage imageWithConfiguration:maximizeConfig];
+            [[MultitaskDockManager shared] updateStatusBarFix];
         }];
     } else {
         updateSettingsBlock = ^(UIMutableApplicationSceneSettings *settings) {
@@ -332,6 +334,7 @@
             UIImage *restoreImage = [UIImage systemImageNamed:@"arrow.down.right.and.arrow.up.left.circle"];
             UIImageConfiguration *restoreConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
             self.maximizeButton.image = [restoreImage imageWithConfiguration:restoreConfig];
+            [[MultitaskDockManager shared] updateStatusBarFix];
         }];
     }
 }
@@ -477,6 +480,11 @@
 }
 
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
+    if (sender.state == UIGestureRecognizerStateEnded || sender.state == UIGestureRecognizerStateCancelled) {
+        // A window dragged into (or back out of) the status bar area
+        // changes whether the status bar fix applies to it.
+        [[MultitaskDockManager shared] updateStatusBarFix];
+    }
     if(_isMaximized) return;
     
     CGPoint point = [sender translationInView:self.view];

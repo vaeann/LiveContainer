@@ -362,6 +362,16 @@ struct LCAppSettingsView: View {
                     Text("lc.appSettings.classicModeDesc".loc)
                 }
             }
+
+            if #available(iOS 16.0, *) {
+                Section {
+                    Toggle(isOn: $model.uiStatusBarFix) {
+                        Text("lc.appSettings.statusBarFix".loc)
+                    }
+                } footer: {
+                    Text("lc.appSettings.statusBarFixDesc".loc)
+                }
+            }
             
             Section {
                 Toggle(isOn: $model.uiSpoofSDKVersion) {
