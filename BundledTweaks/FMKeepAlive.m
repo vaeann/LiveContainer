@@ -108,7 +108,7 @@ static NSString *FMKAppGroupRoot(void) {
 static BOOL FMKIsHostUI(void) {
     if(FMKCallHostSelector(@"guestAppInfo")) return NO;
     if(![FMKHostDefaults() boolForKey:@"LCLoadTweaksToSelf"]) return NO;
-    id hostBundle = FMKCallHostSelector(@"lcMainBundle");
+    NSBundle *hostBundle = (NSBundle *)FMKCallHostSelector(@"lcMainBundle");
     if(![hostBundle isKindOfClass:NSBundle.class] ||
        ![hostBundle.bundlePath isEqualToString:NSBundle.mainBundle.bundlePath]) return NO;
     SEL side = NSSelectorFromString(@"isSideStore");
