@@ -904,7 +904,7 @@ private final class LCTapOutsideOverlayView: UIView {
                 let created = UIWindow(windowScene: scene)
                 // Above the app's normal-level windows (including native
                 // multitask windows), below alerts and the status bar.
-                created.windowLevel = UIWindowLevel(rawValue: UIWindowLevel.normal.rawValue + 10)
+                created.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 10)
                 created.backgroundColor = .clear
                 outsideTapOverlayWindow = created
                 overlayWindow = created
