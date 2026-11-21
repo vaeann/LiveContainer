@@ -51,17 +51,54 @@ final class LCHostKeepAlive {
 
     private var started = false
 
-    // MARK: Diagnostic log (temporary — removed once keep-alive is fixed)
+    // MARK: Diagnostic log (temporary — see LCKeepAliveLogEvent in
+    // LCBootstrap.m; remove together with its switch once keep-alive
+    // is confirmed healthy)
 
     /// One shared append-only log for the host keeper and every guest
     /// engine, so a single timeline shows which process did what.
     /// Lines look like `MM-dd HH:mm:ss 宿主 · 事件`; the keep-alive
     /// settings page renders them in a viewer with copy/clear.
+    private static var lastLogLine: String?
+    private static var lastLogTime: TimeInterval = 0
+
     static func logEvent(_ event: String) {
-        guard LCUtils.appGroupUserDefault.object(forKey: "LCKeepAliveLogEnabled") as? Bool ?? true else { return }
+        let defaults = LCUtils.appGroupUserDefault
+        if let enabled = defaults.object(forKey: "LCKeepAliveLogEnabled") as? Bool, !enabled {
+            return
+        }
+        // The same event can be evaluated twice in quick succession;
+        // drop an identical line repeated within 2 seconds.
+        let body = "宿主 · \(event)"
+        let now = Date().timeIntervalSinceReferenceDate
+        if body == lastLogLine && now - lastLogTime < 2 {
+            return
+        }
+        lastLogLine = body
+        lastLogTime = now
+
+        let dir = LCPath.lcGroupDocPath.appendingPathComponent("KeepAliveState")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("keepalive.log")
+        // Bound the file: past ~512 KB keep only the newest 200 lines.
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 512 * 1024,
+           let content = try? String(contentsOf: url, encoding: .utf8) {
+            let lines = content.components(separatedBy: "\n")
+            if lines.count > 200 {
+                try? lines.suffix(200).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd HH:mm:ss"
-        LCKeepAliveLogAppend("宿主", "\(formatter.string(from: Date())) 宿主 · \(event)")
+        let line = "\(formatter.string(from: Date())) \(body)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     // MARK: Settings
