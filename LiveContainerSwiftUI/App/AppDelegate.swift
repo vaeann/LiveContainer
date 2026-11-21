@@ -31,6 +31,11 @@ import Intents
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
 
+        // Deploy the standalone keep-alive module (FMKeepAlive.dylib)
+        // into the Tweaks folders; the module reads the settings the
+        // keep-alive settings page writes.
+        LCKeepAliveSettingView.syncModule()
+
         return true
     }
     
