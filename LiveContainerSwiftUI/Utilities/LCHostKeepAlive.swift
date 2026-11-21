@@ -5,8 +5,12 @@
 //  Host-side background keep-alive. While LiveContainer is in the
 //  background with guests running, the host loops a 1-second silent
 //  WAV so the system does not reclaim the host process — and with it
-//  the LiveProcess guests. Guest processes run the twin engine
-//  (LCKeepAliveEngine in LCBootstrap); both share the settings below.
+//  the LiveProcess guests. The guest-side half is the bundled
+//  CZFKeepAlive.dylib (BundledTweaks/CZFKeepAlive.m, compiled into
+//  the .app by the build workflow): this keeper deploys it into the
+//  global tweak folders while the shared switch is on — see
+//  syncKeepAliveTweak — and LC's tweak injection loads it into
+//  every guest. Both sides share the settings below.
 //
 //  The state machine is a port of 微珠's FMKeepAlive (itself derived
 //  from LiveContainer-zh's CZF keep-alive): every lifecycle signal
@@ -18,7 +22,7 @@
 //  guests do not have: a background task taken while playing, whose
 //  expiry rebuilds the player and renews the task.
 //
-//  Settings (app-group defaults, shared with the guest engines):
+//  Settings (app-group defaults, shared with the settings page):
 //    LCKeepAliveEnabled          Bool, default true — one global
 //                                switch, no per-app switches
 //    LCKeepAliveDurationMinutes  Int,  default 20, 0 = unlimited
@@ -51,14 +55,15 @@ final class LCHostKeepAlive {
 
     private var started = false
 
-    // MARK: Diagnostic log (temporary — see LCKeepAliveLogEvent in
-    // LCBootstrap.m; remove together with its switch once keep-alive
-    // is confirmed healthy)
+    // MARK: Diagnostic log (temporary — remove together with its
+    // switch and the settings-page viewer once keep-alive is
+    // confirmed healthy)
 
-    /// One shared append-only log for the host keeper and every guest
-    /// engine, so a single timeline shows which process did what.
-    /// Lines look like `MM-dd HH:mm:ss 宿主 · 事件`; the keep-alive
-    /// settings page renders them in a viewer with copy/clear.
+    /// The keep-alive diagnostic log: an append-only file shared
+    /// with the settings-page viewer. Only the host keeper writes
+    /// it now (the guest plugin is verbatim LiveContainer-zh code
+    /// and writes nothing). Lines look like
+    /// `MM-dd HH:mm:ss 宿主 · 事件`.
     private static var lastLogLine: String?
     private static var lastLogTime: TimeInterval = 0
 
@@ -120,6 +125,10 @@ final class LCHostKeepAlive {
     func start() {
         guard !started else { return }
         started = true
+        // Deploy (or remove) the guest-side plugin for the current
+        // switch state — covers first launch and reinstalls, where
+        // the settings page may never be opened.
+        Self.syncKeepAliveTweak(enabled: keepAliveEnabled)
         writeState()
         let center = NotificationCenter.default
         center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -205,10 +214,57 @@ final class LCHostKeepAlive {
         }
     }
 
+    // MARK: Guest plugin deployment (LiveContainer-zh's CZFKeepAlive.dylib)
+
+    /// The global switch is enforced by deploying the bundled
+    /// guest plugin, exactly how LiveContainer-zh ships it: while
+    /// the switch is on, CZFKeepAlive.dylib is copied from the .app
+    /// into both global tweak folders and signed (guest processes
+    /// cannot load an unsigned dylib); while off, it is removed.
+    /// LC's tweak injection loads every dylib in those folders
+    /// into every guest.
+    static func syncKeepAliveTweak(enabled: Bool) {
+        let fm = FileManager.default
+        guard let src = Bundle.main.url(forResource: "CZFKeepAlive", withExtension: "dylib") else { return }
+        for folder in [LCPath.tweakPath, LCPath.lcGroupTweakPath] {
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let dest = folder.appendingPathComponent("CZFKeepAlive.dylib")
+            if enabled {
+                let srcData = try? Data(contentsOf: src)
+                let destData = try? Data(contentsOf: dest)
+                if destData != srcData {
+                    // Copy via a temp file so a failed copy never
+                    // leaves the folder without a working dylib.
+                    let tmpDest = dest.appendingPathExtension("tmp")
+                    try? fm.removeItem(at: tmpDest)
+                    if (try? fm.copyItem(at: src, to: tmpDest)) != nil {
+                        try? fm.removeItem(at: dest)
+                        if (try? fm.moveItem(at: tmpDest, to: dest)) != nil {
+                            Self.logEvent("保活插件已部署到 Tweaks 目录")
+                        } else {
+                            try? fm.removeItem(at: tmpDest)
+                        }
+                    }
+                }
+            } else {
+                try? fm.removeItem(at: dest)
+            }
+        }
+        if enabled {
+            // Sign whatever is unsigned in the folders (the fresh
+            // copy above included); already-valid signatures are
+            // skipped by signTweaks itself.
+            Task {
+                try? await LCUtils.signTweaks(tweakFolderUrl: LCPath.tweakPath)
+                try? await LCUtils.signTweaks(tweakFolderUrl: LCPath.lcGroupTweakPath)
+            }
+        }
+    }
+
     // MARK: Playback
 
     /// 1 second of silence as a WAV (8 kHz, 16-bit mono) — the exact
-    /// bytes the guest engine synthesises in LCBootstrap.
+    /// bytes the guest plugin synthesises in BundledTweaks.
     private static let silentWAVData: Data = {
         let sampleRate: UInt32 = 8000
         let channels: UInt16 = 1

@@ -4,8 +4,9 @@
 //
 //  Settings page for background keep-alive: one global switch (default
 //  on, no per-app switches), a session duration cap, a watchdog switch,
-//  and a live status panel fed by the state files the host keeper and
-//  the guest engines write into the app group.
+//  and a live status panel fed by the state file the host keeper
+//  writes into the app group. The switch also deploys the guest-side
+//  plugin (CZFKeepAlive.dylib) — see LCHostKeepAlive.
 //
 
 import Combine
@@ -57,6 +58,11 @@ struct LCKeepAliveSettingView: View {
             Section {
                 Toggle(isOn: $keepAliveEnabled) {
                     Text("lc.keepAlive.enabled".loc)
+                }
+                .onChange(of: keepAliveEnabled) { enabled in
+                    // The guest-side plugin is deployed (or removed)
+                    // with the switch — see LCHostKeepAlive.
+                    LCHostKeepAlive.syncKeepAliveTweak(enabled: enabled)
                 }
                 Picker(selection: $durationMinutes) {
                     Text("lc.keepAlive.minutes".localizeWithFormat("10")).tag(10)
@@ -236,8 +242,8 @@ struct LCKeepAliveSettingView: View {
 }
 
 /// Viewer for the temporary keep-alive diagnostic log: one shared
-/// file written by the host keeper and every guest engine (see
-/// LCKeepAliveLogEvent in LCBootstrap.m). Newest first, last 200
+/// file written by the host keeper (see LCHostKeepAlive.logEvent).
+/// Newest first, last 200
 /// lines. New-format lines ("11-21 16:46:02 Swiftgram · 保活开始")
 /// render as time / source / event columns; older lines still in
 /// the file are shown as-is. The copy button puts the whole log on
