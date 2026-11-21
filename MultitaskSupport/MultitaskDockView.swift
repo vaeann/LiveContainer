@@ -1300,6 +1300,37 @@ struct AppIconView: View {
             }
         }
         .frame(width: iconSize, height: iconSize)
+        .overlay {
+            DockIconTouchObserver(
+                onBegan: {
+                    isPressed = true
+                },
+                onMoved: { inside in
+                    if isPressed != inside {
+                        isPressed = inside
+                    }
+                },
+                onEnded: { inside, center, movedDistance in
+                    isPressed = false
+                    // A long-press already closed this app; the
+                    // release must not also bring it to the front.
+                    if closeTriggered {
+                        closeTriggered = false
+                        return
+                    }
+                    // Released off the icon after sliding across the
+                    // dock, or the touch turned into a dock drag:
+                    // cancelled, like a home-screen icon.
+                    guard inside, movedDistance < 12 else { return }
+                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                    impactFeedback.impactOccurred()
+                    let _ = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
+                },
+                onCancelled: {
+                    isPressed = false
+                }
+            )
+        }
         .overlay(alignment: .bottomTrailing) {
             if dockManager.frontAppUUID == app.appUUID {
                 FrontAppMarkerView()
@@ -1313,23 +1344,6 @@ struct AppIconView: View {
         .onAppear {
             loadAppIcon()
         }
-        .onPressGesture(
-            onPress: {
-                isPressed = true
-            },
-            onRelease: { location in
-                isPressed = false
-                // A long-press already closed this app; the release must
-                // not also bring it to the front.
-                if closeTriggered {
-                    closeTriggered = false
-                    return
-                }
-                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                impactFeedback.impactOccurred()
-                let _ = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: location)
-            }
-        )
         // Long-press closes the app, through the very same path as the
         // red X (terminateApp closes the window without the exit
         // animation), with a medium haptic when it fires. Simultaneous,
@@ -1377,20 +1391,78 @@ struct AppIconView: View {
     }
 }
 
-// MARK: - Press Gesture Helper
-extension View {
-    func onPressGesture(onPress: @escaping () -> Void, onRelease: @escaping (_ location: CGPoint) -> Void) -> some View {
-        self.simultaneousGesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    if value.translation == CGSize.zero {
-                        onPress()
-                    }
-                }
-                .onEnded { value in
-                    onRelease(value.startLocation)
-                }
-        )
+// MARK: - Dock Icon Touch Tracking
+/// UIKit touch tracking for a dock icon, following the finger:
+/// sliding off the icon cancels the press (and the release), exactly
+/// like a home-screen icon. The previous implementation observed a
+/// DragGesture and acted on the release wherever the finger ended
+/// up, so sliding across icons still activated the first one
+/// touched. This layer installs no gesture recognizers and does not
+/// override hit testing, so the dock's own drag and the long-press
+/// close keep working as before; it only observes (the same pattern
+/// as the app grid's LCGridTouchObserver).
+private final class DockIconTouchView: UIView {
+    var onBegan: (() -> Void)?
+    var onMoved: ((Bool) -> Void)?
+    var onEnded: ((Bool, CGPoint, CGFloat) -> Void)?
+    var onCancelled: (() -> Void)?
+    private var startLocation: CGPoint = .zero
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first {
+            startLocation = touch.location(in: self)
+        }
+        onBegan?()
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first {
+            onMoved?(bounds.contains(touch.location(in: self)))
+        }
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first {
+            let location = touch.location(in: self)
+            let inside = bounds.contains(location)
+            // The switch animation grows from the icon's center, in
+            // window coordinates.
+            let center = convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            let moved = hypot(location.x - startLocation.x, location.y - startLocation.y)
+            onEnded?(inside, center, moved)
+        }
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        onCancelled?()
+        super.touchesCancelled(touches, with: event)
+    }
+}
+
+private struct DockIconTouchObserver: UIViewRepresentable {
+    var onBegan: () -> Void
+    var onMoved: (Bool) -> Void
+    var onEnded: (Bool, CGPoint, CGFloat) -> Void
+    var onCancelled: () -> Void
+
+    func makeUIView(context: Context) -> DockIconTouchView {
+        let view = DockIconTouchView()
+        wire(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: DockIconTouchView, context: Context) {
+        wire(uiView)
+    }
+
+    private func wire(_ view: DockIconTouchView) {
+        view.onBegan = onBegan
+        view.onMoved = onMoved
+        view.onEnded = onEnded
+        view.onCancelled = onCancelled
     }
 }
 
