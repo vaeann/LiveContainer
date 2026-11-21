@@ -259,14 +259,15 @@ class AppInfoProvider {
     }
 
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
-        // Expanded dock contents: the collapse button on top, the app
-        // icons, and the cycle button at the bottom — (apps.count + 2)
-        // items, (apps.count + 1) gaps between them, and two
-        // button-height allowances. (This budget predates the collapse
-        // button and undercounted by one button plus one gap.)
-        let spacingCount = max(self.apps.count + 1, 0)
+        // Expanded dock contents: the app icons and the cycle button
+        // at the bottom — (apps.count + 1) items, apps.count gaps
+        // between them, and one button-height allowance. (The
+        // collapse button that used to sit on top is gone: tapping
+        // outside the dock collapses it now, both on the LC home
+        // screen and from inside the front guest.)
+        let spacingCount = max(self.apps.count, 0)
         let totalSpacingHeight = CGFloat(spacingCount) * Constants.dockContentSpacing
-        return Constants.dockVerticalPadding + 2 * buttonSize + totalSpacingHeight
+        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight
     }
 
     private func expandedDockHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
@@ -1056,6 +1057,7 @@ public struct MultitaskDockSwiftView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isMoving: Bool = false
     @State private var cycleLongPressTriggered = false
+    @State private var collapsedLongPressTriggered = false
     @State private var showCloseAllConfirm = false
     
     // Calculate dynamic padding based on user settings
@@ -1069,35 +1071,46 @@ public struct MultitaskDockSwiftView: View {
         GeometryReader { g in
             VStack(spacing: 8) {
                 if dockManager.isCollapsed {
-                    // Single tap goes home (minimize all windows), double
-                    // tap expands. One composed gesture, as in the app
-                    // grid: the double tap takes priority and the single
-                    // tap fires only when it fails, so the single tap
-                    // lands ~0.3s late — acceptable for going home.
+                    // Three gestures on the floating button: single tap
+                    // goes home (minimize all windows), double tap
+                    // cycles to the next app — the expanded dock's
+                    // cycle button, feedback included — and long press
+                    // expands. The taps form one composed gesture, as
+                    // in the app grid: the double tap takes priority
+                    // and the single tap fires only when it fails, so
+                    // the single tap lands ~0.3s late — acceptable for
+                    // going home. The long press runs alongside; its
+                    // flag keeps the release from also firing a tap.
                     CollapsedDockView()
                         .gesture(
                             TapGesture(count: 2)
                                 .onEnded {
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    dockManager.toggleDockCollapse()
+                                    if collapsedLongPressTriggered {
+                                        collapsedLongPressTriggered = false
+                                        return
+                                    }
+                                    dockManager.cycleToNextApp()
                                 }
                                 .exclusively(before: TapGesture(count: 1)
                                     .onEnded {
+                                        if collapsedLongPressTriggered {
+                                            collapsedLongPressTriggered = false
+                                            return
+                                        }
                                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                         dockManager.minimizeAllWindows()
                                     })
                         )
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.5)
+                                .onEnded { _ in
+                                    collapsedLongPressTriggered = true
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    dockManager.toggleDockCollapse()
+                                }
+                        )
                 } else {
                     VStack(spacing: 8) {
-                        // Collapse button at the top: chevron pointing
-                        // down, tap to fold the dock back into the
-                        // floating button.
-                        CollapseButtonView()
-                            .onTapGesture {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                dockManager.toggleDockCollapse()
-                            }
-
                         ForEach(dockManager.apps) { app in
                             AppIconView(app: app)
                         }
@@ -1341,30 +1354,6 @@ struct CycleButtonView: View {
         .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
         // The same drop shadow the app icons carry, so the button
         // lifts off the glass like they do.
-        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
-        .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
-    }
-}
-
-// MARK: - Collapse Button View
-@available(iOS 16.0, *)
-struct CollapseButtonView: View {
-    @EnvironmentObject var dockManager: MultitaskDockManager
-
-    var body: some View {
-        ZStack {
-            // A downward chevron: the button sits at the top of the
-            // expanded dock and the arrow points in the direction
-            // the dock folds away. Same tile and theme-text glyph as
-            // the cycle button — the arrow shape alone says
-            // "collapse", no special color needed.
-            Image(systemName: "chevron.down")
-                .foregroundStyle(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
-        }
-        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
-        // The same drop shadow the app icons carry.
         .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
