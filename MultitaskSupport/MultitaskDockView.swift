@@ -1161,7 +1161,11 @@ struct CollapsedDockView: View {
 // Crucially, Weizhu tints the glyph with its theme TEXT color, not fixed
 // white — a white glyph on the translucent white plate vanishes over
 // light app content. The buttons below therefore use Color.primary
-// (black in light mode, white in dark mode) for their glyphs.
+// (black in light mode, white in dark mode) for their glyphs. The plate
+// here is noticeably stronger than Weizhu's: on LC's iOS 26 liquid
+// glass the original translucency washed out completely, and the two
+// dock buttons became hard to tell apart from the glass and each
+// other.
 @available(iOS 16.0, *)
 private struct DockCompactTileBackground: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
@@ -1171,10 +1175,10 @@ private struct DockCompactTileBackground: ViewModifier {
         let dark = colorScheme == .dark
         return content.background(
             RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                .fill(Color.white.opacity(dark ? 0.15 : 0.18))
+                .fill(Color.white.opacity(dark ? 0.30 : 0.32))
                 .overlay(
                     RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                        .stroke(Color.white.opacity(dark ? 0.5 : 0.3), lineWidth: 0.8)
+                        .stroke(Color.white.opacity(dark ? 0.6 : 0.45), lineWidth: 0.8)
                 )
                 .shadow(color: .black.opacity(dark ? 0.2 : 0.12), radius: 3, x: 0, y: 1)
         )
@@ -1194,6 +1198,9 @@ struct CycleButtonView: View {
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
         .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
+        // The same drop shadow the app icons carry, so the button
+        // lifts off the glass like they do.
+        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
@@ -1207,13 +1214,25 @@ struct CollapseButtonView: View {
         ZStack {
             // The same purple grid glyph as the collapsed button, so
             // the pair reads as one toggle: tap it to expand, tap it
-            // again to collapse.
+            // again to collapse. Unlike the cycle button's pale plate,
+            // this one is a filled purple plate with a white glyph —
+            // on liquid glass the two buttons were otherwise hard to
+            // tell apart.
             Image(systemName: "square.grid.2x2.fill")
-                .foregroundStyle(Color(red: 0.686, green: 0.322, blue: 0.871))
+                .foregroundStyle(.white)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
+        .background(
+            RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.26, style: .continuous)
+                .fill(Color(red: 0.686, green: 0.322, blue: 0.871))
+                .overlay(
+                    RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.26, style: .continuous)
+                        .stroke(Color.white.opacity(0.35), lineWidth: 0.8)
+                )
+        )
+        // The same drop shadow the app icons carry.
+        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
