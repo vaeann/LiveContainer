@@ -6620,19 +6620,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In multitask, hide the status bar while this app is in front and its window is maximized or reaches the top of the screen, so the status bar cannot cover the app's top controls."
+            "value" : "In multitask, hide the status bar while this app is in front with its window maximized, so the status bar cannot cover the app's top controls."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "多任务中此 App 处于前台且窗口最大化或顶边到达屏幕顶部时，隐藏状态栏，避免顶部按钮被状态栏盖住。"
+            "value" : "多任务中此 App 处于前台且窗口最大化时，隐藏状态栏，避免顶部按钮被状态栏盖住。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "多任務中此 App 處於前台且視窗最大化或頂邊到達螢幕頂部時，隱藏狀態欄，避免頂部按鈕被狀態欄蓋住。"
+            "value" : "多任務中此 App 處於前台且視窗最大化時，隱藏狀態欄，避免頂部按鈕被狀態欄蓋住。"
           }
         }
       }

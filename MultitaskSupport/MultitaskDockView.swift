@@ -171,11 +171,8 @@ private final class LCTapOutsideOverlayView: UIView {
     private var outsideTapOverlay: LCTapOutsideOverlayView?
 
     /// Status bar fix state: whether the host status bar override is
-    /// currently applied, plus the status bar height captured while it
-    /// was visible (its frame collapses once hidden, which would
-    /// otherwise destabilize the smart trigger in updateStatusBarFix).
+    /// currently applied.
     private var statusBarFixApplied = false
-    private var statusBarFixCachedBarHeight: CGFloat = 0
 
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
@@ -835,9 +832,10 @@ private final class LCTapOutsideOverlayView: UIView {
     }
 
     /// Status bar fix (状态栏修复): while the front multitask app has
-    /// the per-app fix enabled and its window is maximized — or, when
-    /// windowed, its top edge reaches into the status bar area — hide
-    /// the host status bar so it cannot cover the app's top controls.
+    /// the per-app fix enabled and its window is maximized, hide the
+    /// host status bar so it cannot cover the app's top controls. A
+    /// windowed window needs no fix: its own window bar sits above the
+    /// app content, so the status bar never reaches the app's controls.
     /// The guest already lays out edge-to-edge (LC sends
     /// statusBarDisabled with zero metrics), so hiding the host bar is
     /// the only missing piece; this mirrors the compatibility switch in
@@ -850,25 +848,12 @@ private final class LCTapOutsideOverlayView: UIView {
             DispatchQueue.main.async { self.updateStatusBarFix() }
             return
         }
-        // Cache the status bar height while it is visible; once hidden,
-        // its frame collapses and the cached value keeps the windowed
-        // trigger condition stable.
-        if !statusBarFixApplied,
-           let manager = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.statusBarManager,
-           manager.statusBarFrame.height > 0 {
-            statusBarFixCachedBarHeight = manager.statusBarFrame.height
-        }
         var hide = false
         if let index = frontAppIndex() {
             let app = apps[index]
             if let info = app.appInfo, info.statusBarFix,
                let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController {
-                if vc.isMaximized {
-                    hide = true
-                } else if let view = app.view {
-                    let topY = view.convert(view.bounds, to: nil).minY
-                    hide = topY < statusBarFixCachedBarHeight - 0.5
-                }
+                hide = vc.isMaximized
             }
         }
         if hide != statusBarFixApplied,

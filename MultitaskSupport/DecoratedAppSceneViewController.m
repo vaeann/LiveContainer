@@ -480,11 +480,6 @@
 }
 
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
-    if (sender.state == UIGestureRecognizerStateEnded || sender.state == UIGestureRecognizerStateCancelled) {
-        // A window dragged into (or back out of) the status bar area
-        // changes whether the status bar fix applies to it.
-        [[MultitaskDockManager shared] updateStatusBarFix];
-    }
     if(_isMaximized) return;
     
     CGPoint point = [sender translationInView:self.view];
