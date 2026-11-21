@@ -1333,8 +1333,6 @@ class IconCacheManager {
         }
     }
 }
-// MARK: - App Icon View
-@available(iOS 16.0, *)
 // MARK: - Front App Marker
 /// Breathing green dot on the icon of the app currently in front,
 /// ported from Weizhu's running light (FMMakeRunningLight): a solid
@@ -1361,6 +1359,8 @@ private struct FrontAppMarkerView: View {
     }
 }
 
+// MARK: - App Icon View
+@available(iOS 16.0, *)
 struct AppIconView: View {
     let app: DockAppModel
     @State private var isPressed = false
