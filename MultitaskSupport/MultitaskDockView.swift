@@ -1007,6 +1007,15 @@ public struct MultitaskDockSwiftView: View {
                         )
                 } else {
                     VStack(spacing: 8) {
+                        // Collapse button at the top: chevron pointing
+                        // down, tap to fold the dock back into the
+                        // floating button.
+                        CollapseButtonView()
+                            .onTapGesture {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                dockManager.toggleDockCollapse()
+                            }
+
                         ForEach(dockManager.apps) { app in
                             AppIconView(app: app)
                         }
@@ -1034,21 +1043,6 @@ public struct MultitaskDockSwiftView: View {
                                     }
                             )
 
-                        // Collapse button at the very bottom. Tapping
-                        // outside the dock to collapse was tried three
-                        // ways (below the dock, above it in the same
-                        // window, and in a dedicated window above the
-                        // app's windows) and never worked reliably with
-                        // a hosted guest in front — the in-window
-                        // catchers are bypassed by the guest scene's
-                        // event deferring, and the separate window
-                        // broke taps on the dock's own icons. A plain
-                        // button always works.
-                        CollapseButtonView()
-                            .onTapGesture {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                dockManager.toggleDockCollapse()
-                            }
                     }
                 }
             }
@@ -1290,12 +1284,12 @@ struct CollapseButtonView: View {
 
     var body: some View {
         ZStack {
-            // A chevron pointing at the edge the dock collapses into
-            // (the dock hugs the right edge; Weizhu's collapse
-            // affordance is the same chevron.right). Same tile and
-            // theme-text glyph as the cycle button — the arrow shape
-            // alone says "collapse", no special color needed.
-            Image(systemName: "chevron.right")
+            // A downward chevron: the button sits at the top of the
+            // expanded dock and the arrow points in the direction
+            // the dock folds away. Same tile and theme-text glyph as
+            // the cycle button — the arrow shape alone says
+            // "collapse", no special color needed.
+            Image(systemName: "chevron.down")
                 .foregroundStyle(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
         }
