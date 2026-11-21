@@ -209,8 +209,9 @@ static void FMKLog(NSString *event, id details) {
     fmt.dateFormat = @"MM-dd HH:mm:ss";
     [line appendFormat:@"%@ %@ · %@", [fmt stringFromDate:NSDate.date], FMKLogTag(), event];
     if([details isKindOfClass:NSDictionary.class]) {
-        NSArray *keys = [details.allKeys sortedArrayUsingSelector:@selector(compare:)];
-        for(id key in keys) [line appendFormat:@" %@=%@", key, FMKLogValueString(details[key])];
+        NSDictionary *dict = (NSDictionary *)details;
+        NSArray *keys = [dict.allKeys sortedArrayUsingSelector:@selector(compare:)];
+        for(id key in keys) [line appendFormat:@" %@=%@", key, FMKLogValueString(dict[key])];
     } else if(details) {
         [line appendFormat:@" %@", FMKLogValueString(details)];
     }
