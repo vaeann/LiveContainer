@@ -364,6 +364,7 @@ NSString *LCRunGuestExtension(NSDictionary *request, int argc, char *argv[], cha
 @interface LCKAAudioPlayer : NSObject
 - (instancetype)initWithData:(NSData *)data error:(NSError **)outError;
 @property (readonly, getter=isPlaying) BOOL playing;
+@property (readonly) NSTimeInterval currentTime;
 @property double volume;
 @property NSInteger numberOfLoops;
 - (BOOL)prepareToPlay;
@@ -508,6 +509,25 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     } @catch (__unused NSException *e) {}
 }
 
+// Short Chinese labels for the lifecycle notifications the
+// keep-alive engines react to, so the log shows which signal
+// actually arrived instead of a long constant name.
+static NSString *LCKeepAliveNotificationLabel(NSString *name) {
+    static NSDictionary *labels = nil;
+    if (!labels) {
+        labels = @{
+            @"UIApplicationDidEnterBackgroundNotification": @"应用进入后台",
+            @"NSExtensionHostDidEnterBackgroundNotification": @"扩展宿主进入后台",
+            @"UIApplicationWillEnterForegroundNotification": @"应用将回前台",
+            @"UIApplicationDidBecomeActiveNotification": @"应用已活跃",
+            @"NSExtensionHostWillEnterForegroundNotification": @"扩展宿主将回前台",
+            @"NSExtensionHostDidBecomeActiveNotification": @"扩展宿主已活跃",
+            @"UIApplicationDidFinishLaunchingNotification": @"应用启动完成",
+        };
+    }
+    return labels[name] ?: name;
+}
+
 @interface LCKeepAliveEngine : NSObject
 @property (nonatomic, copy) NSString *dataUUID;
 @property (nonatomic, copy) NSString *bundleID;
@@ -546,6 +566,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
         [sharedEngine restoreLastRecord];
         [sharedEngine registerObserversIfNeeded];
         [sharedEngine writeState];
+        [sharedEngine logEvent:@"引擎装载完成"];
     } @catch (__unused NSException *e) {}
 }
 
@@ -640,10 +661,12 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
 
 - (BOOL)startPlayback {
     if (self.player.playing) {
+        [self logEvent:@"启动播放：播放器已在播放，跳过"];
         return YES;
     }
     LCKAAudioSession *session = [self audioSession];
     if (!session) {
+        [self logEvent:@"启动播放失败：拿不到音频会话"];
         return NO;
     }
     // The audio session is shared with the host and every sibling
@@ -654,6 +677,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     NSString *category = session.category;
     NSUInteger options = session.categoryOptions;
     if (![category isEqualToString:LCKACategoryPlayback] || !(options & LCKAOptionMixWithOthers)) {
+        [self logEvent:[NSString stringWithFormat:@"会话类目不对（当前 %@），重设为 Playback+混音", category ?: @"(空)"]];
         if (!self.sessionChanged) {
             // Remember the app's own configuration so stop can restore
             // exactly what we changed — and nothing else.
@@ -662,27 +686,42 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
             self.savedMode = session.mode;
             self.sessionChanged = YES;
         }
-        [session setCategory:LCKACategoryPlayback
-                        mode:self.savedMode ?: LCKAModeDefault
-                     options:(options | LCKAOptionMixWithOthers)
-                       error:nil];
+        NSError *categoryError = nil;
+        if (![session setCategory:LCKACategoryPlayback
+                             mode:self.savedMode ?: LCKAModeDefault
+                          options:(options | LCKAOptionMixWithOthers)
+                            error:&categoryError]) {
+            [self logEvent:[NSString stringWithFormat:@"设置类目失败：%@", categoryError.localizedDescription ?: @"未知错误"]];
+        }
+    } else {
+        [self logEvent:@"会话类目正常（Playback+混音）"];
     }
-    [session setActive:YES withOptions:0 error:nil];
+    NSError *activeError = nil;
+    if ([session setActive:YES withOptions:0 error:&activeError]) {
+        [self logEvent:@"会话已激活"];
+    } else {
+        [self logEvent:[NSString stringWithFormat:@"会话激活失败：%@", activeError.localizedDescription ?: @"未知错误"]];
+    }
     if (!self.player) {
         Class playerClass = NSClassFromString(@"AVAudioPlayer");
         if (!playerClass) {
+            [self logEvent:@"启动播放失败：拿不到 AVAudioPlayer 类"];
             return NO;
         }
         NSError *error = nil;
         self.player = [[(id)playerClass alloc] initWithData:LCKASilentWAVData() error:&error];
         if (!self.player) {
+            [self logEvent:[NSString stringWithFormat:@"播放器创建失败：%@", error.localizedDescription ?: @"未知错误"]];
             return NO;
         }
         self.player.numberOfLoops = -1; // loop forever
         self.player.volume = 0.0;
         [self.player prepareToPlay];
+        [self logEvent:@"播放器已创建"];
     }
-    return [self.player play];
+    BOOL playing = [self.player play];
+    [self logEvent:playing ? @"播放器开始播放" : @"播放器启动失败（play 返回否）"];
+    return playing;
 }
 
 - (void)restoreAudioSession:(BOOL)wasKeepingAlive {
@@ -693,6 +732,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     // restore runs on the foreground stop (enterForeground clears
     // inBackground before stopping).
     if (self.inBackground) {
+        [self logEvent:@"恢复会话：仍在后台，跳过（不碰共享会话）"];
         return;
     }
     LCKAAudioSession *session = [self audioSession];
@@ -705,11 +745,15 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
                      options:self.savedOptions
                        error:nil];
         self.sessionChanged = NO;
+        [self logEvent:@"恢复会话：已还原音频类目"];
     }
     // Deactivate only when nothing else is playing: if the guest app itself
     // (or another app) has audio running, its session stays untouched.
     if (wasKeepingAlive && !session.isOtherAudioPlaying) {
         [session setActive:NO withOptions:LCKASetActiveNotifyOthers error:nil];
+        [self logEvent:@"恢复会话：已停用音频会话"];
+    } else if (wasKeepingAlive) {
+        [self logEvent:@"恢复会话：其他音频播放中，不停用会话"];
     }
 }
 
@@ -718,6 +762,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
 - (void)tryStartSession {
     @try {
         if (!self.inBackground) {
+            [self logEvent:@"尝试开始：不在后台状态，跳过"];
             return;
         }
         if (self.capReached) {
@@ -739,6 +784,10 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
                 self.sessionStart = [NSDate date];
                 [self scheduleCapTimer];
                 [self logEvent:@"保活开始"];
+                NSInteger minutes = [self durationMinutes];
+                [self logEvent:[NSString stringWithFormat:@"会话参数：时长上限 %@，看门狗 %@",
+                                 minutes > 0 ? [NSString stringWithFormat:@"%ld 分钟", (long)minutes] : @"不限",
+                                 [self watchdogEnabled] ? @"开" : @"关"]];
             }
             [self scheduleWatchdog];
             [self writeState];
@@ -770,6 +819,8 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
         [self writeState];
         if (wasKeepingAlive) {
             [self logEvent:[NSString stringWithFormat:@"保活停止：%@（本次 %d 秒）", reason, (int)self.lastSeconds]];
+        } else {
+            [self logEvent:[NSString stringWithFormat:@"停止请求：当前未在保活（%@）", reason]];
         }
     } @catch (__unused NSException *e) {}
 }
@@ -845,6 +896,12 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
                 [self logEvent:@"看门狗恢复播放失败"];
             }
         }
+        // Heartbeat probe: the player's own clock is the ground
+        // truth for "is audio really playing" — if currentTime does
+        // not advance between ticks, playback is an illusion and the
+        // process is coasting on borrowed time.
+        [self logEvent:[NSString stringWithFormat:@"心跳：播放器 %@，进度 %.1f 秒",
+                        self.player.playing ? @"播放中" : @"未播放", self.player.currentTime]];
         [self writeState];
         [self scheduleWatchdog];
     } @catch (__unused NSException *e) {}
@@ -863,10 +920,12 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     __weak LCKeepAliveEngine *weakSelf = self;
 
     void (^backgroundBlock)(NSNotification *) = ^(NSNotification *note) {
+        [weakSelf logEvent:[NSString stringWithFormat:@"收到通知：%@", LCKeepAliveNotificationLabel(note.name)]];
         weakSelf.inBackground = YES;
         [weakSelf tryStartSession];
     };
     void (^foregroundBlock)(NSNotification *) = ^(NSNotification *note) {
+        [weakSelf logEvent:[NSString stringWithFormat:@"收到通知：%@", LCKeepAliveNotificationLabel(note.name)]];
         [weakSelf enterForeground];
     };
 
@@ -893,6 +952,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
             id app = [(id)NSClassFromString(@"UIApplication") sharedApplication];
             // UIApplicationStateBackground == 2
             if ([[app valueForKey:@"applicationState"] integerValue] == 2) {
+                [weakSelf logEvent:@"收到通知：应用启动完成（启动时已在后台）"];
                 weakSelf.inBackground = YES;
                 [weakSelf tryStartSession];
             }
@@ -912,10 +972,12 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
                 [weakSelf logEvent:@"音频被打断"];
             } else if (type.unsignedIntegerValue == 1) { // AVAudioSessionInterruptionTypeEnded
                 weakSelf.interrupted = NO;
-                [weakSelf logEvent:@"音频打断结束，尝试恢复保活"];
                 NSNumber *options = note.userInfo[@"AVAudioSessionInterruptionOptionKey"];
                 if (options && (options.unsignedIntegerValue & 0x1)) { // ShouldResume
+                    [weakSelf logEvent:@"音频打断结束，尝试恢复保活"];
                     [weakSelf tryStartSession];
+                } else {
+                    [weakSelf logEvent:@"音频打断结束（未要求恢复，等看门狗巡检）"];
                 }
             }
         } @catch (__unused NSException *e) {}

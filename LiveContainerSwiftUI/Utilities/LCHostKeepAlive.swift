@@ -130,13 +130,20 @@ final class LCHostKeepAlive {
         // transient resign (Control Center, call banner) is undone
         // by the willEnterForeground stop.
         center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, MultitaskManager.isMultitasking() else { return }
+            guard let self else { return }
+            Self.logEvent("收到通知：将要失去活跃")
+            guard MultitaskManager.isMultitasking() else {
+                Self.logEvent("提前起播跳过：无游客在跑")
+                return
+            }
             self.tryStartSession(fromResign: true)
         }
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Self.logEvent("收到通知：已进入后台")
             self?.evaluate()
         }
         center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Self.logEvent("收到通知：将回前台")
             self?.enterForeground()
         }
         // A transient resign (Control Center, call banner) that
@@ -146,12 +153,14 @@ final class LCHostKeepAlive {
         // stopSession is idempotent, so the normal return path
         // firing both is harmless.
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Self.logEvent("收到通知：已活跃")
             self?.enterForeground()
         }
         // Guest set changes while backgrounded: start when the first guest
         // appears, stop as soon as the last one exits. Event-driven — the
         // running-apps registry is LC's own, no guessing, no polling.
         center.addObserver(forName: NSNotification.MultitaskRunningAppsChanged, object: nil, queue: .main) { [weak self] _ in
+            Self.logEvent("收到通知：运行中的游客有变化")
             self?.evaluate()
         }
         center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -163,6 +172,7 @@ final class LCHostKeepAlive {
         center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
             self?.handleMediaServicesFailure()
         }
+        Self.logEvent("引擎装载完成")
     }
 
     private func enterForeground() {
@@ -174,11 +184,16 @@ final class LCHostKeepAlive {
     /// Start or stop playback to match the current conditions. Called on
     /// backgrounding and whenever the running-guest set changes.
     private func evaluate() {
-        guard UIApplication.shared.applicationState == .background else { return }
+        guard UIApplication.shared.applicationState == .background else {
+            Self.logEvent("评估：不在后台，跳过")
+            return
+        }
         if MultitaskManager.isMultitasking() {
             tryStartSession()
         } else if keepingAlive {
             stopSession(timedOut: false, reason: "已无游客在跑")
+        } else {
+            Self.logEvent("评估：无游客在跑，未在保活，不处理")
         }
     }
 
@@ -206,6 +221,7 @@ final class LCHostKeepAlive {
                 sessionStart = Date()
                 scheduleCapTimer()
                 Self.logEvent("保活开始")
+                Self.logEvent("会话参数：时长上限 \(durationMinutes > 0 ? "\(durationMinutes) 分钟" : "不限")，看门狗 \(watchdogEnabled ? "开" : "关")")
             }
             beginKeepAliveBackgroundTask()
             scheduleWatchdog()
@@ -237,6 +253,8 @@ final class LCHostKeepAlive {
         writeState()
         if wasKeepingAlive {
             Self.logEvent("保活停止：\(reason)（本次 \(Int(lastSeconds)) 秒）")
+        } else {
+            Self.logEvent("停止请求：当前未在保活（\(reason)）")
         }
     }
 
@@ -257,8 +275,11 @@ final class LCHostKeepAlive {
                 _ = self.startPlayback()
                 self.beginKeepAliveBackgroundTask()
                 self.writeState()
+            } else {
+                Self.logEvent("后台任务到期后未续期（未在保活或已回前台）")
             }
         }
+        Self.logEvent("后台任务已申请")
     }
 
     // MARK: Audio
@@ -298,6 +319,7 @@ final class LCHostKeepAlive {
 
     private func startPlayback() -> Bool {
         if player?.isPlaying == true {
+            Self.logEvent("启动播放：播放器已在播放，跳过")
             return true
         }
         let session = AVAudioSession.sharedInstance()
@@ -309,6 +331,7 @@ final class LCHostKeepAlive {
         let category = session.category
         let options = session.categoryOptions
         if category != .playback || !options.contains(.mixWithOthers) {
+            Self.logEvent("会话类目不对（当前 \(category.rawValue)），重设为 Playback+混音")
             if !sessionChanged {
                 // Remember LC's own configuration so stop can restore
                 // exactly what we changed — and nothing else.
@@ -317,16 +340,36 @@ final class LCHostKeepAlive {
                 savedMode = session.mode
                 sessionChanged = true
             }
-            try? session.setCategory(.playback, mode: savedMode ?? .default, options: options.union(.mixWithOthers))
+            do {
+                try session.setCategory(.playback, mode: savedMode ?? .default, options: options.union(.mixWithOthers))
+            } catch {
+                Self.logEvent("设置类目失败：\(error.localizedDescription)")
+            }
+        } else {
+            Self.logEvent("会话类目正常（Playback+混音）")
         }
-        try? session.setActive(true)
+        do {
+            try session.setActive(true)
+            Self.logEvent("会话已激活")
+        } catch {
+            Self.logEvent("会话激活失败：\(error.localizedDescription)")
+        }
         if player == nil {
-            player = try? AVAudioPlayer(data: Self.silentWAVData)
-            player?.numberOfLoops = -1 // loop forever
-            player?.volume = 0
-            player?.prepareToPlay()
+            do {
+                player = try AVAudioPlayer(data: Self.silentWAVData)
+                player?.numberOfLoops = -1 // loop forever
+                player?.volume = 0
+                player?.prepareToPlay()
+                Self.logEvent("播放器已创建")
+            } catch {
+                Self.logEvent("播放器创建失败：\(error.localizedDescription)")
+                player = nil
+                return false
+            }
         }
-        return player?.play() ?? false
+        let playing = player?.play() ?? false
+        Self.logEvent(playing ? "播放器开始播放" : "播放器启动失败（play 返回否）")
+        return playing
     }
 
     private func restoreAudioSession(wasKeepingAlive: Bool) {
@@ -335,16 +378,23 @@ final class LCHostKeepAlive {
         // the category or deactivating here would cut the ground from
         // under every guest still keeping alive. The full restore
         // runs on the foreground stop.
-        guard UIApplication.shared.applicationState != .background else { return }
+        guard UIApplication.shared.applicationState != .background else {
+            Self.logEvent("恢复会话：仍在后台，跳过（不碰共享会话）")
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         if sessionChanged, let savedCategory, let savedOptions {
             try? session.setCategory(savedCategory, mode: savedMode ?? .default, options: savedOptions)
             sessionChanged = false
+            Self.logEvent("恢复会话：已还原音频类目")
         }
         // Deactivate only when nothing else is playing: if an app has audio
         // running, its session stays untouched.
         if wasKeepingAlive && !session.isOtherAudioPlaying {
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            Self.logEvent("恢复会话：已停用音频会话")
+        } else if wasKeepingAlive {
+            Self.logEvent("恢复会话：其他音频播放中，不停用会话")
         }
     }
 
@@ -401,6 +451,11 @@ final class LCHostKeepAlive {
                 Self.logEvent("看门狗恢复播放失败")
             }
         }
+        // Heartbeat probe: the player's own clock is the ground
+        // truth for "is audio really playing" — if currentTime does
+        // not advance between ticks, playback is an illusion and the
+        // process is coasting on borrowed time.
+        Self.logEvent("心跳：播放器 \(player?.isPlaying == true ? "播放中" : "未播放")，进度 \(String(format: "%.1f", player?.currentTime ?? 0)) 秒，后台任务 \(backgroundTask != .invalid ? "有" : "无")")
         writeState()
         scheduleWatchdog()
     }
@@ -431,6 +486,8 @@ final class LCHostKeepAlive {
                     Self.logEvent("音频打断结束，恢复播放")
                 }
                 evaluate()
+            } else if keepingAlive {
+                Self.logEvent("音频打断结束（未要求恢复，等看门狗巡检）")
             }
         @unknown default:
             break
