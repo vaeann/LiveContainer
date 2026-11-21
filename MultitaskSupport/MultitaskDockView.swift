@@ -125,19 +125,24 @@ class AppInfoProvider {
     }
 }
 
-/// Full-screen tap catcher installed above everything in the dock's
-/// window while the dock is expanded. Touches inside the dock's frame
-/// fall through to the dock below; every other touch is claimed by the
-/// overlay's tap recognizer. Sitting on top (instead of below the dock)
-/// makes dismissal independent of the window's subview order.
+/// Full-screen tap catcher shown while the dock is expanded. It lives
+/// in its own window above the app's windows: a hosted guest scene
+/// defers events to itself (LC enables the
+/// _UISceneHostingEventDeferringExtension on iOS 18+), so a catcher
+/// inside the main window never sees taps that land on the guest — a
+/// separate frontmost window is hit-tested before any deferring can
+/// happen. Touches inside the dock's frame fall through to the dock in
+/// the window below; every other touch is claimed by the overlay's tap
+/// recognizer.
 private final class LCTapOutsideOverlayView: UIView {
     weak var passthroughView: UIView?
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if let passthroughView, passthroughView.window == window {
-            // The overlay fills its window, so the point it receives is
-            // already in window coordinates.
-            let dockFrame = passthroughView.convert(passthroughView.bounds, to: nil)
+        if let passthroughView {
+            // Both windows share the scene's coordinate space, so the
+            // dock's frame can be converted into the overlay's own
+            // coordinates even though they live in different windows.
+            let dockFrame = passthroughView.convert(passthroughView.bounds, to: self)
             if dockFrame.contains(point) {
                 return nil
             }
@@ -165,10 +170,13 @@ private final class LCTapOutsideOverlayView: UIView {
     @Published var isDockIdleDimmed: Bool = false
     private var dockIdleTimer: Timer?
 
-    /// Full-screen tap catcher installed on top of the dock's window
-    /// while the dock is expanded; the first tap outside the dock
-    /// collapses it and is consumed (standard popover dismissal).
+    /// Full-screen tap catcher shown while the dock is expanded; the
+    /// first tap outside the dock collapses it and is consumed
+    /// (standard popover dismissal). It is hosted in
+    /// outsideTapOverlayWindow, a dedicated window above the app's
+    /// windows — see LCTapOutsideOverlayView for why.
     private var outsideTapOverlay: LCTapOutsideOverlayView?
+    private var outsideTapOverlayWindow: UIWindow?
 
     /// Status bar fix state: whether the host status bar override is
     /// currently applied.
@@ -562,6 +570,8 @@ private final class LCTapOutsideOverlayView: UIView {
         DispatchQueue.main.async {
             self.outsideTapOverlay?.removeFromSuperview()
             self.outsideTapOverlay = nil
+            self.outsideTapOverlayWindow?.isHidden = true
+            self.outsideTapOverlayWindow = nil
             UIView.animate(
                 withDuration: Constants.standardAnimationDuration,
                 delay: 0,
@@ -877,20 +887,34 @@ private final class LCTapOutsideOverlayView: UIView {
         _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID)
     }
 
-    /// Keep the outside-tap overlay in sync with the dock state: present
-    /// exactly while the dock is visible and expanded, on top of the
-    /// dock's own window (its hit test lets the dock's frame fall
-    /// through). Re-run on every dock frame update, so the overlay
-    /// heals itself if the window hierarchy changed after installation.
+    /// Keep the outside-tap overlay in sync with the dock state: its
+    /// window is visible exactly while the dock is visible and expanded
+    /// (its hit test lets the dock's frame fall through to the window
+    /// below). Re-run on every dock frame update, so the overlay heals
+    /// itself if the window hierarchy changed after installation.
     private func syncOutsideTapOverlay() {
         if isVisible && !isCollapsed,
            let dockView = hostingController?.view,
-           let window = dockView.window {
+           let scene = dockView.window?.windowScene
+                ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene) {
+            let overlayWindow: UIWindow
+            if let existing = outsideTapOverlayWindow {
+                overlayWindow = existing
+            } else {
+                let created = UIWindow(windowScene: scene)
+                // Above the app's normal-level windows (including native
+                // multitask windows), below alerts and the status bar.
+                created.windowLevel = UIWindowLevel(rawValue: UIWindowLevel.normal.rawValue + 10)
+                created.backgroundColor = .clear
+                outsideTapOverlayWindow = created
+                overlayWindow = created
+            }
+            overlayWindow.frame = scene.coordinateSpace.bounds
             let overlay: LCTapOutsideOverlayView
             if let existing = outsideTapOverlay {
                 overlay = existing
             } else {
-                let created = LCTapOutsideOverlayView(frame: window.bounds)
+                let created = LCTapOutsideOverlayView(frame: overlayWindow.bounds)
                 created.backgroundColor = .clear
                 created.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 created.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleOutsideTap)))
@@ -898,13 +922,17 @@ private final class LCTapOutsideOverlayView: UIView {
                 overlay = created
             }
             overlay.passthroughView = dockView
-            if overlay.superview !== window {
-                window.addSubview(overlay)
+            if overlay.superview !== overlayWindow {
+                overlayWindow.addSubview(overlay)
             }
-            window.bringSubviewToFront(overlay)
+            overlay.frame = overlayWindow.bounds
+            overlayWindow.bringSubviewToFront(overlay)
+            overlayWindow.isHidden = false
         } else {
             outsideTapOverlay?.removeFromSuperview()
             outsideTapOverlay = nil
+            outsideTapOverlayWindow?.isHidden = true
+            outsideTapOverlayWindow = nil
         }
     }
 
