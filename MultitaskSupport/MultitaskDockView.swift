@@ -1048,12 +1048,10 @@ public struct MultitaskDockSwiftView: View {
             }
             .padding(dynamicPadding)
             .alert("lc.multitask.closeAllTitle".loc, isPresented: $showCloseAllConfirm) {
-                Button("lc.common.cancel".loc, role: .cancel) {}
+                Button("lc.common.no".loc, role: .cancel) {}
                 Button("lc.multitask.closeAllConfirm".loc, role: .destructive) {
                     dockManager.closeAllApps()
                 }
-            } message: {
-                Text("lc.multitask.closeAllMessage".loc)
             }
             .modifier { content in
                 if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
