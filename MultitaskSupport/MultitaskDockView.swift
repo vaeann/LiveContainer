@@ -304,6 +304,7 @@ class AppInfoProvider {
     
     override init() {
         super.init()
+        Self.tapOutsideInstance = self
         keyWindow!.rootViewController!.view.subviews.first!.addSubview(self.windowHostingView)
         setupDockView()
         NotificationCenter.default.addObserver(
@@ -834,6 +835,77 @@ class AppInfoProvider {
         }
     }
     
+    // MARK: - Tap-outside collapse via sendEvent
+    /// The live manager for the UIApplication sendEvent hook in
+    /// UIKitHooks.m, registered in init. The hook exists app-wide
+    /// once the first multitask scene is created, but it only acts
+    /// while this manager's dock is expanded.
+    private static weak var tapOutsideInstance: MultitaskDockManager?
+    /// Touches swallowed because they began outside the expanded
+    /// dock: their remaining phases are swallowed too, so the guest
+    /// never receives half a touch.
+    private var swallowedTouches: Set<UITouch> = []
+
+    /// Called from the UIApplication sendEvent hook (UIKitHooks.m)
+    /// for every event entering the host app; returns true when the
+    /// event was consumed by the tap-outside collapse and must not
+    /// be delivered. Three catcher layers (in-window below, in-window
+    /// above, dedicated window) failed before this: on iOS 18+ a
+    /// front guest's scene defers its events to itself before the
+    /// host window's hit-testing runs, so no host layer ever sees
+    /// taps that land on the guest. sendEvent is the one entry
+    /// point upstream of that deferral.
+    @objc public static func dockShouldSwallowEvent(_ event: UIEvent) -> Bool {
+        guard let manager = tapOutsideInstance else { return false }
+        return manager.handleTapOutsideEvent(event)
+    }
+
+    private func handleTapOutsideEvent(_ event: UIEvent) -> Bool {
+        guard event.type == .touches, let touches = event.allTouches, !touches.isEmpty else {
+            return false
+        }
+        // A touch swallowed at its start stays swallowed for its
+        // whole lifetime.
+        var eventSwallowed = false
+        for touch in touches where swallowedTouches.contains(touch) {
+            eventSwallowed = true
+            if touch.phase == .ended || touch.phase == .cancelled {
+                swallowedTouches.remove(touch)
+            }
+        }
+        if eventSwallowed { return true }
+
+        guard isVisible, !isCollapsed, !isShakeHidden,
+              let hostingView = hostingController?.view,
+              let window = hostingView.window,
+              !hasModalPresentation(in: window) else {
+            return false
+        }
+        for touch in touches where touch.phase == .began {
+            let location = touch.location(in: window)
+            if !hostingView.frame.contains(location) {
+                swallowedTouches.insert(touch)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                toggleDockCollapse()
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Alerts and sheets (including the dock's own close-all
+    /// confirmation) must keep receiving their taps: while anything
+    /// is presented over the multitask window, tap-outside stays off.
+    private func hasModalPresentation(in window: UIWindow) -> Bool {
+        if UIApplication.shared.windows.contains(where: { $0.windowLevel >= .alert && !$0.isHidden }) {
+            return true
+        }
+        if hostingController?.presentedViewController != nil {
+            return true
+        }
+        return window.rootViewController?.presentedViewController != nil
+    }
+
     // MARK: - Shake to hide
     /// Whether the dock is currently hidden by a shake; shake again
     /// to bring it back. This replaces the old "hide collapsed dock"

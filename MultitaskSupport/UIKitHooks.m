@@ -7,6 +7,7 @@
 @import ObjectiveC;
 #import "utils.h"
 #import "UIKitPrivate+MultitaskSupport.h"
+#import "LiveContainerSwiftUI-Swift.h"
 
 static BOOL LCHasRemoteSheetProviderSelector;
 
@@ -65,6 +66,23 @@ void hook_FBScene_performUpdateWithoutActivation(FBScene* self, SEL _cmd, void (
     [self hook__performUpdateWithoutActivation:wrappedBlock];
 }
 
+/// Tap-outside collapse for the multitask dock. sendEvent is the
+/// one point where every touch entering the host app can be seen
+/// before window/scene routing — including the guest scenes' event
+/// deferral — runs. MultitaskDockManager decides whether an event
+/// is the outside tap that collapses the dock (and is swallowed);
+/// everything else is delivered untouched.
+@interface UIApplication (LCDockTapOutside)
+- (void)hook_sendEvent:(UIEvent *)event;
+@end
+@implementation UIApplication (LCDockTapOutside)
+- (void)hook_sendEvent:(UIEvent *)event {
+    if (![MultitaskDockManager dockShouldSwallowEvent:event]) {
+        [self hook_sendEvent:event];
+    }
+}
+@end
+
 void UIKitFixesInit(void) {
     if (@available(iOS 17.0, *)) {
         Class FBSceneClass = PrivClass(FBScene);
@@ -72,4 +90,5 @@ void UIKitFixesInit(void) {
         class_addMethod(FBSceneClass, @selector(hook__performUpdateWithoutActivation:), (IMP)hook_FBScene_performUpdateWithoutActivation, "v@:@");
         swizzle(FBSceneClass, @selector(_performUpdateWithoutActivation:), @selector(hook__performUpdateWithoutActivation:));
     }
+    swizzle(UIApplication.class, @selector(sendEvent:), @selector(hook_sendEvent:));
 }
