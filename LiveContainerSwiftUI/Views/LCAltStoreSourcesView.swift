@@ -554,6 +554,11 @@ struct LCSourcesView: View {
 
     @EnvironmentObject private var sharedModel : SharedModel
 
+    /// Total number of apps across all sources (the sources tab's count).
+    private var totalSourceAppsCount: Int {
+        viewModel.sources.reduce(0) { $0 + ($1.source?.apps.count ?? 0) }
+    }
+
     @State private var isViewAppeared = false
 
     var body: some View {
@@ -561,7 +566,7 @@ struct LCSourcesView: View {
             VStack(spacing: 0) {
                 if !viewModel.sources.isEmpty {
                     Picker("lc.sources.segment".loc, selection: $selectedSegment) {
-                        Text("lc.sources.segment.sourcesWithCount %lld".localizeWithFormat(viewModel.sources.count)).tag(0)
+                        Text("lc.sources.segment.sourcesWithCount %lld".localizeWithFormat(totalSourceAppsCount)).tag(0)
                         Text("lc.sources.segment.updatesWithCount %lld".localizeWithFormat(updatableApps.count)).tag(1)
                     }
                     .pickerStyle(.segmented)
@@ -1432,6 +1437,18 @@ final class SourceIconCache {
     static func clearAll() {
         shared.memoryCache.removeAllObjects()
         try? FileManager.default.removeItem(at: shared.cacheDirectory)
+    }
+
+    /// Total bytes the cached source icons take on disk.
+    static func cacheSize() -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(at: shared.cacheDirectory, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return 0
+        }
+        var total: Int64 = 0
+        for case let file as URL in enumerator {
+            total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return total
     }
 }
 
