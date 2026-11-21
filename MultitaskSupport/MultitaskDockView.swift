@@ -959,7 +959,10 @@ class AppInfoProvider {
                 let sceneInWindow = view.convert(view.bounds, to: window)
                 let rect = dockScreen.offsetBy(dx: -(window.frame.origin.x + sceneInWindow.origin.x),
                                                dy: -(window.frame.origin.y + sceneInWindow.origin.y))
-                rects[app.appUUID] = NSStringFromCGRect(rect)
+                // NSStringFromCGRect is obsoleted in the iOS 27 SDK's
+                // Swift overlay; emit its canonical format manually —
+                // the guest parses it back with CGRectFromString.
+                rects[app.appUUID] = "{{\(rect.origin.x), \(rect.origin.y)}, {\(rect.size.width), \(rect.size.height)}}"
             }
         }
         LCUtils.appGroupUserDefault.set([
