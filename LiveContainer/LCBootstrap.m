@@ -734,11 +734,12 @@ static NSData *LCKASilentWAVData(void) {
         [weakSelf enterForeground];
     };
 
-    // Start early on WillResignActive: by the time the guest is fully in the
-    // background the audio session is already active, leaving no gap where
-    // the system can kill the process first. DidBecomeActive stops the
-    // brief false starts (control center, call banner, ...).
-    [self.observerTokens addObject:[center addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:queue usingBlock:backgroundBlock]];
+    // Start only when the whole app has entered the background
+    // (DidEnterBackground, not WillResignActive): a guest merely
+    // resigning active — switching to another guest, minimizing to
+    // the LC home screen — needs no protection, because the system
+    // cannot reclaim guests while LC itself is in the foreground.
+    // DidBecomeActive stops the session when the app comes back.
     [self.observerTokens addObject:[center addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:queue usingBlock:foregroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:queue usingBlock:foregroundBlock]];
@@ -746,7 +747,6 @@ static NSData *LCKASilentWAVData(void) {
     // Extension-hosted guests (LiveProcess) do not always receive the
     // UIApplication background notifications; the extension host ones are
     // the reliable path there.
-    [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostWillResignActiveNotification" object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostDidEnterBackgroundNotification" object:nil queue:queue usingBlock:backgroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostWillEnterForegroundNotification" object:nil queue:queue usingBlock:foregroundBlock]];
     [self.observerTokens addObject:[center addObserverForName:@"NSExtensionHostDidBecomeActiveNotification" object:nil queue:queue usingBlock:foregroundBlock]];
