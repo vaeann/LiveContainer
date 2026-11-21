@@ -25,6 +25,7 @@ struct LCDataManagementView : View {
     @StateObject private var cacheRemovalAlert = YesNoHelper() 
 
     
+    @State private var iconCacheSize: Int64 = 0
     @State var errorShow = false
     @State var errorInfo = ""
     @State var successShow = false
@@ -92,7 +93,12 @@ struct LCDataManagementView : View {
                 Button {
                     Task { await clearIconCache() }
                 } label: {
-                    Text("lc.settings.clearIconCache".loc)
+                    HStack {
+                        Text("lc.settings.clearIconCache".loc)
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: iconCacheSize, countStyle: .file))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             
@@ -195,6 +201,7 @@ struct LCDataManagementView : View {
     }
     
     func onAppearFunc() {
+        refreshIconCacheSize()
         if !appeared {
             for app in sharedModel.apps {
                 if app.appInfo.bundleIdentifier() == "com.tigisoftware.Filza" {
@@ -488,6 +495,30 @@ struct LCDataManagementView : View {
         }
         // Source app icons live in their own cache; clear it too.
         SourceIconCache.clearAll()
+        refreshIconCacheSize()
+    }
+
+    /// Icon cache footprint shown next to the clear button: every
+    /// app's generated icon pair plus the source icon cache.
+    private func refreshIconCacheSize() {
+        let apps = sharedModel.apps
+        DispatchQueue.global(qos: .utility).async {
+            var total = SourceIconCache.cacheSize()
+            let fm = FileManager.default
+            for app in apps {
+                guard let bundlePath = app.appInfo.bundlePath() else { continue }
+                for name in ["LCAppIconLight.png", "LCAppIconDark.png"] {
+                    let path = (bundlePath as NSString).appendingPathComponent(name)
+                    if let attrs = try? fm.attributesOfItem(atPath: path),
+                       let size = attrs[.size] as? NSNumber {
+                        total += size.int64Value
+                    }
+                }
+            }
+            DispatchQueue.main.async {
+                iconCacheSize = total
+            }
+        }
     }
 
 }
