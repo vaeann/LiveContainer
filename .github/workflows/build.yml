@@ -59,21 +59,6 @@ jobs:
           filetype_parameter: ${{ steps.filetype_parameter.outputs.filetype_parameter }}
           file_to_build: ${{ steps.file_to_build.outputs.file_to_build }}
         run: xcodebuild archive -archivePath "$archive_path" -scheme "$scheme" -"$filetype_parameter" "$file_to_build" -sdk iphoneos -arch arm64 -configuration Release | xcpretty && exit ${PIPESTATUS[0]}
-      - name: Build Bundled Tweaks
-        run: |
-          clang -arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
-            -mios-version-min=14.0 -fobjc-arc -dynamiclib \
-            -framework UIKit -framework Foundation -framework AVFoundation \
-            -o FMKeepAlive.dylib BundledTweaks/FMKeepAlive.m
-          # Ship the dylib base64-encoded as text, not as a loose
-          # dylib: install-time re-signing rewrote the loose dylib's
-          # load commands on device (an injected @loader_path/
-          # Frameworks/<hash>.dylib reference), breaking the deployed
-          # copy. A text file passes through untouched; LC decodes
-          # it when deploying (LCKeepAliveSettingView.syncModule).
-          base64 -i FMKeepAlive.dylib -o FMKeepAlive.dylib.b64
-          cp FMKeepAlive.dylib.b64 "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.b64"
-          ls -la "$archive_path.xcarchive/Products/Applications/LiveContainer.app/FMKeepAlive.dylib.b64"
       - name: Tar Build Artifact
         run: tar -cvf "$archive_path.xcarchive.tar" "$archive_path.xcarchive"
       - name: Upload a Build Artifact
