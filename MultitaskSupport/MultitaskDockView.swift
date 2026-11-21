@@ -305,6 +305,22 @@ class AppInfoProvider {
     override init() {
         super.init()
         Self.tapOutsideInstance = self
+        // LiveProcess guests report taps outside the expanded dock
+        // through a Darwin notification: their touches never enter
+        // this process (see publishTapOutsideState below and
+        // LCDockTapGuestHook in LCBootstrap.m).
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let manager = Unmanaged<MultitaskDockManager>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { manager.handleGuestTapOutsideSignal() }
+            },
+            "com.livecontainer.dockTapOutside" as CFString,
+            nil,
+            .deliverImmediately
+        )
         keyWindow!.rootViewController!.view.subviews.first!.addSubview(self.windowHostingView)
         setupDockView()
         NotificationCenter.default.addObserver(
@@ -377,6 +393,7 @@ class AppInfoProvider {
 
         applyNewFrame(newFrame, for: hostingController, animated: animated)
         updateStatusBarFix()
+        publishTapOutsideState()
     }
 
     // MARK: - Frame Calculation Helpers
@@ -537,6 +554,7 @@ class AppInfoProvider {
                 // The next session starts collapsed again (see showDock).
                 self.isCollapsed = true
                 self.isShakeHidden = false
+                self.publishTapOutsideState()
                 hostingController.view.isHidden = false
                 self.stopShakeDetection()
                 hostingController.view.transform = .identity
@@ -846,6 +864,13 @@ class AppInfoProvider {
     /// never receives half a touch.
     private var swallowedTouches: Set<UITouch> = []
 
+    /// Guest-side tap-outside state: the current expansion's
+    /// generation (bumped every time the published state becomes
+    /// armed, so a guest eats at most one tap sequence per
+    /// expansion) and whether the published state is armed.
+    private var tapOutsideGeneration = 0
+    private var tapOutsideArmed = false
+
     /// Called from the UIApplication sendEvent hook (UIKitHooks.m)
     /// for every event entering the host app; returns true when the
     /// event was consumed by the tap-outside collapse and must not
@@ -906,6 +931,52 @@ class AppInfoProvider {
         return window.rootViewController?.presentedViewController != nil
     }
 
+    // MARK: - Tap-outside collapse, guest side
+
+    /// Publish the dock's tap-outside state for LiveProcess guests
+    /// (consumed by LCDockTapGuestHook in LCBootstrap.m). Taps on a
+    /// front guest are routed by backboardd straight to the guest
+    /// process, so the guest itself must spot the outside tap; it
+    /// needs the dock's frame in its own scene coordinates, which
+    /// only the host can compute. Published whenever the dock's
+    /// frame, expansion, visibility or app set changes.
+    private func publishTapOutsideState() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.publishTapOutsideState() }
+            return
+        }
+        let armed = isVisible && !isCollapsed && !isShakeHidden
+        if armed && !tapOutsideArmed {
+            tapOutsideGeneration += 1
+        }
+        tapOutsideArmed = armed
+        var rects: [String: String] = [:]
+        if armed, let hostingView = hostingController?.view, let hostWindow = hostingView.window {
+            let dockScreen = hostingView.frame.offsetBy(dx: hostWindow.frame.origin.x,
+                                                         dy: hostWindow.frame.origin.y)
+            for app in apps {
+                guard let view = app.view, let window = view.window else { continue }
+                let sceneInWindow = view.convert(view.bounds, to: window)
+                let rect = dockScreen.offsetBy(dx: -(window.frame.origin.x + sceneInWindow.origin.x),
+                                               dy: -(window.frame.origin.y + sceneInWindow.origin.y))
+                rects[app.appUUID] = NSStringFromCGRect(rect)
+            }
+        }
+        LCUtils.appGroupUserDefault.set([
+            "armed": armed,
+            "generation": tapOutsideGeneration,
+            "rects": rects
+        ], forKey: "LCDockTapOutsideState")
+    }
+
+    /// A LiveProcess guest swallowed an outside tap and signalled
+    /// the collapse (see LCDockTapGuestHook in LCBootstrap.m).
+    private func handleGuestTapOutsideSignal() {
+        guard isVisible, !isCollapsed, !isShakeHidden else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        toggleDockCollapse()
+    }
+
     // MARK: - Shake to hide
     /// Whether the dock is currently hidden by a shake; shake again
     /// to bring it back. This replaces the old "hide collapsed dock"
@@ -960,6 +1031,7 @@ class AppInfoProvider {
     private func toggleShakeHidden() {
         isShakeHidden.toggle()
         hostingController?.view.isHidden = isShakeHidden
+        publishTapOutsideState()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         if !isShakeHidden {
             noteDockInteraction()
