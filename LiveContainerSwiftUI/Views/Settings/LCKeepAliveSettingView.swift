@@ -11,6 +11,7 @@
 //  itself.
 //
 
+import Compression
 import SwiftUI
 
 struct LCKeepAliveSettingView: View {
@@ -105,20 +106,24 @@ struct LCKeepAliveSettingView: View {
         // The module's host half only loads when LC injects tweaks
         // into itself (the same switch 微珠 relies on).
         UserDefaults.standard.set(true, forKey: "LCLoadTweaksToSelf")
-        guard let src = Bundle.main.url(forResource: "FMKeepAlive", withExtension: "dylib")
+        // The dylib ships compressed (FMKeepAlive.dylib.z): as a
+        // loose dylib in the .app its load commands got rewritten by
+        // install-time re-signing, which broke the deployed copy.
+        guard let src = Bundle.main.url(forResource: "FMKeepAlive.dylib", withExtension: "z"),
+              let packed = try? Data(contentsOf: src),
+              let srcData = try? (packed as NSData).decompressed(using: .zlib)
         else { return }
         let fm = FileManager.default
         for folder in [LCPath.tweakPath, LCPath.lcGroupTweakPath] {
             try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
             let dest = folder.appendingPathComponent("FMKeepAlive.dylib")
-            let srcData = try? Data(contentsOf: src)
             let destData = try? Data(contentsOf: dest)
             if destData != srcData {
-                // Copy via a temp file so a failed copy never leaves
-                // the folder without a working dylib.
+                // Write via a temp file so a failed write never
+                // leaves the folder without a working dylib.
                 let tmpDest = dest.appendingPathExtension("tmp")
                 try? fm.removeItem(at: tmpDest)
-                if (try? fm.copyItem(at: src, to: tmpDest)) != nil {
+                if (try? srcData.write(to: tmpDest)) != nil {
                     try? fm.removeItem(at: dest)
                     if (try? fm.moveItem(at: tmpDest, to: dest)) == nil {
                         try? fm.removeItem(at: tmpDest)
