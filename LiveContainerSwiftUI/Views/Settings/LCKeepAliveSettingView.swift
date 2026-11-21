@@ -10,6 +10,7 @@
 
 import Combine
 import SwiftUI
+import UIKit
 
 private struct KeepAliveRecord: Identifiable {
     var id: String
@@ -265,9 +266,13 @@ struct LCKeepAliveSettingView: View {
 /// Viewer for the temporary keep-alive diagnostic log: one shared
 /// file written by the host keeper and every guest engine (see
 /// LCKeepAliveLogEvent in LCBootstrap.m). Newest first, last 200
-/// lines; the trash button truncates the file.
+/// lines. New-format lines ("11-21 16:46:02 Swiftgram · 保活开始")
+/// render as time / source / event columns; older lines still in
+/// the file are shown as-is. The copy button puts the whole log on
+/// the clipboard; the clear button truncates the file.
 struct LCKeepAliveLogView: View {
     @State private var lines: [String] = []
+    @State private var copied = false
 
     private var logURL: URL {
         LCPath.lcGroupDocPath
@@ -282,21 +287,61 @@ struct LCKeepAliveLogView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(lines.indices, id: \.self) { index in
-                    Text(lines[index])
-                        .font(.footnote.monospaced())
+                    logRow(lines[index])
                 }
             }
         }
         .navigationTitle("lc.keepAlive.log".loc)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button(copied ? "lc.keepAlive.logCopied".loc : "lc.keepAlive.logCopy".loc) {
+                    copyLog()
+                }
+                .disabled(lines.isEmpty)
                 Button("lc.keepAlive.logClear".loc) {
                     clearLog()
                 }
             }
         }
         .onAppear { reload() }
+    }
+
+    private func logRow(_ line: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if let parts = parse(line) {
+                Text(parts.time)
+                    .foregroundStyle(.secondary)
+                Text(parts.tag)
+                    .fontWeight(.semibold)
+                Text(parts.event)
+            } else {
+                Text(line)
+            }
+        }
+        .font(.footnote.monospaced())
+    }
+
+    /// "11-21 16:46:02 Swiftgram · 保活开始" → time / tag / event.
+    private func parse(_ line: String) -> (time: String, tag: String, event: String)? {
+        guard line.count > 14 else { return nil }
+        let timeEnd = line.index(line.startIndex, offsetBy: 14)
+        let time = String(line[..<timeEnd])
+        let rest = line[timeEnd...].trimmingCharacters(in: .whitespaces)
+        guard let range = rest.range(of: " · ") else { return nil }
+        let tag = String(rest[..<range.lowerBound])
+        let event = String(rest[range.upperBound...])
+        guard !tag.isEmpty, !event.isEmpty else { return nil }
+        return (time, tag, event)
+    }
+
+    private func copyLog() {
+        UIPasteboard.general.string = lines.joined(separator: "\n")
+        copied = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            copied = false
+        }
     }
 
     private func reload() {

@@ -414,13 +414,43 @@ static NSData *LCKASilentWAVData(void) {
 }
 
 // Temporary keep-alive diagnostic log (added 2026-11-21 at Ann's
-// request to chase sessions that end after a few seconds; REMOVE
+// request to chase sessions that end without a stop record; REMOVE
 // together with its settings switch once keep-alive is confirmed
 // healthy). The host keeper and every guest engine append to one
-// shared file, one line per event:
-//   2026-11-21 15:59:02 [source] event text
+// shared file, one line per event, short enough to scan:
+//   11-21 15:59:02 Swiftgram · 保活开始
 // Recording is gated by LCKeepAliveLogEnabled in the shared defaults
 // (default on) so it can be silenced without a rebuild.
+
+// Short display tag for a log source: the host is 宿主; a guest is
+// the distinctive component of its bundle ID (app.swiftgram.ios →
+// Swiftgram, com.atebits.Tweetie2 → Tweetie2).
+static NSString *LCKeepAliveLogTag(NSString *source) {
+    if ([source isEqualToString:@"LiveContainer"]) {
+        return @"宿主";
+    }
+    static NSSet *generic = nil;
+    if (!generic) {
+        generic = [NSSet setWithObjects:@"com", @"cn", @"net", @"org", @"io",
+                   @"app", @"ios", @"tv", @"me", @"co", @"us", @"uk", @"jp",
+                   @"dev", @"tech", nil];
+    }
+    NSArray *parts = [source componentsSeparatedByString:@"."];
+    NSString *pick = parts.lastObject ?: source;
+    for (NSString *part in [parts reverseObjectEnumerator]) {
+        if (part.length && ![generic containsObject:part.lowercaseString]) {
+            pick = part;
+            break;
+        }
+    }
+    if (pick.length > 1) {
+        pick = [[pick substringToIndex:1].uppercaseString stringByAppendingString:[pick substringFromIndex:1]];
+    } else {
+        pick = pick.uppercaseString;
+    }
+    return pick;
+}
+
 static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     @try {
         NSUserDefaults *defaults = [NSUserDefaults lcSharedDefaults];
@@ -432,7 +462,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
         // host); drop an identical line repeated within 2 seconds.
         static NSString *lastLine = nil;
         static NSTimeInterval lastTime = 0;
-        NSString *body = [NSString stringWithFormat:@"[%@] %@", source, event];
+        NSString *body = [NSString stringWithFormat:@"%@ · %@", LCKeepAliveLogTag(source), event];
         NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
         if ([body isEqualToString:lastLine] && now - lastTime < 2) {
             return;
@@ -463,7 +493,7 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
         static NSDateFormatter *formatter = nil;
         if (!formatter) {
             formatter = [[NSDateFormatter alloc] init];
-            formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+            formatter.dateFormat = @"MM-dd HH:mm:ss";
         }
         NSString *line = [NSString stringWithFormat:@"%@ %@\n", [formatter stringFromDate:[NSDate date]], body];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
@@ -616,21 +646,26 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
     if (!session) {
         return NO;
     }
-    if (!self.sessionChanged) {
-        NSString *category = session.category;
-        NSUInteger options = session.categoryOptions;
-        if (![category isEqualToString:LCKACategoryPlayback] || !(options & LCKAOptionMixWithOthers)) {
+    // The audio session is shared with the host and every sibling
+    // guest: another process may have changed (or restored) the
+    // category since this engine last set it, so verify the live
+    // values on every start instead of trusting sessionChanged —
+    // a non-playback category in the background means no keep-alive.
+    NSString *category = session.category;
+    NSUInteger options = session.categoryOptions;
+    if (![category isEqualToString:LCKACategoryPlayback] || !(options & LCKAOptionMixWithOthers)) {
+        if (!self.sessionChanged) {
             // Remember the app's own configuration so stop can restore
             // exactly what we changed — and nothing else.
             self.savedCategory = category;
             self.savedOptions = options;
             self.savedMode = session.mode;
-            [session setCategory:LCKACategoryPlayback
-                            mode:self.savedMode ?: LCKAModeDefault
-                         options:(options | LCKAOptionMixWithOthers)
-                           error:nil];
             self.sessionChanged = YES;
         }
+        [session setCategory:LCKACategoryPlayback
+                        mode:self.savedMode ?: LCKAModeDefault
+                     options:(options | LCKAOptionMixWithOthers)
+                       error:nil];
     }
     [session setActive:YES withOptions:0 error:nil];
     if (!self.player) {
@@ -651,6 +686,15 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
 }
 
 - (void)restoreAudioSession:(BOOL)wasKeepingAlive {
+    // While still in the background, leave the shared session exactly
+    // as it is: it is one session for the host and all guests, so
+    // restoring the category or deactivating here would cut the
+    // ground from under every sibling still keeping alive. The full
+    // restore runs on the foreground stop (enterForeground clears
+    // inBackground before stopping).
+    if (self.inBackground) {
+        return;
+    }
     LCKAAudioSession *session = [self audioSession];
     if (!session) {
         return;
@@ -791,6 +835,10 @@ static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
         }
         self.lastWatchdogConfirm = [NSDate date];
         if (self.inBackground && !self.capReached && !self.interrupted && !self.player.playing) {
+            // Rebuild the player from scratch on the re-verified
+            // session: re-playing a player whose session was
+            // deactivated under it does not reliably recover.
+            self.player = nil;
             if ([self startPlayback]) {
                 [self logEvent:@"看门狗发现播放已停止，已重新启动"];
             } else {

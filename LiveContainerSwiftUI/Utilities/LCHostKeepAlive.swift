@@ -58,7 +58,7 @@ final class LCHostKeepAlive {
         }
         // The same event can be evaluated twice in quick succession;
         // drop an identical line repeated within 2 seconds.
-        let body = "[LiveContainer] \(event)"
+        let body = "宿主 · \(event)"
         let now = Date().timeIntervalSinceReferenceDate
         if body == lastLogLine && now - lastLogTime < 2 {
             return
@@ -78,7 +78,7 @@ final class LCHostKeepAlive {
             }
         }
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.dateFormat = "MM-dd HH:mm:ss"
         let line = "\(formatter.string(from: Date())) \(body)\n"
         guard let data = line.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: url) {
@@ -122,10 +122,30 @@ final class LCHostKeepAlive {
         writeState()
 
         let center = NotificationCenter.default
+        // Early start, FMKeepAlive parity: begin playback while the
+        // app is still resigning active, so audio is already rolling
+        // when the backgrounding completes — waiting for
+        // didEnterBackground leaves a gap where the system can
+        // throttle the process before playback ever starts. A
+        // transient resign (Control Center, call banner) is undone
+        // by the willEnterForeground stop.
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, MultitaskManager.isMultitasking() else { return }
+            self.tryStartSession(fromResign: true)
+        }
         center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             self?.evaluate()
         }
         center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.enterForeground()
+        }
+        // A transient resign (Control Center, call banner) that
+        // started a session on willResignActive ends with
+        // didBecomeActive and no willEnterForeground — stop there
+        // too, or the session would run on in the foreground.
+        // stopSession is idempotent, so the normal return path
+        // firing both is harmless.
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.enterForeground()
         }
         // Guest set changes while backgrounded: start when the first guest
@@ -146,7 +166,7 @@ final class LCHostKeepAlive {
     }
 
     private func enterForeground() {
-        stopSession(timedOut: false, reason: "LC 回到前台")
+        stopSession(timedOut: false, reason: "回到前台")
         capReached = false
         interrupted = false
     }
@@ -164,20 +184,20 @@ final class LCHostKeepAlive {
 
     // MARK: Session control
 
-    private func tryStartSession() {
+    private func tryStartSession(fromResign: Bool = false) {
         guard keepAliveEnabled else {
-            Self.logEvent("宿主跳过保活：保活总开关已关闭")
+            Self.logEvent("跳过保活：保活总开关已关闭")
             return
         }
         guard !capReached else {
-            Self.logEvent("宿主跳过保活：已达到时长上限")
+            Self.logEvent("跳过保活：已达到时长上限")
             return
         }
         guard !interrupted else {
-            Self.logEvent("宿主跳过保活：正被音频打断")
+            Self.logEvent("跳过保活：正被音频打断")
             return
         }
-        guard UIApplication.shared.applicationState == .background else { return }
+        guard fromResign || UIApplication.shared.applicationState == .background else { return }
         guard MultitaskManager.isMultitasking() else { return }
         if startPlayback() {
             if !keepingAlive {
@@ -185,12 +205,13 @@ final class LCHostKeepAlive {
                 lastStopTimedOut = false
                 sessionStart = Date()
                 scheduleCapTimer()
-                Self.logEvent("宿主保活开始")
+                Self.logEvent("保活开始")
             }
+            beginKeepAliveBackgroundTask()
             scheduleWatchdog()
             writeState()
         } else {
-            Self.logEvent("宿主保活开始失败：音频未能启动")
+            Self.logEvent("保活开始失败：音频未能启动")
         }
     }
 
@@ -215,7 +236,28 @@ final class LCHostKeepAlive {
         lastStopTimedOut = timedOut
         writeState()
         if wasKeepingAlive {
-            Self.logEvent("宿主保活停止：\(reason)（本次 \(Int(lastSeconds)) 秒）")
+            Self.logEvent("保活停止：\(reason)（本次 \(Int(lastSeconds)) 秒）")
+        }
+    }
+
+    // Second channel, FMKeepAlive parity: a background task taken at
+    // session start keeps the host process scheduled even if the
+    // audio path hiccups in the first seconds — the window where this
+    // keeper previously died before its first watchdog tick. On
+    // expiry the player is rebuilt on the re-verified session and a
+    // fresh task is taken, so one expiry does not end the session.
+    private func beginKeepAliveBackgroundTask() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "LCHostKeepAlive") { [weak self] in
+            guard let self else { return }
+            Self.logEvent("后台任务已到期")
+            self.endBackgroundTask()
+            if self.keepingAlive, UIApplication.shared.applicationState == .background {
+                self.player = nil
+                _ = self.startPlayback()
+                self.beginKeepAliveBackgroundTask()
+                self.writeState()
+            }
         }
     }
 
@@ -259,18 +301,23 @@ final class LCHostKeepAlive {
             return true
         }
         let session = AVAudioSession.sharedInstance()
-        if !sessionChanged {
-            let category = session.category
-            let options = session.categoryOptions
-            if category != .playback || !options.contains(.mixWithOthers) {
+        // The session is shared with every guest process: another
+        // process may have changed (or restored) the category since
+        // this keeper last set it, so verify the live values on
+        // every start instead of trusting sessionChanged — a
+        // non-playback category in the background means no keep-alive.
+        let category = session.category
+        let options = session.categoryOptions
+        if category != .playback || !options.contains(.mixWithOthers) {
+            if !sessionChanged {
                 // Remember LC's own configuration so stop can restore
                 // exactly what we changed — and nothing else.
                 savedCategory = category
                 savedOptions = options
                 savedMode = session.mode
-                try? session.setCategory(.playback, mode: session.mode, options: options.union(.mixWithOthers))
                 sessionChanged = true
             }
+            try? session.setCategory(.playback, mode: savedMode ?? .default, options: options.union(.mixWithOthers))
         }
         try? session.setActive(true)
         if player == nil {
@@ -283,6 +330,12 @@ final class LCHostKeepAlive {
     }
 
     private func restoreAudioSession(wasKeepingAlive: Bool) {
+        // While still backgrounded, leave the shared session alone:
+        // it is one session for the host and all guests, so restoring
+        // the category or deactivating here would cut the ground from
+        // under every guest still keeping alive. The full restore
+        // runs on the foreground stop.
+        guard UIApplication.shared.applicationState != .background else { return }
         let session = AVAudioSession.sharedInstance()
         if sessionChanged, let savedCategory, let savedOptions {
             try? session.setCategory(savedCategory, mode: savedMode ?? .default, options: savedOptions)
@@ -338,10 +391,14 @@ final class LCHostKeepAlive {
         }
         lastWatchdogConfirm = Date()
         if !interrupted && player?.isPlaying != true {
+            // Rebuild the player from scratch on the re-verified
+            // session: re-playing a player whose session was
+            // deactivated under it does not reliably recover.
+            player = nil
             if startPlayback() {
-                Self.logEvent("宿主看门狗发现播放已停止，已重新启动")
+                Self.logEvent("看门狗发现播放已停止，已重新启动")
             } else {
-                Self.logEvent("宿主看门狗恢复播放失败")
+                Self.logEvent("看门狗恢复播放失败")
             }
         }
         writeState()
@@ -358,22 +415,20 @@ final class LCHostKeepAlive {
         switch type {
         case .began:
             interrupted = true
-            // Second channel: a background task keeps the host process
-            // alive through the interruption so playback can resume after.
-            if keepingAlive && backgroundTask == .invalid {
-                Self.logEvent("宿主音频被打断，已申请后台任务保住进程")
-                backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "LCHostKeepAliveInterruption") { [weak self] in
-                    Self.logEvent("宿主打断后台任务已到期")
-                    self?.endBackgroundTask()
-                }
+            // No extra background task here: the session's own task
+            // (taken at start) already holds the process through the
+            // interruption.
+            if keepingAlive {
+                Self.logEvent("音频被打断")
             }
         case .ended:
             interrupted = false
-            endBackgroundTask()
+            // The background task belongs to the session, not to the
+            // interruption — it ends in stopSession.
             if let optionsValue = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt,
                AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume) {
                 if keepingAlive {
-                    Self.logEvent("宿主音频打断结束，恢复播放")
+                    Self.logEvent("音频打断结束，恢复播放")
                 }
                 evaluate()
             }
@@ -389,7 +444,7 @@ final class LCHostKeepAlive {
         player = nil
         sessionChanged = false
         if keepingAlive {
-            Self.logEvent("宿主媒体服务丢失或重置，已重建播放器")
+            Self.logEvent("媒体服务丢失或重置，已重建播放器")
             _ = startPlayback()
             writeState()
         }
