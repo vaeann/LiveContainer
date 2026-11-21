@@ -8,7 +8,9 @@
 //     LC 的「后台保活」设置页负责写；
 //   · 宿主判定：LCOrbitHost.isHostUI 换成本文件内的运行时判定（调 LC
 //     自己的 NSUserDefaults 类别方法，与 LCOrbitHost 同一套问法）；
-//   · 日志：LCOrbitLog 不带过来，FMKLog 直接丢弃事件。
+//   · 日志：LCOrbitLog 不带过来，FMKLog 改成本文件内的文件日志——
+//     宿主与每个游客写同一份 <AppGroup>/LCOrbit/keepalive.log，
+//     LC 设置页里查看/清空，开关是 config.json 的 keepAliveLog 键。
 // 微珠自带的 UIKit 设置子页不在本文件内：设置入口在 LC 设置页，
 // 写的就是同一批键（LCFloatingMenu.keepAliveEnabled / keepAliveMinutes /
 // keepAliveWatchdog）。
@@ -46,6 +48,7 @@ static NSString *const kModuleName = @"LCFloatingMenu";
 static NSString *const kKeyEnabled = @"keepAliveEnabled";     // 默认 YES
 static NSString *const kKeyMinutes = @"keepAliveMinutes";     // 10 / 20 / 30，默认 20
 static NSString *const kKeyWatchdog = @"keepAliveWatchdog";   // 1 自适应 / 0 关闭，默认 1
+static NSString *const kKeyLog = @"keepAliveLog";             // 诊断日志开关，默认 YES
 
 // ---- 引擎状态 ---------------------------------------------------------------
 
@@ -119,9 +122,7 @@ static BOOL FMKIsHostUI(void) {
            !((BOOL (*)(id, SEL))objc_msgSend)(NSUserDefaults.class, process);
 }
 
-static void FMKLog(NSString *event, id details) {
-    (void)event; (void)details;   // 独立版不带 LCOrbit 日志系统，事件直接丢弃
-}
+static void FMKLog(NSString *event, id details);   // 前置声明：实现在偏好读取之后（要读日志开关）
 
 // 设置读取：每次都现读 config.json（宿主改设置后各进程下次决策即生效），
 // 读失败（文件还没有 / 损坏）时用上一次读到的值兜底；再没有就返回 nil，
@@ -164,6 +165,90 @@ static NSInteger FMKWatchdogMode(void) {
 
 static NSTimeInterval FMKNow(void) {
     return NSDate.date.timeIntervalSince1970;
+}
+
+// ---- 诊断日志 ---------------------------------------------------------------
+//
+// 全流程打点：宿主与每个游客写同一份文件 <AppGroup>/LCOrbit/keepalive.log，
+// LC 设置页里查看/清空。格式：MM-dd HH:mm:ss <Tag> · <event> k=v k=v
+// （Tag：宿主 / 游客 bundle 尾段）。写入走串行队列异步落盘；日志只观察、
+// 不回调引擎（不写状态、不触发刷新），自身异常一律吞掉。
+
+static NSString *FMKLogFilePath(void) {
+    NSString *root = FMKAppGroupRoot();
+    if(!root.length) return nil;
+    return [root stringByAppendingPathComponent:@"keepalive.log"];
+}
+
+static NSString *FMKLogTag(void) {
+    if(gIsHost) return @"宿主";
+    NSString *last = NSBundle.mainBundle.bundleIdentifier.pathComponents.lastObject;
+    return last.length ? last : @"游客";
+}
+
+static BOOL FMKLogEnabled(void) {
+    id value = FMKPref(kKeyLog);
+    return value ? [value boolValue] : YES;
+}
+
+static NSString *FMKLogValueString(id value) {
+    if(!value || value == NSNull.null) return @"-";
+    if([value isKindOfClass:NSDictionary.class] || [value isKindOfClass:NSArray.class]) {
+        NSData *json = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+        if(json) return [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] ?: @"-";
+    }
+    return [value description] ?: @"-";
+}
+
+static void FMKLog(NSString *event, id details) {
+    if(!FMKLogEnabled()) return;
+    NSString *path = FMKLogFilePath();
+    if(!path.length || !event.length) return;
+    NSMutableString *line = [NSMutableString string];
+    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+    fmt.dateFormat = @"MM-dd HH:mm:ss";
+    [line appendFormat:@"%@ %@ · %@", [fmt stringFromDate:NSDate.date], FMKLogTag(), event];
+    if([details isKindOfClass:NSDictionary.class]) {
+        NSArray *keys = [details.allKeys sortedArrayUsingSelector:@selector(compare:)];
+        for(id key in keys) [line appendFormat:@" %@=%@", key, FMKLogValueString(details[key])];
+    } else if(details) {
+        [line appendFormat:@" %@", FMKLogValueString(details)];
+    }
+    [line appendString:@"\n"];
+    static dispatch_queue_t logQueue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        logQueue = dispatch_queue_create("fmkeepalive.log", DISPATCH_QUEUE_SERIAL);
+    });
+    NSString *snapshot = [line copy];
+    dispatch_async(logQueue, ^{
+        @try {
+            NSFileManager *fm = NSFileManager.defaultManager;
+            [fm createDirectoryAtPath:path.stringByDeletingLastPathComponent
+          withIntermediateDirectories:YES attributes:nil error:nil];
+            if(![fm fileExistsAtPath:path]) {
+                [snapshot writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                return;
+            }
+            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:[snapshot dataUsingEncoding:NSUTF8StringEncoding]];
+            [handle closeFile];
+        } @catch (__unused NSException *e) {}
+    });
+}
+
+// 日志封顶：超过 512 KB 只留最后 200 行，进程启动时查一次。
+static void FMKTrimLogIfNeeded(void) {
+    NSString *path = FMKLogFilePath();
+    if(!path.length) return;
+    NSDictionary *attrs = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+    if([attrs[NSFileSize] unsignedLongLongValue] <= 512 * 1024) return;
+    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    NSArray *lines = [content componentsSeparatedByString:@"\n"];
+    if(lines.count > 200) lines = [lines subarrayWithRange:NSMakeRange(lines.count - 200, 200)];
+    [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES
+                                              encoding:NSUTF8StringEncoding error:nil];
 }
 
 // ---- 静音音频 ---------------------------------------------------------------
@@ -453,6 +538,7 @@ static void FMKStartTimeoutTimer(void) {
 
 static void FMKEndBackgroundTask(void) {
     if(!gBGTaskActive) return;
+    FMKLog(@"keep-alive-bgtask-end", @{@"id": @(gBGTask)});
     [UIApplication.sharedApplication endBackgroundTask:gBGTask];
     gBGTask = 0;
     gBGTaskActive = NO;
@@ -462,6 +548,8 @@ static void FMKEndBackgroundTask(void) {
 static void FMKBeginBackgroundTask(void) {
     if(!gIsHost || gBGTaskActive) return;
     gBGTask = [UIApplication.sharedApplication beginBackgroundTaskWithExpirationHandler:^{
+        FMKLog(@"keep-alive-bgtask-expire", @{@"background": @(gInBackground),
+                                              @"timedOut": @(gTimedOut)});
         FMKEndBackgroundTask();
         if(gInBackground && !gTimedOut) {
             gPlayer = nil;      // 会话/播放器一并重建
@@ -469,6 +557,7 @@ static void FMKBeginBackgroundTask(void) {
         }
     }];
     gBGTaskActive = YES;
+    FMKLog(@"keep-alive-bgtask-begin", @{@"id": @(gBGTask)});
 }
 
 static void FMKStartPlayback(NSString *trigger) {
@@ -477,13 +566,16 @@ static void FMKStartPlayback(NSString *trigger) {
             FMKBeginBackgroundTask();
             return;
         }
+        BOOL created = NO;
+        NSError *categoryError = nil, *activeError = nil, *playerError = nil;
         if(!gPlayer) {
+            created = YES;
             AVAudioSession *session = AVAudioSession.sharedInstance;
             [session setCategory:AVAudioSessionCategoryPlayback
                      withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                           error:nil];
-            [session setActive:YES error:nil];
-            gPlayer = [[AVAudioPlayer alloc] initWithData:FMKSilentWAVData() error:nil];
+                           error:&categoryError];
+            [session setActive:YES error:&activeError];
+            gPlayer = [[AVAudioPlayer alloc] initWithData:FMKSilentWAVData() error:&playerError];
             gPlayer.numberOfLoops = -1;     // 无限循环
             gPlayer.volume = 0.0;
             [gPlayer prepareToPlay];
@@ -491,12 +583,23 @@ static void FMKStartPlayback(NSString *trigger) {
         [gPlayer play];
         if(gPlayStart <= 0) gPlayStart = FMKNow();
         FMKBeginBackgroundTask();
-        FMKLog(@"keep-alive-start", @{@"role": gIsHost ? @"host" : @"guest",
-                                       @"trigger": trigger ?: @"",
-                                       @"pid": @(getpid())});
+        NSMutableDictionary *start = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"role": gIsHost ? @"host" : @"guest",
+            @"trigger": trigger ?: @"",
+            @"pid": @(getpid()),
+            @"created": @(created),
+            @"playing": @(gPlayer.isPlaying),
+            @"currentTime": @(gPlayer.currentTime),
+        }];
+        if(categoryError) start[@"categoryError"] = categoryError.localizedDescription ?: @"";
+        if(activeError) start[@"activeError"] = activeError.localizedDescription ?: @"";
+        if(playerError) start[@"playerError"] = playerError.localizedDescription ?: @"";
+        FMKLog(@"keep-alive-start", start);
         FMKWriteState();
-    } @catch (__unused NSException *e) {
-        // 保活失败绝不能拖垮宿主/游客：静默放弃，下次触发再试。
+    } @catch (NSException *e) {
+        // 保活失败绝不能拖垮宿主/游客：记一笔就放弃，下次触发再试。
+        FMKLog(@"keep-alive-error", @{@"where": @"startPlayback",
+                                      @"exception": e.name ?: @""});
     }
 }
 
@@ -517,7 +620,8 @@ static void FMKStopPlayback(NSString *reason) {
                                              error:nil];
         FMKEndBackgroundTask();
         if(gPlayer) FMKLog(@"keep-alive-stop", @{@"reason": reason ?: @"",
-                                                  @"role": gIsHost ? @"host" : @"guest"});
+                                                  @"role": gIsHost ? @"host" : @"guest",
+                                                  @"seconds": @(gLastPlaySeconds)});
         FMKWriteState();
     } @catch (__unused NSException *e) {}
 }
@@ -553,6 +657,22 @@ static void FMKStartWatchdog(void) {
         // 2) 心跳：证明本进程仍在被调度（没被挂起）
         FMKWriteState();
 
+        // 2.5) 心跳取证：currentTime 间隔 0.5 秒双读——音频是 1 秒循环，
+        // 两读差约 0.5（模 1）= 真在播；两读相同 = 播放已冻结。
+        if(gPlayer) {
+            NSTimeInterval first = gPlayer.currentTime;
+            NSTimeInterval elapsed = FMKNow() - gBackgroundStart;
+            BOOL playing = gPlayer.isPlaying;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                FMKLog(@"keep-alive-beat", @{@"role": gIsHost ? @"host" : @"guest",
+                                              @"elapsed": @((NSInteger)elapsed),
+                                              @"playing": @(playing),
+                                              @"ct1": @(first),
+                                              @"ct2": @(gPlayer ? gPlayer.currentTime : -1)});
+            });
+        }
+
         // 3) 重建自己，让间隔随时间自适应
         FMKStartWatchdog();
     }];
@@ -565,6 +685,15 @@ static void FMKStartWatchdog(void) {
 // 所有触发点都走这里，避免多处状态打架。
 static void FMKRefresh(void) {
     static BOOL lastSkipNoGuests = NO;   // 去重：同一状态只记一条
+    // 决策取证：状态快照变了才记（refresh 被多路信号高频调用）
+    NSString *snapshot = [NSString stringWithFormat:@"bg=%d timedOut=%d enabled=%d playing=%d",
+                          gInBackground, gTimedOut, FMKEnabled(), gPlayer.isPlaying];
+    static NSString *lastSnapshot = nil;
+    if(![snapshot isEqualToString:lastSnapshot]) {
+        lastSnapshot = snapshot;
+        FMKLog(@"keep-alive-refresh", @{@"state": snapshot,
+                                        @"role": gIsHost ? @"host" : @"guest"});
+    }
     if(!FMKEnabled()) { FMKStopPlayback(@"disabled"); return; }
     if(!gInBackground) { FMKStopPlayback(@"foreground"); return; }
     if(gTimedOut) { FMKStopPlayback(@"timeout"); return; }
@@ -594,6 +723,9 @@ static void FMKEnterBackground(NSString *source) {
         @"source": source ?: @"",
         @"role": gIsHost ? @"host" : @"guest",
     }];
+    bg[@"enabled"] = @(FMKEnabled());
+    bg[@"minutes"] = @(FMKMinutes());
+    bg[@"watchdog"] = @(FMKWatchdogMode());
     if(gIsHost) [bg addEntriesFromDictionary:FMKGuestsProbe()];
     FMKLog(@"keep-alive-background", bg);
     FMKStartTimeoutTimer();   // 独立于看门狗：关着看门狗也要按设定时长停
@@ -626,9 +758,15 @@ static void FMKeepAliveInit(void) {
         if(gInstalled) return;
         gInstalled = YES;
         gIsHost = FMKIsHostUI();
+        FMKTrimLogIfNeeded();
         FMKLog(@"keep-alive-loaded", @{@"pid": @(getpid()),
                                        @"host": @(gIsHost),
-                                       @"bundle": NSBundle.mainBundle.bundleIdentifier ?: @""});
+                                       @"bundle": NSBundle.mainBundle.bundleIdentifier ?: @"",
+                                       @"enabled": @(FMKEnabled()),
+                                       @"minutes": @(FMKMinutes()),
+                                       @"watchdog": @(FMKWatchdogMode()),
+                                       @"guestInfo": @(FMKCallHostSelector(@"guestAppInfo") != nil),
+                                       @"loadToSelf": @([FMKHostDefaults() boolForKey:@"LCLoadTweaksToSelf"])});
 
         // 提前起播：WillResignActive 早于真正进后台，切后台时音频会话已是激活态。
         FMKAddObserver(UIApplicationWillResignActiveNotification, nil, ^(NSNotification *note) {
@@ -659,7 +797,12 @@ static void FMKeepAliveInit(void) {
             NSNumber *typeNum = note.userInfo[AVAudioSessionInterruptionTypeKey];
             if(!typeNum) return;
             if((AVAudioSessionInterruptionType)typeNum.unsignedIntegerValue !=
-               AVAudioSessionInterruptionTypeEnded) return;
+               AVAudioSessionInterruptionTypeEnded) {
+                if((AVAudioSessionInterruptionType)typeNum.unsignedIntegerValue ==
+                   AVAudioSessionInterruptionTypeBegan)
+                    FMKLog(@"keep-alive-interruption-began", @{@"background": @(gInBackground)});
+                return;
+            }
             if(!gInBackground || gTimedOut) return;
             FMKLog(@"keep-alive-interruption-ended", nil);
             gPlayer = nil;      // 会话可能已失效，整体重建
