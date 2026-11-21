@@ -148,6 +148,13 @@ class AppInfoProvider {
     /// currently applied.
     private var statusBarFixApplied = false
 
+    /// The app currently in front in multitask (nil when every window
+    /// is minimized, i.e. the user is on the LC home screen). The dock
+    /// marks its icon with a breathing green dot. Maintained by
+    /// updateStatusBarFix(), which already runs on every front-app
+    /// change.
+    @Published var frontAppUUID: String?
+
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
         DispatchQueue.main.async {
@@ -818,12 +825,17 @@ class AppInfoProvider {
             return
         }
         var hide = false
+        var frontUUID: String? = nil
         if let index = frontAppIndex() {
             let app = apps[index]
+            frontUUID = app.appUUID
             if let info = app.appInfo, info.statusBarFix,
                let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController {
                 hide = vc.isMaximized
             }
+        }
+        if frontAppUUID != frontUUID {
+            frontAppUUID = frontUUID
         }
         if hide != statusBarFixApplied,
            LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
@@ -844,6 +856,15 @@ class AppInfoProvider {
         let nextIndex = ((frontAppIndex() ?? -1) + 1) % apps.count
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID)
+    }
+
+    /// Close every multitask app, through the same per-app path as
+    /// the red X. The dock empties and hides itself through the
+    /// usual running-apps notifications.
+    @objc public func closeAllApps() {
+        for app in apps {
+            _ = MultitaskManager.terminateApp(container: app.appUUID)
+        }
     }
 
     @objc public func notifyDockCollapseChanged() {
@@ -921,6 +942,8 @@ public struct MultitaskDockSwiftView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
     @State private var dragOffset = CGSize.zero
     @State private var isMoving: Bool = false
+    @State private var cycleLongPressTriggered = false
+    @State private var showCloseAllConfirm = false
     @AppStorage("LCHideCollapsedDock", store: LCUtils.appGroupUserDefault) var hideCollapsedDock: Bool = false
     
     // Calculate dynamic padding based on user settings
@@ -958,12 +981,28 @@ public struct MultitaskDockSwiftView: View {
                             AppIconView(app: app)
                         }
 
-                        // Cycle button: flip to the next app in dock
-                        // order without collapsing.
+                        // Cycle button: tap flips to the next app in
+                        // dock order without collapsing; long-press
+                        // asks to close every app instead (with a
+                        // confirmation, like Weizhu's close-all).
                         CycleButtonView()
                             .onTapGesture {
+                                // A long-press already fired; the
+                                // release must not also cycle.
+                                if cycleLongPressTriggered {
+                                    cycleLongPressTriggered = false
+                                    return
+                                }
                                 dockManager.cycleToNextApp()
                             }
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.5)
+                                    .onEnded { _ in
+                                        cycleLongPressTriggered = true
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                        showCloseAllConfirm = true
+                                    }
+                            )
 
                         // Collapse button at the very bottom. Tapping
                         // outside the dock to collapse was tried three
@@ -984,6 +1023,14 @@ public struct MultitaskDockSwiftView: View {
                 }
             }
             .padding(dynamicPadding)
+            .alert("lc.multitask.closeAllTitle".loc, isPresented: $showCloseAllConfirm) {
+                Button("lc.common.cancel".loc, role: .cancel) {}
+                Button("lc.multitask.closeAllConfirm".loc, role: .destructive) {
+                    dockManager.closeAllApps()
+                }
+            } message: {
+                Text("lc.multitask.closeAllMessage".loc)
+            }
             .modifier { content in
                 if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
                     content.glassEffect(.regular, in: .rect(cornerRadius: 15))
@@ -1258,6 +1305,32 @@ class IconCacheManager {
 }
 // MARK: - App Icon View
 @available(iOS 16.0, *)
+// MARK: - Front App Marker
+/// Breathing green dot on the icon of the app currently in front,
+/// ported from Weizhu's running light (FMMakeRunningLight): a solid
+/// core over a soft halo whose opacity pulses 0.18 -> 0.78 over
+/// 1.85s.
+@available(iOS 16.0, *)
+private struct FrontAppMarkerView: View {
+    @State private var breathing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 13, height: 13)
+                .blur(radius: 2)
+                .opacity(breathing ? 0.78 : 0.18)
+            Circle()
+                .fill(Color.green)
+                .frame(width: 8, height: 8)
+                .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1))
+        }
+        .animation(.easeInOut(duration: 1.85).repeatForever(autoreverses: true), value: breathing)
+        .onAppear { breathing = true }
+    }
+}
+
 struct AppIconView: View {
     let app: DockAppModel
     @State private var isPressed = false
@@ -1283,6 +1356,12 @@ struct AppIconView: View {
             }
         }
         .frame(width: iconSize, height: iconSize)
+        .overlay(alignment: .bottomTrailing) {
+            if dockManager.frontAppUUID == app.appUUID {
+                FrontAppMarkerView()
+                    .offset(x: 3, y: 3)
+            }
+        }
         .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .scaleEffect(isPressed ? 1.15 : 1.0)
         .animation(.easeInOut(duration: 0.1), value: isPressed)
