@@ -39,6 +39,7 @@ struct LCKeepAliveSettingView: View {
     @AppStorage("LCKeepAliveEnabled", store: LCUtils.appGroupUserDefault) var keepAliveEnabled = true
     @AppStorage("LCKeepAliveDurationMinutes", store: LCUtils.appGroupUserDefault) var durationMinutes = 20
     @AppStorage("LCKeepAliveWatchdogEnabled", store: LCUtils.appGroupUserDefault) var watchdogEnabled = true
+    @AppStorage("LCKeepAliveLogEnabled", store: LCUtils.appGroupUserDefault) var logEnabled = true
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) var darkModeIcon = false
 
     @State private var records: [KeepAliveRecord] = []
@@ -73,6 +74,23 @@ struct LCKeepAliveSettingView: View {
                 }
             } footer: {
                 Text("lc.keepAlive.desc".loc)
+            }
+
+            // Temporary diagnostic log (remove together with its
+            // writers once keep-alive is confirmed healthy).
+            Section {
+                Toggle(isOn: $logEnabled) {
+                    Text("lc.keepAlive.logEnabled".loc)
+                }
+                NavigationLink {
+                    LCKeepAliveLogView()
+                } label: {
+                    Text("lc.keepAlive.logView".loc)
+                }
+            } header: {
+                Text("lc.keepAlive.log".loc)
+            } footer: {
+                Text("lc.keepAlive.logDesc".loc)
             }
 
             Section {
@@ -241,5 +259,60 @@ struct LCKeepAliveSettingView: View {
             return a > b
         }
         records = loaded
+    }
+}
+
+/// Viewer for the temporary keep-alive diagnostic log: one shared
+/// file written by the host keeper and every guest engine (see
+/// LCKeepAliveLogEvent in LCBootstrap.m). Newest first, last 200
+/// lines; the trash button truncates the file.
+struct LCKeepAliveLogView: View {
+    @State private var lines: [String] = []
+
+    private var logURL: URL {
+        LCPath.lcGroupDocPath
+            .appendingPathComponent("KeepAliveState")
+            .appendingPathComponent("keepalive.log")
+    }
+
+    var body: some View {
+        List {
+            if lines.isEmpty {
+                Text("lc.keepAlive.logEmpty".loc)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(lines.indices, id: \.self) { index in
+                    Text(lines[index])
+                        .font(.footnote.monospaced())
+                }
+            }
+        }
+        .navigationTitle("lc.keepAlive.log".loc)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("lc.keepAlive.logClear".loc) {
+                    clearLog()
+                }
+            }
+        }
+        .onAppear { reload() }
+    }
+
+    private func reload() {
+        guard let content = try? String(contentsOf: logURL, encoding: .utf8) else {
+            lines = []
+            return
+        }
+        lines = Array(content
+            .components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
+            .suffix(200)
+            .reversed())
+    }
+
+    private func clearLog() {
+        try? Data().write(to: logURL, options: .atomic)
+        lines = []
     }
 }

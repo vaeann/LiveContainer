@@ -44,6 +44,52 @@ final class LCHostKeepAlive {
 
     private var started = false
 
+    // MARK: Diagnostic log (temporary — see LCKeepAliveLogEvent in
+    // LCBootstrap.m; remove together with its switch once keep-alive
+    // is confirmed healthy)
+
+    private static var lastLogLine: String?
+    private static var lastLogTime: TimeInterval = 0
+
+    static func logEvent(_ event: String) {
+        let defaults = LCUtils.appGroupUserDefault
+        if let enabled = defaults.object(forKey: "LCKeepAliveLogEnabled") as? Bool, !enabled {
+            return
+        }
+        // The same event can be evaluated twice in quick succession;
+        // drop an identical line repeated within 2 seconds.
+        let body = "[LiveContainer] \(event)"
+        let now = Date().timeIntervalSinceReferenceDate
+        if body == lastLogLine && now - lastLogTime < 2 {
+            return
+        }
+        lastLogLine = body
+        lastLogTime = now
+
+        let dir = LCPath.lcGroupDocPath.appendingPathComponent("KeepAliveState")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("keepalive.log")
+        // Bound the file: past ~512 KB keep only the newest 200 lines.
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 512 * 1024,
+           let content = try? String(contentsOf: url, encoding: .utf8) {
+            let lines = content.components(separatedBy: "\n")
+            if lines.count > 200 {
+                try? lines.suffix(200).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let line = "\(formatter.string(from: Date())) \(body)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     // MARK: Settings
 
     private var keepAliveEnabled: Bool {
@@ -100,7 +146,7 @@ final class LCHostKeepAlive {
     }
 
     private func enterForeground() {
-        stopSession(timedOut: false)
+        stopSession(timedOut: false, reason: "LC 回到前台")
         capReached = false
         interrupted = false
     }
@@ -112,14 +158,25 @@ final class LCHostKeepAlive {
         if MultitaskManager.isMultitasking() {
             tryStartSession()
         } else if keepingAlive {
-            stopSession(timedOut: false)
+            stopSession(timedOut: false, reason: "已无游客在跑")
         }
     }
 
     // MARK: Session control
 
     private func tryStartSession() {
-        guard keepAliveEnabled, !capReached, !interrupted else { return }
+        guard keepAliveEnabled else {
+            Self.logEvent("宿主跳过保活：保活总开关已关闭")
+            return
+        }
+        guard !capReached else {
+            Self.logEvent("宿主跳过保活：已达到时长上限")
+            return
+        }
+        guard !interrupted else {
+            Self.logEvent("宿主跳过保活：正被音频打断")
+            return
+        }
         guard UIApplication.shared.applicationState == .background else { return }
         guard MultitaskManager.isMultitasking() else { return }
         if startPlayback() {
@@ -128,13 +185,16 @@ final class LCHostKeepAlive {
                 lastStopTimedOut = false
                 sessionStart = Date()
                 scheduleCapTimer()
+                Self.logEvent("宿主保活开始")
             }
             scheduleWatchdog()
             writeState()
+        } else {
+            Self.logEvent("宿主保活开始失败：音频未能启动")
         }
     }
 
-    private func stopSession(timedOut: Bool) {
+    private func stopSession(timedOut: Bool, reason: String) {
         let wasKeepingAlive = keepingAlive
         keepingAlive = false
         capTimer?.invalidate()
@@ -154,6 +214,9 @@ final class LCHostKeepAlive {
         }
         lastStopTimedOut = timedOut
         writeState()
+        if wasKeepingAlive {
+            Self.logEvent("宿主保活停止：\(reason)（本次 \(Int(lastSeconds)) 秒）")
+        }
     }
 
     // MARK: Audio
@@ -240,7 +303,7 @@ final class LCHostKeepAlive {
         let minutes = durationMinutes
         guard minutes > 0 else { return } // unlimited
         let timer = Timer(timeInterval: TimeInterval(minutes * 60), repeats: false) { [weak self] _ in
-            self?.stopSession(timedOut: true)
+            self?.stopSession(timedOut: true, reason: "达到时长上限")
         }
         RunLoop.main.add(timer, forMode: .common)
         capTimer = timer
@@ -266,16 +329,20 @@ final class LCHostKeepAlive {
         guard keepingAlive else { return }
         if !keepAliveEnabled {
             // The global switch is the fuse: turning it off stops everything.
-            stopSession(timedOut: false)
+            stopSession(timedOut: false, reason: "保活总开关被关闭")
             return
         }
         if !MultitaskManager.isMultitasking() {
-            stopSession(timedOut: false)
+            stopSession(timedOut: false, reason: "已无游客在跑")
             return
         }
         lastWatchdogConfirm = Date()
         if !interrupted && player?.isPlaying != true {
-            _ = startPlayback()
+            if startPlayback() {
+                Self.logEvent("宿主看门狗发现播放已停止，已重新启动")
+            } else {
+                Self.logEvent("宿主看门狗恢复播放失败")
+            }
         }
         writeState()
         scheduleWatchdog()
@@ -294,7 +361,9 @@ final class LCHostKeepAlive {
             // Second channel: a background task keeps the host process
             // alive through the interruption so playback can resume after.
             if keepingAlive && backgroundTask == .invalid {
+                Self.logEvent("宿主音频被打断，已申请后台任务保住进程")
                 backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "LCHostKeepAliveInterruption") { [weak self] in
+                    Self.logEvent("宿主打断后台任务已到期")
                     self?.endBackgroundTask()
                 }
             }
@@ -303,6 +372,9 @@ final class LCHostKeepAlive {
             endBackgroundTask()
             if let optionsValue = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt,
                AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume) {
+                if keepingAlive {
+                    Self.logEvent("宿主音频打断结束，恢复播放")
+                }
                 evaluate()
             }
         @unknown default:
@@ -317,6 +389,7 @@ final class LCHostKeepAlive {
         player = nil
         sessionChanged = false
         if keepingAlive {
+            Self.logEvent("宿主媒体服务丢失或重置，已重建播放器")
             _ = startPlayback()
             writeState()
         }

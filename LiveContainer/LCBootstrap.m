@@ -413,6 +413,71 @@ static NSData *LCKASilentWAVData(void) {
     return cached;
 }
 
+// Temporary keep-alive diagnostic log (added 2026-11-21 at Ann's
+// request to chase sessions that end after a few seconds; REMOVE
+// together with its settings switch once keep-alive is confirmed
+// healthy). The host keeper and every guest engine append to one
+// shared file, one line per event:
+//   2026-11-21 15:59:02 [source] event text
+// Recording is gated by LCKeepAliveLogEnabled in the shared defaults
+// (default on) so it can be silenced without a rebuild.
+static void LCKeepAliveLogEvent(NSString *source, NSString *event) {
+    @try {
+        NSUserDefaults *defaults = [NSUserDefaults lcSharedDefaults];
+        NSNumber *enabled = [defaults objectForKey:@"LCKeepAliveLogEnabled"];
+        if (enabled && !enabled.boolValue) {
+            return;
+        }
+        // The same notification can arrive twice (app + extension
+        // host); drop an identical line repeated within 2 seconds.
+        static NSString *lastLine = nil;
+        static NSTimeInterval lastTime = 0;
+        NSString *body = [NSString stringWithFormat:@"[%@] %@", source, event];
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if ([body isEqualToString:lastLine] && now - lastTime < 2) {
+            return;
+        }
+        lastLine = body;
+        lastTime = now;
+
+        NSString *groupPath = [NSUserDefaults lcAppGroupPath];
+        if (!groupPath) {
+            return;
+        }
+        NSString *dir = [[groupPath stringByAppendingPathComponent:@"LiveContainer"] stringByAppendingPathComponent:@"KeepAliveState"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *path = [dir stringByAppendingPathComponent:@"keepalive.log"];
+
+        // Bound the file: past ~512 KB keep only the newest 200 lines.
+        NSDictionary *attrs = [fm attributesOfItemAtPath:path error:nil];
+        if ([attrs fileSize] > 512 * 1024) {
+            NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            NSArray *lines = [content componentsSeparatedByString:@"\n"];
+            if (lines.count > 200) {
+                lines = [lines subarrayWithRange:NSMakeRange(lines.count - 200, 200)];
+            }
+            [[lines componentsJoinedByString:@"\n"] writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+
+        static NSDateFormatter *formatter = nil;
+        if (!formatter) {
+            formatter = [[NSDateFormatter alloc] init];
+            formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        }
+        NSString *line = [NSString stringWithFormat:@"%@ %@\n", [formatter stringFromDate:[NSDate date]], body];
+        NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (handle) {
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } else {
+            [data writeToFile:path atomically:YES];
+        }
+    } @catch (__unused NSException *e) {}
+}
+
 @interface LCKeepAliveEngine : NSObject
 @property (nonatomic, copy) NSString *dataUUID;
 @property (nonatomic, copy) NSString *bundleID;
@@ -529,6 +594,10 @@ static NSData *LCKASilentWAVData(void) {
     } @catch (__unused NSException *e) {}
 }
 
+- (void)logEvent:(NSString *)event {
+    LCKeepAliveLogEvent(self.bundleID ?: @"guest", event);
+}
+
 #pragma mark Audio session / player
 
 - (LCKAAudioSession *)audioSession {
@@ -604,10 +673,19 @@ static NSData *LCKASilentWAVData(void) {
 
 - (void)tryStartSession {
     @try {
-        if (!self.inBackground || self.capReached || self.interrupted) {
+        if (!self.inBackground) {
+            return;
+        }
+        if (self.capReached) {
+            [self logEvent:@"跳过保活：已达到时长上限"];
+            return;
+        }
+        if (self.interrupted) {
+            [self logEvent:@"跳过保活：正被音频打断"];
             return;
         }
         if (![self keepAliveEnabled]) {
+            [self logEvent:@"跳过保活：保活总开关已关闭"];
             return;
         }
         if ([self startPlayback]) {
@@ -616,14 +694,17 @@ static NSData *LCKASilentWAVData(void) {
                 self.lastStopTimedOut = NO;
                 self.sessionStart = [NSDate date];
                 [self scheduleCapTimer];
+                [self logEvent:@"保活开始"];
             }
             [self scheduleWatchdog];
             [self writeState];
+        } else {
+            [self logEvent:@"保活开始失败：音频未能启动"];
         }
     } @catch (__unused NSException *e) {}
 }
 
-- (void)stopSessionWithTimedOut:(BOOL)timedOut {
+- (void)stopSessionWithTimedOut:(BOOL)timedOut reason:(NSString *)reason {
     @try {
         BOOL wasKeepingAlive = self.keepingAlive;
         self.keepingAlive = NO;
@@ -643,6 +724,9 @@ static NSData *LCKASilentWAVData(void) {
         }
         self.lastStopTimedOut = timedOut;
         [self writeState];
+        if (wasKeepingAlive) {
+            [self logEvent:[NSString stringWithFormat:@"保活停止：%@（本次 %d 秒）", reason, (int)self.lastSeconds]];
+        }
     } @catch (__unused NSException *e) {}
 }
 
@@ -650,7 +734,7 @@ static NSData *LCKASilentWAVData(void) {
     self.inBackground = NO;
     self.capReached = NO;
     self.interrupted = NO;
-    [self stopSessionWithTimedOut:NO];
+    [self stopSessionWithTimedOut:NO reason:@"回到前台"];
 }
 
 #pragma mark Duration cap (independent timer, not the watchdog)
@@ -672,7 +756,7 @@ static NSData *LCKASilentWAVData(void) {
 }
 
 - (void)capTimerFired {
-    [self stopSessionWithTimedOut:YES];
+    [self stopSessionWithTimedOut:YES reason:@"达到时长上限"];
 }
 
 #pragma mark Watchdog (adaptive interval, heartbeat for the status panel)
@@ -702,12 +786,16 @@ static NSData *LCKASilentWAVData(void) {
         }
         if (![self keepAliveEnabled]) {
             // The global switch is the fuse: turning it off stops everything.
-            [self stopSessionWithTimedOut:NO];
+            [self stopSessionWithTimedOut:NO reason:@"保活总开关被关闭"];
             return;
         }
         self.lastWatchdogConfirm = [NSDate date];
         if (self.inBackground && !self.capReached && !self.interrupted && !self.player.playing) {
-            [self startPlayback];
+            if ([self startPlayback]) {
+                [self logEvent:@"看门狗发现播放已停止，已重新启动"];
+            } else {
+                [self logEvent:@"看门狗恢复播放失败"];
+            }
         }
         [self writeState];
         [self scheduleWatchdog];
@@ -773,8 +861,10 @@ static NSData *LCKASilentWAVData(void) {
             }
             if (type.unsignedIntegerValue == 0) { // AVAudioSessionInterruptionTypeBegan
                 weakSelf.interrupted = YES;
+                [weakSelf logEvent:@"音频被打断"];
             } else if (type.unsignedIntegerValue == 1) { // AVAudioSessionInterruptionTypeEnded
                 weakSelf.interrupted = NO;
+                [weakSelf logEvent:@"音频打断结束，尝试恢复保活"];
                 NSNumber *options = note.userInfo[@"AVAudioSessionInterruptionOptionKey"];
                 if (options && (options.unsignedIntegerValue & 0x1)) { // ShouldResume
                     [weakSelf tryStartSession];
@@ -790,6 +880,7 @@ static NSData *LCKASilentWAVData(void) {
         weakSelf.player = nil;
         weakSelf.sessionChanged = NO;
         if (weakSelf.keepingAlive) {
+            [weakSelf logEvent:@"媒体服务丢失或重置，已重建播放器"];
             [weakSelf tryStartSession];
         }
     };
