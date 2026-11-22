@@ -635,12 +635,13 @@ static const CGFloat LCResizeHandleSize = 44;
         [self.minimizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(minimizeWindow)]];
         [self.view addSubview:self.minimizeHandle];
     }
-    // 最大化时只留左下最小化把手（Ann 2026-11-22 定）：左上移动
-    // 本来就无意义（moveWindow 直接返回），右上还原也不留——
-    // 上方两角不好点；还原走展开坞里双击当前 App 图标。
+    // 最大化时四角把手全撤（Ann 2026-11-22 定，左下是最后撤的）：
+    // 左上移动无意义（moveWindow 直接返回），右上还原不好点，
+    // 左下最小化贴着圆角也不好点。最大化后的还原走展开坞里
+    // 双击当前 App 图标。
     self.moveHandle.hidden = !active || self.isMaximized;
     self.maximizeHandle.hidden = !active || self.isMaximized;
-    self.minimizeHandle.hidden = !active;
+    self.minimizeHandle.hidden = !active || self.isMaximized;
 }
 
 - (void)updateVerticalConstraints {
