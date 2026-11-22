@@ -21,6 +21,7 @@
 // 同一个文件），以及游客模块的 base64 部署（syncGuestModule）。
 
 import AVFoundation
+import CryptoKit
 import UIKit
 
 /// Shared keep-alive debug log: host, guests and LC itself append to
@@ -46,14 +47,15 @@ enum CZFKeepAliveLog {
         queue.async {
             let url = fileURL
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let suffix = details.keys.sorted().map { "\($0)=\(details[$0]!)" }.joined(separator: " ")
+            let suffix = details.keys.sorted().compactMap { key in details[key].map { "\(key)=\($0)" } }.joined(separator: " ")
             let line = "\(formatter.string(from: Date())) \(tag) · \(event)\(suffix.isEmpty ? "" : " " + suffix)\n"
+            guard let data = line.data(using: .utf8) else { return }
             if let handle = try? FileHandle(forWritingTo: url) {
                 handle.seekToEndOfFile()
-                handle.write(line.data(using: .utf8)!)
+                handle.write(data)
                 try? handle.close()
             } else {
-                try? line.write(to: url, atomically: true, encoding: .utf8)
+                try? data.write(to: url)
             }
         }
     }
@@ -374,7 +376,12 @@ final class CZFHostKeepAlive {
             CZFKeepAliveLog.event("LC", "deploy-failed", ["reason": "resource-missing-or-undecodable"])
             return
         }
-        CZFKeepAliveLog.event("LC", "deploy", ["bytes": "\(data.count)"])
+        // 签名纪律：dylib 内容变了才重签；另存一份已签摘要在标准
+        // defaults 里（重装 LC 会清掉），摘要对不上时也重签一次——
+        // 覆盖“重装后字节没变但签名身份变了”的情况，常态启动不重签。
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let alreadySigned = UserDefaults.standard.string(forKey: "CZFKeepAliveSignedDigest") == digest
+        CZFKeepAliveLog.event("LC", "deploy", ["bytes": "\(data.count)", "alreadySigned": "\(alreadySigned)"])
         for folder in folders {
             try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
             let dest = folder.appendingPathComponent("CZFKeepAlive.dylib")
@@ -391,9 +398,14 @@ final class CZFHostKeepAlive {
                 }
             }
             CZFKeepAliveLog.event("LC", "deployed", ["folder": folder.lastPathComponent, "updated": "\(updated)"])
+            guard updated || !alreadySigned else {
+                CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "skipped": "unchanged"])
+                continue
+            }
             Task {
                 do {
                     try await LCUtils.signTweaks(tweakFolderUrl: folder, force: true)
+                    UserDefaults.standard.set(digest, forKey: "CZFKeepAliveSignedDigest")
                     CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "true"])
                 } catch {
                     CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "false", "error": error.localizedDescription])
