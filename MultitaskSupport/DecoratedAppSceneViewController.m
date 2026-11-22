@@ -24,6 +24,7 @@ static const CGFloat LCWindowTopCrop = 14;
 @interface DecoratedAppSceneViewController() <UIGestureRecognizerDelegate>
 @property(nonatomic) NSArray* activatedVerticalConstraints;
 @property(nonatomic) UIPanGestureRecognizer *moveGesture;
+@property(nonatomic) UITapGestureRecognizer *barTapGesture;
 @property(nonatomic) NSString* dataUUID;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
@@ -31,11 +32,9 @@ static const CGFloat LCWindowTopCrop = 14;
 
 @property(nonatomic) UIView *lightsView;
 @property(nonatomic) UIButton *menuButton;
-@property(nonatomic) NSLayoutConstraint *menuButtonTrailing;
 @property(nonatomic) bool isAppTerminationRequested;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
-- (void)refreshBarOverlay;
 @end
 
 @implementation DecoratedAppSceneViewController
@@ -54,33 +53,36 @@ static const CGFloat LCWindowTopCrop = 14;
     
     [MultitaskDockManager.shared addRunningApp:windowName appUUID:dataUUID view:self.view];
     
-    // 操作栏（Ann 2026-11-22 定，macOS 风）：左边三个实心红黄绿
-    // 圆钮（关 / 最小化 / 最大化，圆内不放符号，就是 macOS 那种
-    // 纯色圆点），中间不显示 App 名字，右边只留一个箭头钮，点
-    // 开还是原来的 PID 菜单（见 windowMenuElements）。
+    // 操作栏（Ann 2026-11-22 定，macOS 风）：左边一排——三个
+    // 实心红黄绿圆点（关 / 最小化 / 最大化，圆内不放符号）加一
+    // 个箭头钮（点开还是原来的 PID 菜单，见 windowMenuElements），
+    // 等距排列；中间不显示 App 名字，右边留空。
     // 按钮不走导航栏的 item 系统：这条独立栏（非导航控制器托管）
     // 的 item 布局由栏内部说了算——自定义视图会被拉宽（箭头圆
     // 变药丸）、整组偏下约 4 点。改成窗口视图上的悬浮层：约束
     // 对着栏的中心线定位，栏只剩背景和拖动。
-    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 36)];
+    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 128, 36)];
     self.lightsView = lightsView;
     UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] action:@selector(closeWindow)];
-    closeButton.frame = CGRectMake(0, 0, 26, 36);
+    closeButton.frame = CGRectMake(0, 0, 32, 36);
     [lightsView addSubview:closeButton];
     UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] action:@selector(minimizeWindow)];
-    minimizeButton.frame = CGRectMake(28, 0, 26, 36);
+    minimizeButton.frame = CGRectMake(32, 0, 32, 36);
     [lightsView addSubview:minimizeButton];
     self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] action:@selector(maximizeWindow)];
-    self.maximizeButton.frame = CGRectMake(56, 0, 26, 36);
+    self.maximizeButton.frame = CGRectMake(64, 0, 32, 36);
     [lightsView addSubview:self.maximizeButton];
 
-    // 箭头钮就是演示图那样：圆形描边里一个箭头图标，30×30。
+    // 箭头钮排在绿点后面做第四个（Ann 2026-11-22 晚定）：和圆
+    // 点同样的间距、同样的点击区，不要圆圈描边，只留箭头本
+    // 身。箭头用苹果自家的 SF Symbol，字号和圆点同径（16），
+    // 在 36 高的钮里居中、和圆点同一条中心线（Ann 晚补：不能
+    // 偏下、不能比圆点小）。四个钮的点击区是 32×36 且首尾相
+    // 接、没有缝——点空会落到画面上触发 App 自己的顶栏动作
+    // （呼出搜索、回顶部），钮又小，必须把可点范围铺满。
     UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    menuButton.frame = CGRectMake(0, 0, 30, 30);
-    menuButton.layer.cornerRadius = 15;
-    menuButton.layer.borderWidth = 1;
-    menuButton.layer.borderColor = UIColor.separatorColor.CGColor;
-    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIFontWeightSemibold];
+    menuButton.frame = CGRectMake(96, 0, 32, 36);
+    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIFontWeightSemibold];
     [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
     menuButton.tintColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
@@ -90,31 +92,21 @@ static const CGFloat LCWindowTopCrop = 14;
     menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
     menuButton.showsMenuAsPrimaryAction = YES;
     self.menuButton = menuButton;
+    [lightsView addSubview:menuButton];
 
-    // 悬浮层定位：三钮组左缘离窗边 20（第一个圆点左缘 26 ——
-    // Ann 2026-11-22 晚定：贴 12 太靠左，回到早先那版的距离）；
-    // 箭头钮右边距 12；两者都对着栏的垂直中心，栏在顶部还是
-    // 底部都跟着栏走。
+    // 悬浮层定位：整组左缘离窗边 18（第一个圆点左缘 26）；
+    // 对着栏的垂直中心，栏在顶部还是底部都跟着栏走。
     [self.view addSubview:lightsView];
-    [self.view addSubview:menuButton];
     lightsView.translatesAutoresizingMaskIntoConstraints = NO;
-    menuButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.menuButtonTrailing = [menuButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-26];
     [NSLayoutConstraint activateConstraints:@[
-        [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+        [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:18],
         [lightsView.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
-        [lightsView.widthAnchor constraintEqualToConstant:82],
+        [lightsView.widthAnchor constraintEqualToConstant:128],
         [lightsView.heightAnchor constraintEqualToConstant:36],
-        [menuButton.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
-        [menuButton.widthAnchor constraintEqualToConstant:30],
-        [menuButton.heightAnchor constraintEqualToConstant:30],
-        self.menuButtonTrailing,
     ]];
     if ([self shouldHideWindowBar]) {
         lightsView.hidden = YES;
-        menuButton.hidden = YES;
     }
-    [self refreshBarOverlay];
 
     return self;
 }
@@ -158,9 +150,9 @@ static const CGFloat LCWindowTopCrop = 14;
 // 不放符号（Ann 2026-11-22 晚定，跟 macOS 一样）。
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(6, 11, 14, 14)];
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(8, 10, 16, 16)];
     dot.backgroundColor = color;
-    dot.layer.cornerRadius = 7;
+    dot.layer.cornerRadius = 8;
     dot.layer.borderWidth = 0.5;
     dot.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
     dot.userInteractionEnabled = NO;
@@ -172,12 +164,7 @@ static const CGFloat LCWindowTopCrop = 14;
 // 箭头钮的位置恒定（右、居中于栏）；只有操作栏在底部时，右下
 // 角有缩放把手，箭头钮的右边距加大给把手让位（左置三钮不受
 // 影响）。
-- (void)refreshBarOverlay {
-    BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-    // 右边距和左边第一个圆点的左边距对齐（26，Ann 2026-11-22）；
-    // 底栏模式要让开右下角的缩放把手，保持 -46。
-    self.menuButtonTrailing.constant = bottomWindowBar ? -46 : -26;
-}
+
 
 - (void)setupDecoratedView {
     CGFloat navBarHeight = LCWindowBarHeight;
@@ -262,6 +249,13 @@ static const CGFloat LCWindowTopCrop = 14;
     moveGesture.delegate = self;
     self.moveGesture = moveGesture;
     [self.view addGestureRecognizer:moveGesture];
+    // 栏的空白处也要自己接住点击：不接住就会穿到画面上，触发
+    // App 自己的顶栏点击动作（呼出搜索栏、滚回顶部）——Ann
+    // 2026-11-22 晚指出。这个点击不做任何事，纯粹是接住。
+    UITapGestureRecognizer *barTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(barStripTapped:)];
+    barTap.delegate = self;
+    self.barTapGesture = barTap;
+    [self.view addGestureRecognizer:barTap];
 
     // Resize handle (idea stolen from Notes debugging window)
     UIPanGestureRecognizer *resizeGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeWindow:)];
@@ -572,9 +566,8 @@ static const CGFloat LCWindowTopCrop = 14;
         } else {
             [self.view insertArrangedSubview:self.navigationBar atIndex:0];
         }
-        // 按钮位置不随栏的位置变（恒左三钮、右箭头）；变的只是
-        // 底部栏时箭头钮要给右下缩放把手让位（refreshBarOverlay）。
-        [self refreshBarOverlay];
+        // 按钮组恒在左侧、跟着栏的中心线走，栏换到顶部还是
+        // 底部都不用单独调整。
         [self updateVerticalConstraints];
         
         if(_isMaximized) {
@@ -586,11 +579,11 @@ static const CGFloat LCWindowTopCrop = 14;
     }];
 }
 
-// 拖动手势的生效范围：只在操作栏的条带内、且避开悬浮层的
-// 按钮和右下角的缩放把手；栏隐藏时不生效（左上角把手自己带
-// 拖动）。其余手势一律放行。
+// 栏上手势（拖动 + 空白点击）的生效范围：只在操作栏的条带
+// 内、且避开悬浮层的按钮组和右下角的缩放把手；栏隐藏时不
+// 生效（左上角把手自己带拖动）。其余手势一律放行。
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-    if (gestureRecognizer != self.moveGesture) return YES;
+    if (gestureRecognizer != self.moveGesture && gestureRecognizer != self.barTapGesture) return YES;
     if ([self shouldHideWindowBar]) return NO;
     CGPoint location = [gestureRecognizer locationInView:self.view];
     CGSize size = self.view.bounds.size;
@@ -600,9 +593,14 @@ static const CGFloat LCWindowTopCrop = 14;
         : CGRectMake(0, 0, size.width, LCWindowBarHeight);
     if (!CGRectContainsPoint(barRect, location)) return NO;
     if (self.lightsView && !self.lightsView.hidden && CGRectContainsPoint(self.lightsView.frame, location)) return NO;
-    if (self.menuButton && !self.menuButton.hidden && CGRectContainsPoint(self.menuButton.frame, location)) return NO;
+
     if (self.resizeHandle && CGRectContainsPoint(self.resizeHandle.frame, location)) return NO;
     return YES;
+}
+
+- (void)barStripTapped:(UITapGestureRecognizer *)sender {
+    // Intentionally empty: the recognizer exists only to claim
+    // taps on the bar's blank areas so they never reach the app.
 }
 
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
@@ -698,11 +696,9 @@ static const CGFloat LCWindowTopCrop = 14;
         CGFloat navBarHeight = hideWindowBar ? 0 : LCWindowBarHeight;
         self.navigationBar.alpha = hideWindowBar ? 0 : 1;
         self.navigationBar.hidden = hideWindowBar;
-        // 悬浮层的钮跟栏一起显隐。
+        // 悬浮层的钮跟栏一起显隐（箭头钮在钮组里面，一起走）。
         self.lightsView.alpha = hideWindowBar ? 0 : 1;
         self.lightsView.hidden = hideWindowBar;
-        self.menuButton.alpha = hideWindowBar ? 0 : 1;
-        self.menuButton.hidden = hideWindowBar;
         
         // Update safe area insets
         if(self.isMaximized) {
