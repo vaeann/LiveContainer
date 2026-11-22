@@ -98,7 +98,7 @@ static const CGFloat LCWindowTopCrop = 14;
     [self.view addSubview:menuButton];
     lightsView.translatesAutoresizingMaskIntoConstraints = NO;
     menuButton.translatesAutoresizingMaskIntoConstraints = NO;
-    self.menuButtonTrailing = [menuButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12];
+    self.menuButtonTrailing = [menuButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-26];
     [NSLayoutConstraint activateConstraints:@[
         [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
         [lightsView.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
@@ -173,7 +173,9 @@ static const CGFloat LCWindowTopCrop = 14;
 // 影响）。
 - (void)refreshBarOverlay {
     BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-    self.menuButtonTrailing.constant = bottomWindowBar ? -46 : -12;
+    // 右边距和左边第一个圆点的左边距对齐（26，Ann 2026-11-22）；
+    // 底栏模式要让开右下角的缩放把手，保持 -46。
+    self.menuButtonTrailing.constant = bottomWindowBar ? -46 : -26;
 }
 
 - (void)setupDecoratedView {
@@ -196,6 +198,15 @@ static const CGFloat LCWindowTopCrop = 14;
     // Navigation bar
     UINavigationBar *navigationBar = [[UINavigationBar alloc] initWithFrame:CGRectMake(0, 0, self.view.frame.size.width, navBarHeight)];
     navigationBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    // 栏背景必须不透明：画面伸到栏底下之后，栏默认的毛玻璃背景
+    // 采不到跨进程画面的内容，直接透掉、看着像没有白条了
+    // （Ann 2026-11-22 真机）。给一个和窗口底色一致的实色背景。
+    UINavigationBarAppearance *barAppearance = [[UINavigationBarAppearance alloc] init];
+    [barAppearance configureWithOpaqueBackground];
+    barAppearance.backgroundColor = UIColor.systemBackgroundColor;
+    navigationBar.standardAppearance = barAppearance;
+    navigationBar.scrollEdgeAppearance = barAppearance;
+    navigationBar.translucent = NO;
     // Start in the final state: updateVerticalConstraints animates over
     // 0.3s, which made the bar flash on screen when a window opens
     // maximized with the bar disabled.
