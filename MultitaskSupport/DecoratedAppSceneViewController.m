@@ -13,8 +13,9 @@
 // 不再跟栏高绑在一起）。
 static const CGFloat LCWindowBarHeight = 36;
 static const CGFloat LCResizeHandleSize = 44;
-@interface DecoratedAppSceneViewController()
+@interface DecoratedAppSceneViewController() <UIGestureRecognizerDelegate>
 @property(nonatomic) NSArray* activatedVerticalConstraints;
+@property(nonatomic) UIPanGestureRecognizer *moveGesture;
 @property(nonatomic) NSString* dataUUID;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
@@ -217,10 +218,17 @@ static const CGFloat LCResizeHandleSize = 44;
     self.contentView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [fixedPositionContentView addSubview:self.contentView];
     
+    // 拖动手势挂在窗口视图上、靠 delegate 只在栏的条带内生效。
+    // 挂栏本身收不到触摸（Ann 2026-11-23 真机对照：隐藏操作栏
+    // 时左上角把手的拖动正常，同一个 moveWindow 方法；栏在两
+    // 种外观下都拖不动，整条栏——圆点区和右边空白处——都不
+    // 行）。挂到窗口层能收到其所有子视图的触摸，再按落点过滤。
     UIPanGestureRecognizer *moveGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveWindow:)];
     moveGesture.minimumNumberOfTouches = 1;
     moveGesture.maximumNumberOfTouches = 1;
-    [self.navigationBar addGestureRecognizer:moveGesture];
+    moveGesture.delegate = self;
+    self.moveGesture = moveGesture;
+    [self.view addGestureRecognizer:moveGesture];
 
     // Resize handle (idea stolen from Notes debugging window)
     UIPanGestureRecognizer *resizeGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeWindow:)];
@@ -542,6 +550,25 @@ static const CGFloat LCResizeHandleSize = 44;
         }
         [self.view layoutIfNeeded];
     }];
+}
+
+// 窗口拖动的生效范围：只在操作栏的条带内（栏在顶还是在底
+// 跟着设置走），且避开右下角的缩放把手；栏隐藏时不生效
+// （左上角把手自己带拖动）。条带内包括圆点那一排——从按钮
+// 上起手拖就是拖窗口，轻点仍是按钮，和上游栏内按钮的行为
+// 一致。其余手势一律放行。
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if (gestureRecognizer != self.moveGesture) return YES;
+    if ([self shouldHideWindowBar]) return NO;
+    CGPoint location = [gestureRecognizer locationInView:self.view];
+    CGSize size = self.view.bounds.size;
+    BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
+    CGRect barRect = bottomWindowBar
+        ? CGRectMake(0, size.height - LCWindowBarHeight, size.width, LCWindowBarHeight)
+        : CGRectMake(0, 0, size.width, LCWindowBarHeight);
+    if (!CGRectContainsPoint(barRect, location)) return NO;
+    if (self.resizeHandle && CGRectContainsPoint(self.resizeHandle.frame, location)) return NO;
+    return YES;
 }
 
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
