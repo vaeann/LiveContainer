@@ -7,18 +7,26 @@
 // 开关与游客侧保活共用 LCKeepAliveEnabled（默认开）。
 // 只在“开关开 + 有游客在跑 + 宿主已切后台”三者同时满足时播放；
 // 宿主回前台、最后一个游客退出、开关关闭时立即停。
-// 宿主保活按白名单：与游客侧共用 CZFKeepAliveApps.txt，文件不存在
-// = 全保，文件存在 = 只有名单里的游客才触发宿主保活。宿主音频是整
-// 进程一份、没法按 App 切分，所以只要有一个在跑游客在名单里，宿主
-// 照常保；只有在跑游客全都不在名单里时，宿主才停。原生模式下 dock
-// 无记录、场景无法对应 bid，维持全保，避免误停。
+// 游客判定：虚拟模式看 MultitaskManager 的容器注册表，原生模式看
+// 系统场景数（详见下方本 fork 适配说明）；只要有游客在跑宿主就保，
+// 宿主半不做按 App 的白名单过滤——CZFKeepAliveApps.txt 白名单由
+// 游客侧 dylib 对它自己生效。
 // v1.1 优化（防 1 分钟内被掐）：①提前启动 —— WillResignActive 就先
 // 播，切后台时音频会话已经是激活态；②游客计数补原生模式 —— 虚拟
 // 模式数 dock，原生模式数系统已连接的场景；③后台任务第二通道 ——
 // 音频被打断时，后台任务先顶住，过期时重开音频并续一个新任务。
 //
-// 本 fork 的增补：全程诊断日志（CZFKeepAliveLog，与游客侧 dylib 写
-// 同一个文件），以及游客模块的 base64 部署（syncGuestModule）。
+// 本 fork 的适配（与 zh 的关键差异，2026-11-22 启动闪退定位后定）：
+// zh 在 refresh 里读它自己的坞管理器 apps；本 fork 的
+// MultitaskDockManager 是 UI 耦合的——它的 init 里有
+// keyWindow!.rootViewController!.view.subviews.first! 三处强解包，
+// 只能在界面就绪后由多任务 UI 首次创建，生命周期回调里抢先碰它
+// 会直接闪退（完整版与阶段 1 版均死于此，日志为证）。所以本 fork
+// 的宿主半改读 MultitaskManager 的容器注册表（纯数据、无 UI 耦合，
+// 任意时刻可读）判断有无游客；代价是宿主半不再按 bundle id 过滤
+// 白名单（注册表只有 UUID）——白名单仍由游客侧 dylib 对自己生效。
+// 另有：全程诊断日志（CZFKeepAliveLog，与游客侧 dylib 写同一个
+// 文件），以及游客模块的 base64 部署（syncGuestModule）。
 
 import AVFoundation
 import CryptoKit
@@ -88,91 +96,78 @@ final class CZFHostKeepAlive {
 
     private init() {}
 
-    /// App 启动时调一次。
-    /// PROBE P1（2026-11-22）：完整版与阶段 1 版都在启动时闪退、且无
-    /// 崩溃报告，两者共同的启动路径增量只有 install()。这一版的
-    /// install 只做一件事——写一行日志，验证单例 + 文件日志在
-    /// didFinishLaunching 时刻可用；观察者与 refresh 接线下一步再加。
+    /// App 启动时调一次：装后台/前台/音频中断观察者（主队列）。
     func install() {
         guard !installed else { return }
         installed = true
-        CZFKeepAliveLog.event("宿主", "keep-alive-install-probe", [
+        isBackgrounded = UIApplication.shared.applicationState == .background
+        CZFKeepAliveLog.trimIfNeeded()
+        CZFKeepAliveLog.event("宿主", "keep-alive-install", [
+            "state": "\(UIApplication.shared.applicationState.rawValue)",
+            "enabled": "\(UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)",
             "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
+        let center = NotificationCenter.default
+        observerTokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didEnterBackground"])
+            self?.isBackgrounded = true
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willEnterForeground"])
+            self?.isBackgrounded = false
+            self?.refresh()
+        })
+        // 提前启动：上滑切 App 时 WillResignActive 先于 DidEnterBackground，
+        // 这里就先播，切后台时音频会话已经是激活态。
+        observerTokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willResignActive"])
+            self?.isBackgrounded = true
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didBecomeActive"])
+            self?.isBackgrounded = false
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self else { return }
+            guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else {
+                CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": "unknown"])
+                return
+            }
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": type == .began ? "began" : "ended"])
+            guard type == .ended else { return }
+            self.refresh()
+        })
+        // 音频服务丢了/重置了（mediaserverd 崩了重起等），播放器会静默
+        // 停掉且不发 interruption——直接听这两个通知，丢了就重起。
+        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereLostNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesLost"])
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesReset"])
+            self?.refresh()
+        })
     }
 
-    /// 白名单读法：先读 tweakPath，读到即算；两夹文件都不存在 = 全保。
-    /// 空文件读出空名单，不是“不存在”，这时名单外的游客一律不保。
-    /// 按（文件路径 + 修改时间 + 大小）缓存名单，文件没变就不再读全文。
-    private static var keepAliveListCacheURL: URL?
-    private static var keepAliveListCacheMtime: Date?
-    private static var keepAliveListCacheSize: Int?
-    private static var keepAliveListCache: [String]?
-    /// 白名单本身：文件存在返回名单，不存在返回 nil（不是空名单）。
-    private static func cachedWhitelist() -> [String]? {
-        for url in [LCPath.tweakPath, LCPath.lcGroupTweakPath].map({ $0.appendingPathComponent("CZFKeepAliveApps.txt") }) {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let mtime = attrs[.modificationDate] as? Date,
-                  let size = (attrs[.size] as? NSNumber)?.intValue else {
-                continue
-            }
-            if keepAliveListCacheURL == url,
-               keepAliveListCacheMtime == mtime,
-               keepAliveListCacheSize == size,
-               let cached = keepAliveListCache {
-                return cached
-            }
-            if let content = try? String(contentsOf: url, encoding: .utf8) {
-                let list = content.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                keepAliveListCacheURL = url
-                keepAliveListCacheMtime = mtime
-                keepAliveListCacheSize = size
-                keepAliveListCache = list
-                CZFKeepAliveLog.event("宿主", "keep-alive-whitelist", ["source": url.lastPathComponent, "count": "\(list.count)", "apps": list.joined(separator: ",")])
-                return list
-            }
-        }
-        return nil
-    }
-    private static func keepAliveNeeded(for bid: String) -> Bool {
-        cachedWhitelist()?.contains(bid) ?? true
-    }
-    /// 供最小化自动关豁免用：只有白名单文件存在、且该 App 在名单里时
-    /// 才豁免；文件不存在时返回 false。
-    static func isInKeepAliveWhitelist(for bid: String) -> Bool {
-        cachedWhitelist()?.contains(bid) ?? false
-    }
-
-    /// 开关/游客数/前后台/白名单任一变化时调：重算该不该播（主队列）。
+    /// 开关/游客数/前后台任一变化时调：重算该不该播（主队列）。
+    /// 游客判定只读 MultitaskManager 的容器注册表与系统场景数——
+    /// 绝不能在这里碰 MultitaskDockManager（见文件头适配说明）。
     func refresh() {
         let enabled = UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true
-        var guestsNeedKeepAlive = false
-        var guestSource = "scenes"
-        var dockBids: [String] = []
-        if #available(iOS 16.0, *) {
-            let dockApps = MultitaskDockManager.shared.apps
-            if !dockApps.isEmpty {
-                guestSource = "dock"
-                // 虚拟模式：按 dock 记录逐个对白名单，bid 未知时保守全保。
-                guestsNeedKeepAlive = dockApps.contains { app in
-                    guard let bid = app.appInfo?.bundleIdentifier(), !bid.isEmpty else { return true }
-                    dockBids.append(bid)
-                    return Self.keepAliveNeeded(for: bid)
-                }
-            } else {
-                // 原生模式下 dock 不启用：游客是系统场景，主场景之外多
-                // 一个即有游客；场景无法对应 bid，只能全保。
-                guestsNeedKeepAlive = UIApplication.shared.connectedScenes.count > 1
-            }
-        } else {
-            guestsNeedKeepAlive = UIApplication.shared.connectedScenes.count > 1
-        }
-        let shouldPlay = enabled && guestsNeedKeepAlive && isBackgrounded
+        // 虚拟模式：注册表里有容器即有游客。原生模式：游客是独立
+        // 场景，主场景之外多一个即有游客。
+        let multitasking = MultitaskManager.isMultitasking()
+        let sceneCount = UIApplication.shared.connectedScenes.count
+        let guestsRunning = multitasking || sceneCount > 1
+        let shouldPlay = enabled && guestsRunning && isBackgrounded
         CZFKeepAliveLog.event("宿主", "keep-alive-refresh", [
             "enabled": "\(enabled)",
-            "guests": "\(guestsNeedKeepAlive)",
-            "source": guestSource,
-            "bids": dockBids.joined(separator: ","),
-            "scenes": "\(UIApplication.shared.connectedScenes.count)",
+            "guests": "\(guestsRunning)",
+            "multitask": "\(multitasking)",
+            "scenes": "\(sceneCount)",
             "bg": "\(isBackgrounded)",
             "playing": "\(player?.isPlaying ?? false)",
             "decision": shouldPlay ? "start" : "stop"])
