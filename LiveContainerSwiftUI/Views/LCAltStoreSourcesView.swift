@@ -760,11 +760,9 @@ struct LCSourcesView: View {
                                     .padding(.horizontal)
                             }
                         }
-                    } else if item.isLoading {
-                        ProgressView("lc.sources.loading".loc)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal)
                     }
+                    // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
+                    // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
                 }
 
                 if totalFilteredAppCount == 0 {
