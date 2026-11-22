@@ -271,6 +271,15 @@
         if(currentDebounceToken != self.resizeDebounceToken) {
             return;
         }
+        // 切后台途中冻结尺寸同步：呼出系统后台卡片的过程中布局
+        // 被反复触发，裁切开启时游客的画面高度会在两个值之间
+        // 来回跳，游客的底部导航跟着一上一下地闪（Ann 2026-11-22
+        // 真机，隐藏操作栏/官方原版都不闪，定性为裁切状态下的
+        // 同步抖动）。不在前台就不发新尺寸，游客保持最后一份
+        // 稳定值；回到前台后系统恢复窗口的布局会自然补上一次。
+        if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+            return;
+        }
         [self updateSettingsWithBlock:^(UIMutableApplicationSceneSettings *settings) {
             settings.deviceOrientation = UIDevice.currentDevice.orientation;
             settings.interfaceOrientation = self.view.window.windowScene.interfaceOrientation;
