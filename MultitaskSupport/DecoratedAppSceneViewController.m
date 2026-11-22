@@ -21,8 +21,9 @@ static const CGFloat LCResizeHandleSize = 44;
 // 掉，漏出的那截连同招牌一起藏进栏后面。
 static const CGFloat LCWindowTopCrop = 14;
 
-@interface DecoratedAppSceneViewController()
+@interface DecoratedAppSceneViewController() <UIGestureRecognizerDelegate>
 @property(nonatomic) NSArray* activatedVerticalConstraints;
+@property(nonatomic) UIPanGestureRecognizer *moveGesture;
 @property(nonatomic) NSString* dataUUID;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
@@ -204,6 +205,9 @@ static const CGFloat LCWindowTopCrop = 14;
     UINavigationBarAppearance *barAppearance = [[UINavigationBarAppearance alloc] init];
     [barAppearance configureWithOpaqueBackground];
     barAppearance.backgroundColor = UIColor.systemBackgroundColor;
+    // 不要外观自带的底边分隔线：实色背景后它变成一条全宽的
+    // 明显横线贴在栏下沿（Ann 2026-11-22 真机）。
+    barAppearance.shadowColor = UIColor.clearColor;
     navigationBar.standardAppearance = barAppearance;
     navigationBar.scrollEdgeAppearance = barAppearance;
     navigationBar.translucent = NO;
@@ -248,10 +252,16 @@ static const CGFloat LCWindowTopCrop = 14;
     self.contentView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [fixedPositionContentView addSubview:self.contentView];
     
+    // 拖动手势挂在窗口视图上、靠 delegate 只在栏的区域内生效：
+    // 挂在栏本身时，栏换成实色背景后手势就收不到了（Ann
+    // 2026-11-22 真机：白条拖不动）。挂父视图能收到其所有子视图
+    // 的触摸，再按落点过滤，机制上绕开了栏自己的命中行为。
     UIPanGestureRecognizer *moveGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveWindow:)];
     moveGesture.minimumNumberOfTouches = 1;
     moveGesture.maximumNumberOfTouches = 1;
-    [self.navigationBar addGestureRecognizer:moveGesture];
+    moveGesture.delegate = self;
+    self.moveGesture = moveGesture;
+    [self.view addGestureRecognizer:moveGesture];
 
     // Resize handle (idea stolen from Notes debugging window)
     UIPanGestureRecognizer *resizeGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeWindow:)];
@@ -574,6 +584,25 @@ static const CGFloat LCWindowTopCrop = 14;
         }
         [self.view layoutIfNeeded];
     }];
+}
+
+// 拖动手势的生效范围：只在操作栏的条带内、且避开悬浮层的
+// 按钮和右下角的缩放把手；栏隐藏时不生效（左上角把手自己带
+// 拖动）。其余手势一律放行。
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    if (gestureRecognizer != self.moveGesture) return YES;
+    if ([self shouldHideWindowBar]) return NO;
+    CGPoint location = [gestureRecognizer locationInView:self.view];
+    CGSize size = self.view.bounds.size;
+    BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
+    CGRect barRect = bottomWindowBar
+        ? CGRectMake(0, size.height - LCWindowBarHeight, size.width, LCWindowBarHeight)
+        : CGRectMake(0, 0, size.width, LCWindowBarHeight);
+    if (!CGRectContainsPoint(barRect, location)) return NO;
+    if (self.lightsView && !self.lightsView.hidden && CGRectContainsPoint(self.lightsView.frame, location)) return NO;
+    if (self.menuButton && !self.menuButton.hidden && CGRectContainsPoint(self.menuButton.frame, location)) return NO;
+    if (self.resizeHandle && CGRectContainsPoint(self.resizeHandle.frame, location)) return NO;
+    return YES;
 }
 
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
