@@ -13,6 +13,13 @@
 // 不再跟栏高绑在一起）。
 static const CGFloat LCWindowBarHeight = 36;
 static const CGFloat LCResizeHandleSize = 44;
+// 操作栏改「盖」不「拼」（Ann 2026-11-22 定）：画面铺满整个窗口、
+// 顶部伸到操作栏底下，栏盖住画面顶部的自带安全区（约 50 点，
+// 原生全屏时藏在灵动岛/状态栏后面的那截，App 在里面不放正经
+// 内容，Telegram 的招牌就在那）。安全区比栏高，盖完还剩一截
+// 会从栏下沿漏出来，所以画面整体再上移这个数、由窗口上沿裁
+// 掉，漏出的那截连同招牌一起藏进栏后面。
+static const CGFloat LCWindowTopCrop = 14;
 
 @interface DecoratedAppSceneViewController()
 @property(nonatomic) NSArray* activatedVerticalConstraints;
@@ -674,8 +681,12 @@ static const CGFloat LCResizeHandleSize = 44;
                 [self.navigationBar.heightAnchor constraintEqualToConstant:navBarHeight]
             ];
         } else {
+            // 顶栏模式：画面顶边不再让出栏高，而是上移
+            // LCWindowTopCrop 伸到栏底下（见 LCWindowTopCrop 的
+            // 注释）；栏隐藏时没有遮盖，画面回到窗口顶边不裁。
+            CGFloat sceneTop = hideWindowBar ? 0 : -LCWindowTopCrop;
             self.activatedVerticalConstraints = @[
-                [self.appSceneVC.view.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:navBarHeight],
+                [self.appSceneVC.view.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:sceneTop],
                 [self.appSceneVC.view.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
                 [self.navigationBar.heightAnchor constraintEqualToConstant:navBarHeight]
             ];
