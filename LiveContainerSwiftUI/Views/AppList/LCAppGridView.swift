@@ -215,10 +215,29 @@ private struct LCAppGridCell: View {
                         // badge's top-trailing corner with the icon's, and
                         // shifting by a quarter badge (not half) pulls the
                         // center in from the corner point.
+                        //
+                        // NOT the shared LCRunningCloseBadge (a Button):
+                        // the cell's composed tap gesture sits on an
+                        // ancestor, and SwiftUI lets an ancestor gesture
+                        // swallow a child Button's taps — in the grid the
+                        // badge rendered but never fired (the list is
+                        // unaffected: UIKit hit-testing there reaches the
+                        // button first). A high-priority tap gesture on
+                        // the badge itself wins over the cell gesture.
                         let badgeSize = min(max(iconSize * 0.4, 18), 34)
-                        LCRunningCloseBadge(size: badgeSize) {
-                            actions.onCloseRunning(app)
+                        ZStack {
+                            Circle()
+                                .fill(Color.red)
+                            Image(systemName: "xmark")
+                                .font(.system(size: badgeSize * 0.5, weight: .bold))
+                                .foregroundStyle(.white)
                         }
+                        .frame(width: badgeSize, height: badgeSize)
+                        .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+                        .contentShape(Circle())
+                        .highPriorityGesture(TapGesture().onEnded {
+                            actions.onCloseRunning(app)
+                        })
                         .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
                     }
                 }
