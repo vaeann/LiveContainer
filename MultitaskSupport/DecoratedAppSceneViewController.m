@@ -548,6 +548,8 @@
 // 左上 = 旋转 180° 到西北；右上 = 垂直翻转 (1,-1) 到东北；
 // 左下 = 水平翻转 (-1,1) 到西南。（右上/左下的翻转曾经写反，
 // 三角跑到了把手框的内侧角，Ann 2026-11-22 真机发现后修正。）
+// 本模式下四个三角全部全透明（只藏楔形子视图，见方法末尾注），
+// 形态考究只剩命中区，方向对应仍按上面写，免得日后恢复可见时错位。
 - (void)updateCornerHandles {
     BOOL active = [self shouldHideWindowBar];
     if (active && !self.moveHandle) {
@@ -555,6 +557,7 @@
         CGRect bounds = self.view.bounds;
         // 左上：移动（拖动）
         self.moveHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+        ((ResizeHandleView *)self.moveHandle).wedgeView.hidden = YES;
         self.moveHandle.transform = CGAffineTransformMakeRotation(M_PI);
         self.moveHandle.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
         UIPanGestureRecognizer *move = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveWindow:)];
@@ -564,22 +567,29 @@
         [self.view addSubview:self.moveHandle];
         // 右上：最大化/还原（点击）
         self.maximizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
+        ((ResizeHandleView *)self.maximizeHandle).wedgeView.hidden = YES;
         self.maximizeHandle.transform = CGAffineTransformMakeScale(1, -1);
         self.maximizeHandle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
         [self.maximizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(maximizeWindow)]];
         [self.view addSubview:self.maximizeHandle];
         // 左下：最小化（点击）
         self.minimizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(0, bounds.size.height - size, size, size)];
+        ((ResizeHandleView *)self.minimizeHandle).wedgeView.hidden = YES;
         self.minimizeHandle.transform = CGAffineTransformMakeScale(-1, 1);
         self.minimizeHandle.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin;
         [self.minimizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(minimizeWindow)]];
         [self.view addSubview:self.minimizeHandle];
     }
-    // 移动把手在最大化时无意义（moveWindow 本来也会直接返回），
-    // 藏掉免得白占左上角的触摸；最大化/最小化把手两种形态都留。
+    // 最大化时只留左下最小化把手（Ann 2026-11-22 定）：左上移动
+    // 本来就无意义（moveWindow 直接返回），右上还原也不留——
+    // 上方两角不好点；还原走展开坞里双击当前 App 图标。
+    // 三角全透明（Ann 同日定）：三个新把手创建时已藏楔形，右下
+    // 缩放把手的楔形跟着本模式同步藏/恢复；藏的只是楔形子视图，
+    // 把手视图本身 alpha 不变，44×44 点击区不受影响。
     self.moveHandle.hidden = !active || self.isMaximized;
-    self.maximizeHandle.hidden = !active;
+    self.maximizeHandle.hidden = !active || self.isMaximized;
     self.minimizeHandle.hidden = !active;
+    ((ResizeHandleView *)self.resizeHandle).wedgeView.hidden = active;
 }
 
 - (void)updateVerticalConstraints {
