@@ -59,7 +59,15 @@ static const CGFloat LCResizeHandleSize = 44;
     self.maximizeButton.frame = CGRectMake(56, 0, 26, 30);
     [lightsView addSubview:self.maximizeButton];
     self.maximizeGlyph = (UIImageView *)[self.maximizeButton viewWithTag:7];
-    self.navigationItem.leftBarButtonItems = @[[[UIBarButtonItem alloc] initWithCustomView:lightsView]];
+    UIBarButtonItem *lightsItem = [[UIBarButtonItem alloc] initWithCustomView:lightsView];
+    // iOS 26 导航栏会给栏按钮组套一层共享的液态玻璃背景，Ann
+    // 不要：三钮和右箭头都关掉（hidesSharedBackground）。
+    lightsItem.hidesSharedBackground = YES;
+    // macOS 的红绿灯贴近窗口左缘（圆点左缘离窗边约 12），导航栏
+    // 默认左边距明显更大，用一个负宽空位把整组往左拉回来。
+    UIBarButtonItem *leftSpacer = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
+    leftSpacer.width = -10;
+    self.navigationItem.leftBarButtonItems = @[leftSpacer, lightsItem];
 
     UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
     menuButton.frame = CGRectMake(0, 0, 28, 28);
@@ -76,6 +84,7 @@ static const CGFloat LCResizeHandleSize = 44;
     menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
     menuButton.showsMenuAsPrimaryAction = YES;
     self.menuButtonItem = [[UIBarButtonItem alloc] initWithCustomView:menuButton];
+    self.menuButtonItem.hidesSharedBackground = YES;
     [self refreshBarButtonItems];
 
     return self;
