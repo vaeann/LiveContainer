@@ -13,18 +13,8 @@
 // 不再跟栏高绑在一起）。
 static const CGFloat LCWindowBarHeight = 36;
 static const CGFloat LCResizeHandleSize = 44;
-// 操作栏改「盖」不「拼」（Ann 2026-11-22 定）：画面铺满整个窗口、
-// 顶部伸到操作栏底下，栏盖住画面顶部的自带安全区（约 50 点，
-// 原生全屏时藏在灵动岛/状态栏后面的那截，App 在里面不放正经
-// 内容，Telegram 的招牌就在那）。安全区比栏高，盖完还剩一截
-// 会从栏下沿漏出来，所以画面整体再上移这个数、由窗口上沿裁
-// 掉，漏出的那截连同招牌一起藏进栏后面。
-static const CGFloat LCWindowTopCrop = 14;
-
-@interface DecoratedAppSceneViewController() <UIGestureRecognizerDelegate>
+@interface DecoratedAppSceneViewController()
 @property(nonatomic) NSArray* activatedVerticalConstraints;
-@property(nonatomic) UIPanGestureRecognizer *moveGesture;
-@property(nonatomic) UITapGestureRecognizer *barTapGesture;
 @property(nonatomic) NSString* dataUUID;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
@@ -186,18 +176,6 @@ static const CGFloat LCWindowTopCrop = 14;
     // Navigation bar
     UINavigationBar *navigationBar = [[UINavigationBar alloc] initWithFrame:CGRectMake(0, 0, self.view.frame.size.width, navBarHeight)];
     navigationBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    // 栏背景必须不透明：画面伸到栏底下之后，栏默认的毛玻璃背景
-    // 采不到跨进程画面的内容，直接透掉、看着像没有白条了
-    // （Ann 2026-11-22 真机）。给一个和窗口底色一致的实色背景。
-    UINavigationBarAppearance *barAppearance = [[UINavigationBarAppearance alloc] init];
-    [barAppearance configureWithOpaqueBackground];
-    barAppearance.backgroundColor = UIColor.systemBackgroundColor;
-    // 不要外观自带的底边分隔线：实色背景后它变成一条全宽的
-    // 明显横线贴在栏下沿（Ann 2026-11-22 真机）。
-    barAppearance.shadowColor = UIColor.clearColor;
-    navigationBar.standardAppearance = barAppearance;
-    navigationBar.scrollEdgeAppearance = barAppearance;
-    navigationBar.translucent = NO;
     // Start in the final state: updateVerticalConstraints animates over
     // 0.3s, which made the bar flash on screen when a window opens
     // maximized with the bar disabled.
@@ -239,23 +217,10 @@ static const CGFloat LCWindowTopCrop = 14;
     self.contentView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [fixedPositionContentView addSubview:self.contentView];
     
-    // 拖动手势挂在窗口视图上、靠 delegate 只在栏的区域内生效：
-    // 挂在栏本身时，栏换成实色背景后手势就收不到了（Ann
-    // 2026-11-22 真机：白条拖不动）。挂父视图能收到其所有子视图
-    // 的触摸，再按落点过滤，机制上绕开了栏自己的命中行为。
     UIPanGestureRecognizer *moveGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveWindow:)];
     moveGesture.minimumNumberOfTouches = 1;
     moveGesture.maximumNumberOfTouches = 1;
-    moveGesture.delegate = self;
-    self.moveGesture = moveGesture;
-    [self.view addGestureRecognizer:moveGesture];
-    // 栏的空白处也要自己接住点击：不接住就会穿到画面上，触发
-    // App 自己的顶栏点击动作（呼出搜索栏、滚回顶部）——Ann
-    // 2026-11-22 晚指出。这个点击不做任何事，纯粹是接住。
-    UITapGestureRecognizer *barTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(barStripTapped:)];
-    barTap.delegate = self;
-    self.barTapGesture = barTap;
-    [self.view addGestureRecognizer:barTap];
+    [self.navigationBar addGestureRecognizer:moveGesture];
 
     // Resize handle (idea stolen from Notes debugging window)
     UIPanGestureRecognizer *resizeGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeWindow:)];
@@ -579,30 +544,6 @@ static const CGFloat LCWindowTopCrop = 14;
     }];
 }
 
-// 栏上手势（拖动 + 空白点击）的生效范围：只在操作栏的条带
-// 内、且避开悬浮层的按钮组和右下角的缩放把手；栏隐藏时不
-// 生效（左上角把手自己带拖动）。其余手势一律放行。
-- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
-    if (gestureRecognizer != self.moveGesture && gestureRecognizer != self.barTapGesture) return YES;
-    if ([self shouldHideWindowBar]) return NO;
-    CGPoint location = [gestureRecognizer locationInView:self.view];
-    CGSize size = self.view.bounds.size;
-    BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
-    CGRect barRect = bottomWindowBar
-        ? CGRectMake(0, size.height - LCWindowBarHeight, size.width, LCWindowBarHeight)
-        : CGRectMake(0, 0, size.width, LCWindowBarHeight);
-    if (!CGRectContainsPoint(barRect, location)) return NO;
-    if (self.lightsView && !self.lightsView.hidden && CGRectContainsPoint(self.lightsView.frame, location)) return NO;
-
-    if (self.resizeHandle && CGRectContainsPoint(self.resizeHandle.frame, location)) return NO;
-    return YES;
-}
-
-- (void)barStripTapped:(UITapGestureRecognizer *)sender {
-    // Intentionally empty: the recognizer exists only to claim
-    // taps on the bar's blank areas so they never reach the app.
-}
-
 - (void)moveWindow:(UIPanGestureRecognizer*)sender {
     if(_isMaximized) return;
     
@@ -717,12 +658,8 @@ static const CGFloat LCWindowTopCrop = 14;
                 [self.navigationBar.heightAnchor constraintEqualToConstant:navBarHeight]
             ];
         } else {
-            // 顶栏模式：画面顶边不再让出栏高，而是上移
-            // LCWindowTopCrop 伸到栏底下（见 LCWindowTopCrop 的
-            // 注释）；栏隐藏时没有遮盖，画面回到窗口顶边不裁。
-            CGFloat sceneTop = hideWindowBar ? 0 : -LCWindowTopCrop;
             self.activatedVerticalConstraints = @[
-                [self.appSceneVC.view.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:sceneTop],
+                [self.appSceneVC.view.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:navBarHeight],
                 [self.appSceneVC.view.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
                 [self.navigationBar.heightAnchor constraintEqualToConstant:navBarHeight]
             ];
