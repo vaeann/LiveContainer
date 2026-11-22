@@ -84,7 +84,12 @@ enum CZFKeepAliveLog {
 final class CZFHostKeepAlive {
     static let shared = CZFHostKeepAlive()
 
-    private var player: AVAudioPlayer?
+    // 播放层（2026-11-22 实验变量）：不用 AVAudioPlayer，改
+    // AVAudioEngine + AVAudioPlayerNode 循环播 44.1kHz 立体声静音
+    // 缓冲（Palladium 同款）。五套 AVAudioPlayer 方案都死在后台约
+    // 1 分钟，这是最后一个没试过的实现变量；其余逻辑与 zh 原版一致。
+    private var engine: AVAudioEngine?
+    private var playerNode: AVAudioPlayerNode?
     private var watchdog: Timer?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var isBackgrounded = false
@@ -95,6 +100,16 @@ final class CZFHostKeepAlive {
     private var observerTokens: [NSObjectProtocol] = []
 
     private init() {}
+
+    private var isPlaying: Bool { playerNode?.isPlaying ?? false }
+
+    /// 节点播放时间轴上的秒数（单调递增），取不到时 -1。心跳双采样
+    /// 用它证明渲染真的在推进（等价于旧版 player 的 currentTime）。
+    private var nodeTime: Double {
+        guard let node = playerNode, let last = node.lastRenderTime,
+              let pt = node.playerTime(forNodeTime: last), pt.sampleRate > 0 else { return -1 }
+        return Double(pt.sampleTime) / pt.sampleRate
+    }
 
     /// App 启动时调一次：装后台/前台/音频中断观察者（主队列）。
     func install() {
@@ -169,7 +184,7 @@ final class CZFHostKeepAlive {
             "multitask": "\(multitasking)",
             "scenes": "\(sceneCount)",
             "bg": "\(isBackgrounded)",
-            "playing": "\(player?.isPlaying ?? false)",
+            "playing": "\(isPlaying)",
             "decision": shouldPlay ? "start" : "stop"])
         if shouldPlay {
             start()
@@ -198,26 +213,56 @@ final class CZFHostKeepAlive {
         backgroundTask = .invalid
     }
 
+    /// 搭引擎图：播放节点 → 主混音器，挂一块 1 秒静音缓冲无限循环。
+    private func buildEngineGraph() {
+        let engine = AVAudioEngine()
+        let node = AVAudioPlayerNode()
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
+              let buffer = Self.silentBuffer(format: format) else { return }
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        node.scheduleBuffer(buffer, at: nil, options: .loops)
+        self.engine = engine
+        self.playerNode = node
+    }
+
+    private func teardownEngine() {
+        playerNode?.stop()
+        engine?.stop()
+        engine = nil
+        playerNode = nil
+    }
+
+    private func runEngine() throws {
+        if engine == nil { buildEngineGraph() }
+        guard let engine = engine, let node = playerNode else { throw CocoaError(.featureUnsupported) }
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
+        if !node.isPlaying { node.play() }
+    }
+
     private func start() {
         beginBackgroundTask()
-        if let player = player, player.isPlaying { return }
+        if isPlaying { return }
+        let created = engine == nil
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, options: .mixWithOthers)
             try session.setActive(true)
-            let created = player == nil
-            if created {
-                player = try AVAudioPlayer(data: CZFHostKeepAlive.silentWAVData())
-                player?.numberOfLoops = -1
-                player?.volume = 0.0
-                player?.prepareToPlay()
+            do {
+                try runEngine()
+            } catch {
+                // 引擎可能在音频服务重置后失效：整套重建再试一次。
+                teardownEngine()
+                try runEngine()
             }
-            player?.play()
             if playStartedAt == nil { playStartedAt = Date() }
             CZFKeepAliveLog.event("宿主", "keep-alive-start", [
                 "created": "\(created)",
-                "playing": "\(player?.isPlaying ?? false)",
-                "currentTime": "\(player?.currentTime ?? -1)",
+                "playing": "\(isPlaying)",
+                "nodeTime": "\(nodeTime)",
                 "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
         } catch {
             // 宿主保活绝不能拖垮宿主：起不来就安静失败（但要留日志）。
@@ -232,11 +277,11 @@ final class CZFHostKeepAlive {
                 guard let self = self else { return }
                 // 只在真后台才重起：applicationState 才是真后台。
                 let inBg = UIApplication.shared.applicationState == .background
-                let playing = self.player?.isPlaying ?? false
+                let playing = self.isPlaying
                 CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
                     "state": "\(UIApplication.shared.applicationState.rawValue)",
                     "playing": "\(playing)",
-                    "currentTime": "\(self.player?.currentTime ?? -1)",
+                    "nodeTime": "\(self.nodeTime)",
                     "action": (inBg && !playing) ? "restart" : "none"])
                 if inBg && !playing {
                     self.start()
@@ -248,7 +293,7 @@ final class CZFHostKeepAlive {
     }
 
     private func stop() {
-        let wasPlaying = player?.isPlaying ?? false
+        let wasPlaying = isPlaying
         let seconds = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         if wasPlaying || playStartedAt != nil {
             CZFKeepAliveLog.event("宿主", "keep-alive-stop", [
@@ -259,40 +304,22 @@ final class CZFHostKeepAlive {
         playStartedAt = nil
         watchdog?.invalidate()
         watchdog = nil
-        player?.pause()
+        playerNode?.pause()
+        engine?.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         endBackgroundTask()
     }
 
-    /// 1 秒静音 WAV（8000Hz 单声道 16bit PCM），与游客侧 CZFKeepAlive.m 同配方。
-    private static func silentWAVData() -> Data {
-        let sampleRate: UInt32 = 8000
-        let channels: UInt16 = 1
-        let bitsPerSample: UInt16 = 16
-        let dataSize = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
-        let chunkSize = 36 + dataSize
-        let blockAlign = channels * (bitsPerSample / 8)
-        let byteRate = sampleRate * UInt32(blockAlign)
-        var data = Data()
-        func append<T>(_ value: T) {
-            var v = value
-            data.append(Data(bytes: &v, count: MemoryLayout<T>.size))
+    /// 1 秒静音 PCM 缓冲（44.1kHz 立体声浮点，全零），与游客侧同配方。
+    private static func silentBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let frames = AVAudioFrameCount(44_100)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = frames
+        for ch in 0..<Int(format.channelCount) {
+            channels[ch].update(repeating: 0, count: Int(frames))
         }
-        data.append("RIFF".data(using: .ascii)!)
-        append(chunkSize)
-        data.append("WAVE".data(using: .ascii)!)
-        data.append("fmt ".data(using: .ascii)!)
-        append(UInt32(16))
-        append(UInt16(1))
-        append(channels)
-        append(sampleRate)
-        append(byteRate)
-        append(blockAlign)
-        append(bitsPerSample)
-        data.append("data".data(using: .ascii)!)
-        append(dataSize)
-        data.append(Data(count: Int(dataSize)))
-        return data
+        return buffer
     }
 
     // MARK: - 开关与游客模块部署
