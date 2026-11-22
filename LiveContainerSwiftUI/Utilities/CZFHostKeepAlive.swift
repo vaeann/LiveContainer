@@ -88,60 +88,16 @@ final class CZFHostKeepAlive {
 
     private init() {}
 
-    /// App 启动时调一次：装后台/前台/音频中断观察者（主队列）。
+    /// App 启动时调一次。
+    /// PROBE P1（2026-11-22）：完整版与阶段 1 版都在启动时闪退、且无
+    /// 崩溃报告，两者共同的启动路径增量只有 install()。这一版的
+    /// install 只做一件事——写一行日志，验证单例 + 文件日志在
+    /// didFinishLaunching 时刻可用；观察者与 refresh 接线下一步再加。
     func install() {
         guard !installed else { return }
         installed = true
-        isBackgrounded = UIApplication.shared.applicationState == .background
-        CZFKeepAliveLog.trimIfNeeded()
-        CZFKeepAliveLog.event("宿主", "keep-alive-install", [
-            "state": "\(UIApplication.shared.applicationState.rawValue)",
-            "enabled": "\(UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)",
+        CZFKeepAliveLog.event("宿主", "keep-alive-install-probe", [
             "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
-        let center = NotificationCenter.default
-        observerTokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didEnterBackground"])
-            self?.isBackgrounded = true
-            self?.refresh()
-        })
-        observerTokens.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willEnterForeground"])
-            self?.isBackgrounded = false
-            self?.refresh()
-        })
-        // 提前启动：上滑切 App 时 WillResignActive 先于 DidEnterBackground，
-        // 这里就先播，切后台时音频会话已经是激活态。
-        observerTokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willResignActive"])
-            self?.isBackgrounded = true
-            self?.refresh()
-        })
-        observerTokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didBecomeActive"])
-            self?.isBackgrounded = false
-            self?.refresh()
-        })
-        observerTokens.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
-            guard let self = self else { return }
-            guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  let type = AVAudioSession.InterruptionType(rawValue: raw) else {
-                CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": "unknown"])
-                return
-            }
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": type == .began ? "began" : "ended"])
-            guard type == .ended else { return }
-            self.refresh()
-        })
-        // 音频服务丢了/重置了（mediaserverd 崩了重起等），播放器会静默
-        // 停掉且不发 interruption——直接听这两个通知，丢了就重起。
-        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereLostNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesLost"])
-            self?.refresh()
-        })
-        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesReset"])
-            self?.refresh()
-        })
     }
 
     /// 白名单读法：先读 tweakPath，读到即算；两夹文件都不存在 = 全保。

@@ -28,8 +28,7 @@ enum MultitaskMode : Int {
     private class func postRunningAppsChangedNotification() {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: NSNotification.MultitaskRunningAppsChanged, object: nil)
-            // 游客集合变了，宿主保活重算一次（zh 同款接线）。
-            CZFHostKeepAlive.shared.refresh()
+            // PROBE P1（2026-11-22）：refresh 接线暂撤，定位启动闪退中。
         }
     }
 
