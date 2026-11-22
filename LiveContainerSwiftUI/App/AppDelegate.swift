@@ -31,11 +31,11 @@ import Intents
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
 
-        // 保活分阶段上线（2026-11-22，上一版启动闪退后改走分步验证）：
-        // 阶段 1 只装宿主半观察者；游客 dylib 的部署在
-        // CZFHostKeepAlive.syncGuestModule 里暂缓（阶段 2 再开），
-        // LCBootstrap 里的宿主自加载排除也还在。
+        // zh 式两件套保活：宿主侧装观察者；游客侧 dylib 按开关部署
+        // （重装后不打开设置页也要部署到位）。宿主自加载时由
+        // LCBootstrap 排除这个 dylib——宿主有本体保活，不需要它。
         CZFHostKeepAlive.shared.install()
+        CZFHostKeepAlive.syncGuestModule(enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)
 
         return true
     }

@@ -1069,11 +1069,11 @@ int LiveContainerMain(int argc, char *argv[]) {
             NSString *docPath = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].lastObject.path;
             tweakFolder = [docPath stringByAppendingPathComponent:@"Tweaks"];
         }
-        // RECOVERY (2026-11-22): the CZF keep-alive build left LC
-        // crash-looping on launch. Remove its guest dylib from the
-        // self-tweak folder BEFORE TweakLoader loads the folder into
-        // this process, so the app can open again no matter which half
-        // is at fault. Remove this block once keep-alive is re-landed.
+        // The guest keep-alive dylib (CZFKeepAlive) is for guest
+        // processes only: the host has its own native keeper
+        // (CZFHostKeepAlive), so exclude the dylib from the folder
+        // TweakLoader is about to load into this process. The file
+        // is (re)deployed for guests later, at AppDelegate launch.
         [fm removeItemAtPath:[tweakFolder stringByAppendingPathComponent:@"CZFKeepAlive.dylib"] error:nil];
         setenv("LC_GLOBAL_TWEAKS_FOLDER", tweakFolder.UTF8String, 1);
 #if TARGET_OS_MACCATALYST || TARGET_OS_SIMULATOR

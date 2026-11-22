@@ -310,11 +310,6 @@ final class CZFHostKeepAlive {
     /// 的教训），这里解码后写进两个 Tweaks 文件夹并签名；关开关时
     /// 移除，游客就不再加载它。
     static func syncGuestModule(enabled: Bool) {
-        // 阶段 1（2026-11-22）：部署暂缓，只记日志。阶段 2 删掉这三行
-        // 即恢复下面的完整实现（签名已改串行，见函数后半）。
-        CZFKeepAliveLog.event("LC", "deploy-deferred", ["enabled": "\(enabled)", "stage": "1"])
-        return
-        // (stage 2 removes the deferral above)
         let folders = [LCPath.tweakPath, LCPath.lcGroupTweakPath]
         let fm = FileManager.default
         if !enabled {
