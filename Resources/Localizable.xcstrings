@@ -18741,6 +18741,29 @@
         }
       }
     },
+    "lc.keepAlive.logTailNote" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Showing the last %lld lines — Copy exports the full log"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅显示最后 %lld 行，复制为全文"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅顯示最後 %lld 行，複製為全文"
+          }
+        }
+      }
+    },
     "lc.keepAlive.title" : {
       "extractionState" : "manual",
       "localizations" : {

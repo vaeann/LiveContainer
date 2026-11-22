@@ -6,24 +6,41 @@
 //  keeper (CZFHostKeepAlive), the guest dylib (CZFKeepAlive) and LC's
 //  own deploy code into <appGroup>/CZFKeepAlive/keepalive.log.
 //
+//  The file grows to hundreds of KB (thousands of lines); a single
+//  SwiftUI Text holding all of it renders BLANK (Ann hit this
+//  2026-11-22: page empty while Copy still worked). The view
+//  therefore displays only the last `displayLineLimit` lines; Copy
+//  still exports the full text.
+//
 
 import SwiftUI
 
 struct LCKeepAliveLogView: View {
-    @State private var text = ""
+    @State private var fullText = ""
+    @State private var displayText = ""
+    @State private var totalLines = 0
+
+    private static let displayLineLimit = 300
 
     var body: some View {
         Group {
-            if text.isEmpty {
+            if fullText.isEmpty {
                 Text("lc.keepAlive.logEmpty".loc)
                     .foregroundColor(.secondary)
             } else {
                 ScrollView {
-                    Text(text)
-                        .font(.system(size: 11, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if totalLines > Self.displayLineLimit {
+                            Text(String(format: "lc.keepAlive.logTailNote".loc, Self.displayLineLimit))
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                        }
+                        Text(displayText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
                 }
                 .refreshable {
                     reload()
@@ -43,7 +60,7 @@ struct LCKeepAliveLogView: View {
                 }
                 .accessibilityLabel("lc.keepAlive.logClear".loc)
                 Button {
-                    UIPasteboard.general.string = text
+                    UIPasteboard.general.string = fullText
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
@@ -53,6 +70,12 @@ struct LCKeepAliveLogView: View {
     }
 
     private func reload() {
-        text = (try? String(contentsOf: CZFKeepAliveLog.fileURL, encoding: .utf8)) ?? ""
+        let content = (try? String(contentsOf: CZFKeepAliveLog.fileURL, encoding: .utf8)) ?? ""
+        fullText = content
+        // Keep the newest lines; the tail is what matters when
+        // debugging, and a bounded Text actually renders.
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+        totalLines = lines.count
+        displayText = lines.suffix(Self.displayLineLimit).joined(separator: "\n")
     }
 }
