@@ -874,21 +874,27 @@ class AppInfoProvider {
     /// desired state changes, and it is restored as soon as another app
     /// comes to front, everything minimizes to the LC home screen, or
     /// the window closes.
-    /// BISECT ONLY: the status-bar override (private
-    /// _setOverridingStatusBarHidden:) is reverted here so the
-    /// keep-alive bisect can tell whether it matters. Front-app
-    /// tracking stays: the green front-app marker reads it.
     @objc public func updateStatusBarFix() {
         if !Thread.isMainThread {
             DispatchQueue.main.async { self.updateStatusBarFix() }
             return
         }
+        var hide = false
         var frontUUID: String? = nil
         if let index = frontAppIndex() {
-            frontUUID = apps[index].appUUID
+            let app = apps[index]
+            frontUUID = app.appUUID
+            if let info = app.appInfo, info.statusBarFix,
+               let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController {
+                hide = vc.isMaximized
+            }
         }
         if frontAppUUID != frontUUID {
             frontAppUUID = frontUUID
+        }
+        if hide != statusBarFixApplied,
+           LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
+            statusBarFixApplied = hide
         }
     }
 
