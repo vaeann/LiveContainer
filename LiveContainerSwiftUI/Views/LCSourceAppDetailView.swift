@@ -249,7 +249,7 @@ struct LCSourceAppVersionDetailView: View {
                     Text("lc.sources.detail.installVersion".loc)
                         .bold()
                         .frame(maxWidth: .infinity)
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                        .modifier(ListRowSeparatorLeadingFix())
                 }
                 Button {
                     UIPasteboard.general.string = version.downloadURL.absoluteString
@@ -261,7 +261,7 @@ struct LCSourceAppVersionDetailView: View {
                     Label(copied ? "lc.common.copied".loc : "lc.sources.detail.copyDownloadURL".loc,
                           systemImage: copied ? "checkmark" : "doc.on.doc")
                         .frame(maxWidth: .infinity)
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                        .modifier(ListRowSeparatorLeadingFix())
                 }
             }
         }
@@ -274,5 +274,19 @@ struct LCSourceAppVersionDetailView: View {
             return "\(version.version) (\(build))"
         }
         return version.version
+    }
+}
+
+/// 把列表分隔线的对齐点钉回行首（用在居中文字的按钮行上，
+/// 见 LCSourceAppVersionDetailView 的按钮区）。分隔线对齐
+/// API 是 iOS 16 的，本工程最低 iOS 15：低版本保持原样
+/// （分隔线半截，纯外观，不影响功能）。
+private struct ListRowSeparatorLeadingFix: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+        } else {
+            content
+        }
     }
 }
