@@ -18862,19 +18862,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Host"
+            "value" : "LiveContainer"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "宿主"
+            "value" : "LiveContainer"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "宿主"
+            "value" : "LiveContainer"
           }
         }
       }
@@ -24665,6 +24665,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "預設全螢幕多任務視窗"
+          }
+        }
+      }
+    },
+    "lc.settings.maximizedFullscreen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximized Fullscreen"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大化全屏"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大化全螢幕"
           }
         }
       }

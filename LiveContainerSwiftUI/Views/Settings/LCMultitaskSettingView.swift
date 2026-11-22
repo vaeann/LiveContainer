@@ -11,6 +11,7 @@ struct LCMultitaskSettingView: View {
     @AppStorage("LCMultitaskMode", store: LCUtils.appGroupUserDefault) var multitaskMode: MultitaskMode = .virtualWindow
     @AppStorage("LCLaunchInMultitaskMode") var launchInMultitaskMode = false
     @AppStorage("LCLaunchMultitaskMaximized") var launchMultitaskMaximized = false
+    @AppStorage("LCMaximizedFullscreen") var maximizedFullscreen = false
     @AppStorage("LCMultitaskBottomWindowBar", store: LCUtils.appGroupUserDefault) var bottomWindowBar = false
     @AppStorage("LCAutoEndPiP", store: LCUtils.appGroupUserDefault) var autoEndPiP = false
     @AppStorage("LCSkipTerminatedScreen", store: LCUtils.appGroupUserDefault) var skipTerminatedScreen = false
@@ -43,6 +44,9 @@ struct LCMultitaskSettingView: View {
                         Toggle(isOn: $onlyOneAppOnStage) {
                             Text("lc.settings.onlyOneAppOnStage".loc)
                         }
+                    }
+                    Toggle(isOn: $maximizedFullscreen) {
+                        Text("lc.settings.maximizedFullscreen".loc)
                     }
                     Toggle(isOn: $autoEndPiP) {
                         Text("lc.settings.autoEndPiP".loc)

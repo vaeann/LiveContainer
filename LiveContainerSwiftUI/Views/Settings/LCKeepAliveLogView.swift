@@ -32,8 +32,8 @@ struct LCKeepAliveLogView: View {
         }
         .navigationTitle("lc.keepAlive.logView".loc)
         .toolbar {
-            // Ann 定版布局：左上删除（清空日志），右上复制。
-            ToolbarItem(placement: .navigationBarLeading) {
+            // Ann 定版布局：删除（清空日志）与复制都放右上。
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button(role: .destructive) {
                     try? FileManager.default.removeItem(at: CZFKeepAliveLog.fileURL)
                     CZFKeepAliveLog.event("LC", "keep-alive-log-cleared")
@@ -42,8 +42,6 @@ struct LCKeepAliveLogView: View {
                     Image(systemName: "trash")
                 }
                 .accessibilityLabel("lc.keepAlive.logClear".loc)
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     UIPasteboard.general.string = text
                 } label: {

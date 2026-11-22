@@ -867,7 +867,6 @@ class AppInfoProvider {
         DispatchQueue.main.async {
             self.isCollapsed.toggle()
             self.updateDockFrame()
-            self.notifyDockCollapseChanged()
         }
     }
 
@@ -950,16 +949,6 @@ class AppInfoProvider {
         }
     }
 
-    @objc public func notifyDockCollapseChanged() {
-        self.updateDockFrame()
-        // find fullscreen apps and hide its UINavigationBar
-        self.apps.forEach { app in
-            if let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController, vc.isMaximized {
-                vc.updateVerticalConstraints()
-            }
-        }
-    }
-    
     // MARK: - Multitask Mode Check
     private func isDockEnabled() -> Bool {
         let multitaskMode = MultitaskMode(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCMultitaskMode")) ?? .virtualWindow
@@ -1393,6 +1382,18 @@ struct AppIconView: View {
                     guard inside, movedDistance < 12 else { return }
                     let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
                     impactFeedback.impactOccurred()
+                    // Tapping the front app's own icon is not a
+                    // switch: re-presenting its scene replays a
+                    // bring-to-front animation and shifts the app's
+                    // UI down for a moment (Ann 2026-11-22). Skip the
+                    // switch entirely; the tap still collapses the
+                    // dock like any other icon tap.
+                    if app.appUUID == dockManager.frontAppUUID {
+                        if !dockManager.isCollapsed {
+                            dockManager.toggleDockCollapse()
+                        }
+                        return
+                    }
                     let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
                     // Switching to an app finishes the dock's job:
                     // collapse it (Ann's 保底 collapse — covers the

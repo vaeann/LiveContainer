@@ -529,12 +529,13 @@
     [self.view.superview bringSubviewToFront:self.view];
 }
 
-// When "launch multitask maximized" is on, maximized windows never show
-// the window bar: the user opted out of the bar entirely and can bring it
-// back by turning that setting off.
+// 最大化时是否隐藏窗口栏，由独立开关「最大化全屏」
+// （LCMaximizedFullscreen）控制（Ann 2026-11-22 拆分）：开 = 最大化
+// 即全屏、窗口栏隐藏；关 = 窗口栏常在。「默认最大化多任务窗口」
+// （LCLaunchMultitaskMaximized）已恢复原生职责，只决定窗口打开时
+// 是否最大化，不再掺和窗口栏。
 - (BOOL)shouldHideWindowBar {
-    BOOL launchMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
-    return self.isMaximized && (MultitaskDockManager.shared.isCollapsed || launchMaximized);
+    return self.isMaximized && [NSUserDefaults.lcUserDefaults boolForKey:@"LCMaximizedFullscreen"];
 }
 
 - (void)updateVerticalConstraints {
