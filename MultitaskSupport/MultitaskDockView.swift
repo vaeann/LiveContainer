@@ -288,16 +288,32 @@ class AppInfoProvider {
         return max(Constants.minCollapsedButtonSize, min(Constants.maxCollapsedButtonSize, targetSize))
     }
 
+    /// Extra end inset the pill shape needs beyond the side
+    /// padding. A capsule's end is a semicircle of radius width/2;
+    /// a square icon of the adaptive size only fits under that
+    /// curve once its top edge clears
+    /// width/2 - sqrt(width² - icon²)/2 — with the plain side
+    /// padding the first icon's corners cross the glass outline
+    /// (Ann 2026-11-22). Two points of air on top of the bare
+    /// geometric minimum.
+    func dockEndExtra(for width: CGFloat) -> CGFloat {
+        let iconSize = calculateIconSize(for: width)
+        let needed = width / 2 - (width * width - iconSize * iconSize).squareRoot() / 2
+        return max(0, needed - 4) + 2
+    }
+
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
         // Expanded dock contents: the app icons and the cycle button
         // at the bottom — (apps.count + 1) items, apps.count gaps
         // between them, and one button-height allowance. (The
         // collapse button that used to sit on top is gone: tapping
         // outside the dock collapses it now, both on the LC home
-        // screen and from inside the front guest.)
+        // screen and from inside the front guest.) The pill's curved
+        // ends add their own allowance on top of the vertical
+        // padding, mirrored by the layout's vertical padding.
         let spacingCount = max(self.apps.count, 0)
         let totalSpacingHeight = CGFloat(spacingCount) * Constants.dockContentSpacing
-        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight
+        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight + 2 * dockEndExtra(for: width)
     }
 
     private func expandedDockHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
@@ -1085,7 +1101,11 @@ public struct MultitaskDockSwiftView: View {
                     }
                 }
             }
-            .padding(dynamicPadding)
+            .padding(.horizontal, dynamicPadding)
+            // Expanded, the pill's curved ends need extra room at
+            // the top and bottom so the end icons stay inside the
+            // glass (see dockEndExtra); collapsed stays a circle.
+            .padding(.vertical, dockManager.isCollapsed ? dynamicPadding : dynamicPadding + dockManager.dockEndExtra(for: dockManager.dockWidth))
             .alert("lc.multitask.closeAllTitle".loc, isPresented: $showCloseAllConfirm) {
                 Button("lc.common.no".loc, role: .cancel) {}
                 Button("lc.multitask.closeAllConfirm".loc, role: .destructive) {
