@@ -46,8 +46,7 @@ enum MultitaskMode : Int {
             if let app = MultitaskDockManager.shared.apps.first(where: { $0.appUUID == container }),
                let view = app.view,
                let decoratedVC = view._viewDelegate() as? DecoratedAppSceneViewController {
-                // Red-X close: no curl-up exit animation.
-                decoratedVC.closeWindowWithoutAnimation()
+                decoratedVC.closeWindow()
                 return true
             }
         }

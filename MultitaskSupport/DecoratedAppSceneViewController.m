@@ -15,7 +15,6 @@
 @property(nonatomic) CGRect originalFrame;
 @property(nonatomic) UIBarButtonItem *maximizeButton;
 @property(nonatomic) bool isAppTerminationRequested;
-@property(nonatomic) bool skipExitAnimation;
 @end
 
 @implementation DecoratedAppSceneViewController
@@ -256,11 +255,6 @@
     }
 }
 
-- (void)closeWindowWithoutAnimation {
-    self.skipExitAnimation = YES;
-    [self closeWindow];
-}
-
 - (void)minimizeWindow {
     if (self.view.hidden) return;
     [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
@@ -348,16 +342,12 @@
         [dock removeRunningApp:self.dataUUID];
         
         self.view.layer.masksToBounds = NO;
-        if(self.skipExitAnimation) {
-            self.view.hidden = YES;
-            [self.view removeFromSuperview];
-        } else {
-            [UIView transitionWithView:self.view duration:0.4 options:UIViewAnimationOptionTransitionCurlUp animations:^{
-                self.view.hidden = YES;
-            } completion:^(BOOL b){
-                [self.view removeFromSuperview];
-            }];
-        }
+        // 退出不播任何动画（Ann 2026-11-22 定）：上游的 0.4 秒卷页
+        // （CurlUp）已整个去掉——不管是窗口栏关闭键、红 X，还是
+        // App 自己退出（崩溃、保活到期后被系统回收），窗口都直接
+        // 移除，免得重开 LC 时看到莫名其妙的翻页。
+        self.view.hidden = YES;
+        [self.view removeFromSuperview];
         
         if(skipTerminationScreen) {
             [MultitaskRelaunchManager scheduleRelaunchIfNeededWithBundleId:self.appSceneVC.bundleId dataUUID:self.dataUUID isManualTermination:isManual];
