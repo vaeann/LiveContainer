@@ -8,6 +8,9 @@ API_AVAILABLE(ios(16.0))
 @property(nonatomic) UINavigationBar *navigationBar;
 @property(nonatomic) UINavigationItem *navigationItem;
 @property(nonatomic) UIView *resizeHandle;
+@property(nonatomic) UIView *moveHandle;
+@property(nonatomic) UIView *maximizeHandle;
+@property(nonatomic) UIView *minimizeHandle;
 @property(nonatomic) UIView* contentView;
 @property(nonatomic) UIView *tapOutsideScrim;
 

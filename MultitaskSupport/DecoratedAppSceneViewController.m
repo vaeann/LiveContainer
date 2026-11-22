@@ -308,6 +308,7 @@
             UIImageConfiguration *maximizeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
             self.maximizeButton.image = [maximizeImage imageWithConfiguration:maximizeConfig];
             [[MultitaskDockManager shared] updateStatusBarFix];
+            [self updateCornerHandles];
         }];
     } else {
         updateSettingsBlock = ^(UIMutableApplicationSceneSettings *settings) {
@@ -329,6 +330,7 @@
             UIImageConfiguration *restoreConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
             self.maximizeButton.image = [restoreImage imageWithConfiguration:restoreConfig];
             [[MultitaskDockManager shared] updateStatusBarFix];
+            [self updateCornerHandles];
         }];
     }
 }
@@ -537,6 +539,46 @@
     return [NSUserDefaults.lcUserDefaults boolForKey:@"LCHideWindowBar"];
 }
 
+// 四角把手（Ann 2026-11-22 定）：形态照抄右下角现有的缩放把手
+// （ResizeHandleView，44×44、半透明白三角），只是功能不同——
+// 左上移动、右上最大化/还原、左下最小化（右下缩放是原有的，
+// 不归这里管）。仅在「隐藏操作栏」开启时生效：操作栏在时有它
+// 的按钮和拖动，不需要四角。ResizeHandleView 的三角长在右下
+// 角，其余三个角靠旋转/翻转把手视图把三角转过去。
+- (void)updateCornerHandles {
+    BOOL active = [self shouldHideWindowBar];
+    if (active && !self.moveHandle) {
+        CGFloat size = 44;
+        CGRect bounds = self.view.bounds;
+        // 左上：移动（拖动）
+        self.moveHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+        self.moveHandle.transform = CGAffineTransformMakeRotation(M_PI);
+        self.moveHandle.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
+        UIPanGestureRecognizer *move = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveWindow:)];
+        move.minimumNumberOfTouches = 1;
+        move.maximumNumberOfTouches = 1;
+        [self.moveHandle addGestureRecognizer:move];
+        [self.view addSubview:self.moveHandle];
+        // 右上：最大化/还原（点击）
+        self.maximizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
+        self.maximizeHandle.transform = CGAffineTransformMakeScale(-1, 1);
+        self.maximizeHandle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
+        [self.maximizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(maximizeWindow)]];
+        [self.view addSubview:self.maximizeHandle];
+        // 左下：最小化（点击）
+        self.minimizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(0, bounds.size.height - size, size, size)];
+        self.minimizeHandle.transform = CGAffineTransformMakeScale(1, -1);
+        self.minimizeHandle.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin;
+        [self.minimizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(minimizeWindow)]];
+        [self.view addSubview:self.minimizeHandle];
+    }
+    // 移动把手在最大化时无意义（moveWindow 本来也会直接返回），
+    // 藏掉免得白占左上角的触摸；最大化/最小化把手两种形态都留。
+    self.moveHandle.hidden = !active || self.isMaximized;
+    self.maximizeHandle.hidden = !active;
+    self.minimizeHandle.hidden = !active;
+}
+
 - (void)updateVerticalConstraints {
     [self.view layoutIfNeeded];
     [UIView animateWithDuration:0.3 animations:^{
@@ -573,6 +615,7 @@
 
         [self.view layoutIfNeeded];
     }];
+    [self updateCornerHandles];
 }
 
 - (UIEdgeInsets)updateMaximizedSafeAreaWithSettings:(UIMutableApplicationSceneSettings *)settings {
