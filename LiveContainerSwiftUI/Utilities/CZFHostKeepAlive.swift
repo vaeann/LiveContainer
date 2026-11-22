@@ -30,6 +30,7 @@
 
 import AVFoundation
 import CryptoKit
+import Darwin
 import UIKit
 
 /// Shared keep-alive debug log: host, guests and LC itself append to
@@ -99,6 +100,14 @@ final class CZFHostKeepAlive {
     /// 保活上限闩锁：本轮后台播满上限后置位，refresh 不再重起；
     /// 回前台时清零，下一轮后台重新计时。
     private var limitReached = false
+
+    /// 上限定时器：与看门狗分开的一次性定时，到上限整点触发停播，
+    /// 不受看门狗间隔越拉越长的影响。
+    private var limitTimer: Timer?
+    /// 上一轮保活的收尾（状态面板用）：结束时间、持续秒数、原因。
+    private var lastStopAt: Date?
+    private var lastStopSeconds: TimeInterval = 0
+    private var lastStopReason = ""
     // block 观察者返的 token 必须留住——NotificationCenter 不强持有
     // 它，丢掉就当场注销。
     private var observerTokens: [NSObjectProtocol] = []
@@ -118,6 +127,7 @@ final class CZFHostKeepAlive {
         // 把当前上限/日志开关同步给游客侧（config.plist），保证用户
         // 从没动过新设置时游客读到的也是现值。
         Self.writeGuestConfig()
+        writeState()
         let center = NotificationCenter.default
         observerTokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didEnterBackground"])
@@ -176,8 +186,8 @@ final class CZFHostKeepAlive {
         let multitasking = MultitaskManager.isMultitasking()
         let sceneCount = UIApplication.shared.connectedScenes.count
         let guestsRunning = multitasking || sceneCount > 1
-        // 保活上限：本轮已播满就闩锁，refresh 不再重起（看门狗也会查，
-        // 这里是事件驱动路径的同一道闸）。
+        // 保活上限：本轮已播满就闩锁，refresh 不再重起（整点停播由
+        // 上限定时器负责，这里是事件驱动路径的同一道闸）。
         if !limitReached, Self.limitSeconds > 0, let started = playStartedAt,
            Date().timeIntervalSince(started) >= Self.limitSeconds {
             limitReached = true
@@ -197,6 +207,7 @@ final class CZFHostKeepAlive {
         } else {
             stop()
         }
+        syncLimitTimer()
     }
 
     /// 后台任务第二通道：音频被打断时先顶住，过期时重开音频并续一个新任务。
@@ -246,20 +257,32 @@ final class CZFHostKeepAlive {
             CZFKeepAliveLog.event("宿主", "keep-alive-start-failed", ["error": error.localizedDescription])
             return
         }
-        // 刚起播时 playStartedAt 才定下来，有上限就按剩余时间重排
-        // 一次看门狗，上限附近的间隔才算得准。
-        if Self.limitSeconds > 0 { armWatchdog() }
+        syncLimitTimer()
+        writeState()
     }
 
-    // MARK: - 看门狗（自适应）
+    // MARK: - 看门狗（自适应变慢）与上限定时器
 
     /// 看门狗只作兜底：主因（中断结束、音频服务丢/重置、前后台切换）
     /// 都已有通知直接触发 refresh() 重起；这表防通知没覆盖到的漏网
-    /// 情况，顺带执行保活上限。单次定时、每轮按状态重算间隔——
-    /// 自适应：没上限时 300 秒一轮；有上限时取剩余时间的一半
-    /// （最短 30 秒），越接近上限查得越密，到点能及时停。
+    /// 情况。频率按 Ann 定版（按本轮已保活时长，越久越慢）：前
+    /// 2 分钟 15 秒，2–5 分钟 30 秒，5–10 分钟 45 秒，10 分钟以上
+    /// 60 秒。看门狗可关（设置项），关了就没有自动恢复，心跳也停。
+    /// 保活上限不归看门狗管：下面有独立的一次性定时器整点触发。
+    private func watchdogInterval() -> TimeInterval {
+        let elapsed = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        switch elapsed {
+        case ..<120: return 15
+        case ..<300: return 30
+        case ..<600: return 45
+        default: return 60
+        }
+    }
+
     private func armWatchdog() {
         watchdog?.invalidate()
+        watchdog = nil
+        guard Self.watchdogEnabled else { return }
         let interval = watchdogInterval()
         watchdog = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             self?.watchdogTick()
@@ -268,34 +291,17 @@ final class CZFHostKeepAlive {
         CZFKeepAliveLog.event("宿主", "keep-alive-watchdog-armed", ["interval": "\(Int(interval))"])
     }
 
-    private func watchdogInterval() -> TimeInterval {
-        let limit = Self.limitSeconds
-        guard limit > 0, let started = playStartedAt else { return 300 }
-        let remaining = limit - Date().timeIntervalSince(started)
-        return min(300, max(30, remaining / 2))
-    }
-
     private func watchdogTick() {
         watchdog = nil
         // 只在真后台才动作：applicationState 才是真后台。
         let inBg = UIApplication.shared.applicationState == .background
         let playing = player?.isPlaying ?? false
-        // 上限先于健康检查：到点就停并闩锁，本轮后台不再重起。
-        if inBg, playing, Self.limitSeconds > 0, let started = playStartedAt,
-           Date().timeIntervalSince(started) >= Self.limitSeconds {
-            CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
-                "state": "\(UIApplication.shared.applicationState.rawValue)",
-                "playing": "\(playing)",
-                "action": "limit-stop"])
-            limitReached = true
-            stop()
-            return
-        }
         CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
             "state": "\(UIApplication.shared.applicationState.rawValue)",
             "playing": "\(playing)",
             "currentTime": "\(player?.currentTime ?? -1)",
             "action": (inBg && !playing) ? "restart" : "none"])
+        writeState()
         if inBg && !playing {
             start()
         } else if inBg {
@@ -303,21 +309,47 @@ final class CZFHostKeepAlive {
         }
     }
 
-    private func stop() {
+    /// 上限定时器：起播时按剩余时间单独排一发，到点停播并闩锁，
+    /// 与看门狗间隔无关、整点触发。在 refresh 决策后调用，保持与
+    /// 当前播放/上限状态一致（改上限、停播都会在这里重排或取消）。
+    private func syncLimitTimer() {
+        limitTimer?.invalidate()
+        limitTimer = nil
+        let limit = Self.limitSeconds
+        guard limit > 0, !limitReached, let started = playStartedAt, player?.isPlaying == true else { return }
+        let remaining = limit - Date().timeIntervalSince(started)
+        guard remaining > 0 else { return }
+        limitTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.limitTimer = nil
+            CZFKeepAliveLog.event("宿主", "keep-alive-limit", ["limitSeconds": "\(Int(limit))"])
+            self.limitReached = true
+            self.stop(reason: "limit")
+        }
+    }
+
+    private func stop(reason: String = "refresh") {
         let wasPlaying = player?.isPlaying ?? false
         let seconds = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         if wasPlaying || playStartedAt != nil {
             CZFKeepAliveLog.event("宿主", "keep-alive-stop", [
                 "wasPlaying": "\(wasPlaying)",
                 "seconds": "\(seconds)",
+                "reason": reason,
                 "bg": "\(isBackgrounded)"])
+            lastStopAt = Date()
+            lastStopSeconds = seconds
+            lastStopReason = reason
         }
         playStartedAt = nil
         watchdog?.invalidate()
         watchdog = nil
+        limitTimer?.invalidate()
+        limitTimer = nil
         player?.pause()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         endBackgroundTask()
+        writeState()
     }
 
     /// 1 秒静音 WAV（8000Hz 单声道 16bit PCM），与游客侧 CZFKeepAlive.m 同配方。
@@ -385,41 +417,107 @@ final class CZFHostKeepAlive {
         }
     }
 
+    /// 看门狗开关：键缺省 = 开。关掉时宿主立刻撤下自己的看门狗；
+    /// 游客在下一次起播/轮次读到新配置后跟随。
+    static var watchdogEnabled: Bool {
+        UserDefaults.standard.object(forKey: "LCKeepAliveWatchdogEnabled") as? Bool ?? true
+    }
+
+    static func setWatchdogEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "LCKeepAliveWatchdogEnabled")
+        CZFKeepAliveLog.event("LC", "keep-alive-setting", ["watchdogEnabled": "\(enabled)"])
+        writeGuestConfig()
+        if enabled {
+            if shared.player?.isPlaying == true { shared.armWatchdog() }
+        } else {
+            shared.watchdog?.invalidate()
+            shared.watchdog = nil
+        }
+        shared.writeState()
+    }
+
     /// 游客侧配置：写进与日志同目录的 config.plist，游客 dylib 在
-    /// 加载、起播和看门狗轮次里读（上限秒数 + 日志开关）——游客进程
-    /// 读不到宿主的标准 defaults，只能走 App Group 文件。
+    /// 加载、起播和看门狗轮次里读（上限秒数 + 日志开关 + 看门狗
+    /// 开关）——游客进程读不到宿主的标准 defaults，只能走文件。
     static func writeGuestConfig() {
         let dir = CZFKeepAliveLog.fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let config: [String: Any] = [
             "limitSeconds": limitSeconds,
             "logEnabled": CZFKeepAliveLog.isEnabled,
+            "watchdogEnabled": watchdogEnabled,
         ]
         if let data = try? PropertyListSerialization.data(fromPropertyList: config, format: .xml, options: 0) {
             try? data.write(to: dir.appendingPathComponent("config.plist"), options: .atomic)
         }
     }
 
-    /// 设置页「保活状态」行的数据。在主线程读（设置页调用）。
-    /// 游客判定与 refresh 同源：注册表 + 场景数，不碰坞管理器。
-    struct Status {
-        var enabled: Bool
-        var playing: Bool
-        var elapsed: TimeInterval
-        var limitMinutes: Int
-        var guestsRunning: Bool
-        var limitReached: Bool
+    // MARK: - 保活状态（微珠式：每进程一份 JSON，设置页汇总）
+
+    /// 状态目录：<appGroup>/CZFKeepAlive/state/。宿主写
+    /// keepalive-host.json，每个游客写 keepalive-<bundle>.json；
+    /// 起播、停播、看门狗轮次时更新（beat = 最近一次更新时刻，
+    /// 面板据此判断进程还活着没）。文件名固定，进程重启覆盖同一
+    /// 份，文件数天然封顶。
+    static var stateDirectory: URL {
+        CZFKeepAliveLog.fileURL.deletingLastPathComponent().appendingPathComponent("state", isDirectory: true)
     }
 
-    func statusSnapshot() -> Status {
-        let guests = MultitaskManager.isMultitasking() || UIApplication.shared.connectedScenes.count > 1
-        return Status(
-            enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true,
-            playing: player?.isPlaying ?? false,
-            elapsed: playStartedAt.map { Date().timeIntervalSince($0) } ?? 0,
-            limitMinutes: UserDefaults.standard.integer(forKey: "LCKeepAliveLimitMinutes"),
-            guestsRunning: guests,
-            limitReached: limitReached)
+    func writeState() {
+        let dir = Self.stateDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let now = Date().timeIntervalSince1970
+        let state: [String: Any] = [
+            "v": 1,
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "role": "host",
+            "bundle": Bundle.main.bundleIdentifier ?? "",
+            "name": "",
+            "playing": player?.isPlaying ?? false,
+            "background": isBackgrounded,
+            "enabled": UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true,
+            "limitSeconds": Self.limitSeconds,
+            "watchdog": Self.watchdogEnabled,
+            "timedOut": limitReached,
+            "playStart": playStartedAt?.timeIntervalSince1970 ?? 0,
+            "beat": now,
+            "lastEnd": lastStopAt?.timeIntervalSince1970 ?? 0,
+            "lastSeconds": lastStopSeconds,
+            "lastReason": lastStopReason,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: state) {
+            try? data.write(to: dir.appendingPathComponent("keepalive-host.json"), options: .atomic)
+        }
+    }
+
+    /// 设置页读全部进程的状态：先清僵尸（pid 已死、或文件超过
+    /// 24 小时没更新），再解析每份 JSON。宿主排第一，其余按
+    /// bundle 排序。
+    static func readAllStates() -> [[String: Any]] {
+        let dir = stateDirectory
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+        var states: [[String: Any]] = []
+        for name in names where name.hasPrefix("keepalive-") && name.hasSuffix(".json") {
+            let url = dir.appendingPathComponent(name)
+            let modified = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            var state = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            let pid = (state?["pid"] as? NSNumber)?.intValue ?? 0
+            let dead = pid > 0 && pid != ProcessInfo.processInfo.processIdentifier && kill(pid_t(pid), 0) != 0 && errno == ESRCH
+            let stale = modified.map { Date().timeIntervalSince($0) > 24 * 3600 } ?? false
+            if dead || stale || state == nil {
+                try? fm.removeItem(at: url)
+                continue
+            }
+            state!["file"] = name
+            states.append(state!)
+        }
+        return states.sorted {
+            let a = ($0["role"] as? String) == "host" ? 0 : 1
+            let b = ($1["role"] as? String) == "host" ? 0 : 1
+            if a != b { return a < b }
+            return (($0["bundle"] as? String) ?? "") < (($1["bundle"] as? String) ?? "")
+        }
     }
 
     /// 游客侧 CZFKeepAlive.dylib 的部署。构建产物以 base64 文本形式

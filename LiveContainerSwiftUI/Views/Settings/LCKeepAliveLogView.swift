@@ -25,20 +25,29 @@ struct LCKeepAliveLogView: View {
                         .padding(8)
                         .textSelection(.enabled)
                 }
+                .refreshable {
+                    reload()
+                }
             }
         }
         .navigationTitle("lc.keepAlive.logView".loc)
         .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
+            // Ann 定版布局：左上删除（清空日志），右上复制。
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(role: .destructive) {
+                    try? FileManager.default.removeItem(at: CZFKeepAliveLog.fileURL)
+                    CZFKeepAliveLog.event("LC", "keep-alive-log-cleared")
+                    reload()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .accessibilityLabel("lc.keepAlive.logClear".loc)
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     UIPasteboard.general.string = text
                 } label: {
                     Image(systemName: "doc.on.doc")
-                }
-                Button {
-                    reload()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
                 }
             }
         }

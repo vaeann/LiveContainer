@@ -15,8 +15,11 @@
 // 文件（<AppGroup>/CZFKeepAlive/keepalive.log），格式一致；另补了
 // 音频服务丢失/重置两个通知的观察（zh 只有宿主侧有）。
 // 微珠式设置（2026-11-22）：保活上限与日志开关由宿主写进同目录的
-// config.plist 下发；看门狗改自适应间隔（见 CZFWatchdogInterval）。
-// 播放层定版为 AVAudioPlayer（引擎版是二分期的实验，已移除）。
+// config.plist 下发。播放层定版为 AVAudioPlayer（引擎版是二分期
+// 的实验，已移除）。
+// 设置页定版（同日晚）：看门狗可关、频率按已保活时长分档变慢
+// （见 CZFWatchdogInterval）；上限改独立定时器整点触发；每进程
+// 写一份状态 JSON（state/ 目录）供宿主设置页汇总，照微珠。
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -34,10 +37,19 @@ static NSTimer *gWatchdog = nil;
 static BOOL gInBackground = NO;
 static NSTimeInterval gPlayStartedAt = 0;
 // 宿主下发的配置（<AppGroup>/CZFKeepAlive/config.plist）：保活上限
-// 秒数（0 = 不限）与日志开关。游客进程读不到宿主的标准 defaults，
-// 只能走这个文件；加载、起播、看门狗轮次时各刷新一次。
+// 秒数（0 = 不限）、日志开关、看门狗开关。游客进程读不到宿主的
+// 标准 defaults，只能走这个文件；加载、起播、看门狗轮次时各刷新一次。
 static NSTimeInterval gLimitSeconds = 0;
 static BOOL gLogEnabled = YES;
+static BOOL gWatchdogEnabled = YES;
+
+// 上限定时器：与看门狗分开的一次性定时，到上限整点触发停播。
+static NSTimer *gLimitTimer = nil;
+static BOOL gTimedOut = NO;
+// 上一轮保活的收尾（状态文件用）。
+static NSTimeInterval gLastEnd = 0;
+static NSTimeInterval gLastSeconds = 0;
+static NSString *gLastReason = nil;
 
 static void CZFStartPlayer(void);
 static void CZFStopKeepAlive(NSString *reason);
@@ -72,6 +84,51 @@ static void CZFLoadConfig(void) {
     if (limit) gLimitSeconds = limit.doubleValue;
     NSNumber *logEnabled = config[@"logEnabled"];
     if (logEnabled) gLogEnabled = logEnabled.boolValue;
+    NSNumber *watchdog = config[@"watchdogEnabled"];
+    if (watchdog) gWatchdogEnabled = watchdog.boolValue;
+}
+
+// MARK: - 保活状态（微珠式：每进程一份 JSON，宿主设置页汇总）
+
+static NSString *CZFStateFilePath(void) {
+    if (![NSUserDefaults respondsToSelector:@selector(lcAppGroupPath)]) return nil;
+    NSString *root = [NSUserDefaults lcAppGroupPath];
+    if (!root.length) return nil;
+    NSString *bundle = [[NSBundle mainBundle] bundleIdentifier] ?: @"unknown";
+    NSString *safe = [[bundle stringByReplacingOccurrencesOfString:@"/" withString:@"_"]
+                      stringByReplacingOccurrencesOfString:@":" withString:@"_"];
+    NSString *dir = [[root stringByAppendingPathComponent:@"CZFKeepAlive"] stringByAppendingPathComponent:@"state"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"keepalive-%@.json", safe]];
+}
+
+static void CZFWriteState(void) {
+    NSString *path = CZFStateFilePath();
+    if (!path) return;
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *name = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"]
+                  ?: [bundle objectForInfoDictionaryKey:@"CFBundleName"] ?: @"";
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate] + NSTimeIntervalSince1970;
+    NSDictionary *state = @{
+        @"v": @1,
+        @"pid": @(getpid()),
+        @"role": @"guest",
+        @"bundle": bundle.bundleIdentifier ?: @"",
+        @"name": name,
+        @"playing": @(gPlayer.isPlaying),
+        @"background": @(gInBackground),
+        @"enabled": @YES,
+        @"limitSeconds": @(gLimitSeconds),
+        @"watchdog": @(gWatchdogEnabled),
+        @"timedOut": @(gTimedOut),
+        @"playStart": @(gPlayStartedAt > 0 ? gPlayStartedAt + NSTimeIntervalSince1970 : 0),
+        @"beat": @(now),
+        @"lastEnd": @(gLastEnd),
+        @"lastSeconds": @(gLastSeconds),
+        @"lastReason": gLastReason ?: @"",
+    };
+    NSData *data = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
+    if (data) [data writeToFile:path atomically:YES];
 }
 
 static void CZFLog(NSString *event, NSString *details) {
@@ -176,33 +233,28 @@ static void CZFStartPlayer(void) {
         getpid()]);
 }
 
-// 看门狗自适应：单次定时、每轮按状态重算间隔。没在播时 5 秒快查
-// （尽快恢复）；有上限时取剩余时间的四分之一（最短 5、最长 30），
-// 越接近上限查得越密，到点能及时停；其余情况 30 秒一轮。
+// 看门狗频率（Ann 定版，按本轮已保活时长，越久越慢）：前 2 分钟
+// 15 秒，2–5 分钟 30 秒，5–10 分钟 45 秒，10 分钟以上 60 秒。
+// 看门狗可关（配置下发），关了就没有自动恢复、心跳也停。
+// 保活上限不归看门狗管：CZFArmLimitTimer 单独整点触发。
 static NSTimeInterval CZFWatchdogInterval(void) {
-    if (!gPlayer.isPlaying) return 5.0;
-    if (gLimitSeconds > 0 && gPlayStartedAt > 0) {
-        NSTimeInterval remaining = gLimitSeconds - ([NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt);
-        if (remaining <= 0) return 5.0;
-        return MIN(30.0, MAX(5.0, remaining / 4.0));
-    }
-    return 30.0;
+    NSTimeInterval elapsed = gPlayStartedAt > 0 ? [NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt : 0;
+    if (elapsed < 120) return 15.0;
+    if (elapsed < 300) return 30.0;
+    if (elapsed < 600) return 45.0;
+    return 60.0;
 }
 
 static void CZFArmWatchdog(BOOL logArmed) {
     [gWatchdog invalidate];
+    gWatchdog = nil;
+    if (!gWatchdogEnabled) return;
     NSTimeInterval interval = CZFWatchdogInterval();
     gWatchdog = [NSTimer scheduledTimerWithTimeInterval:interval repeats:NO block:^(NSTimer *timer) {
         gWatchdog = nil;
         @try {
             CZFLoadConfig();
-            // 上限先于健康检查：到点就停（宿主半也会停，两边互为兜底）。
-            if (gInBackground && gLimitSeconds > 0 && gPlayStartedAt > 0 &&
-                [NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt >= gLimitSeconds) {
-                CZFStopKeepAlive(@"limit");
-                return;
-            }
-            // 被打断/暂停后自动恢复
+            // 被打断/暂停后自动恢复。
             if (gInBackground && !gPlayer.isPlaying) {
                 CZFLog(@"keep-alive-watchdog", @"action=restart playing=0");
                 CZFStartPlayer();
@@ -216,6 +268,7 @@ static void CZFArmWatchdog(BOOL logArmed) {
                 double ct2 = gPlayer.currentTime;
                 CZFLog(@"keep-alive-beat", [NSString stringWithFormat:@"ct1=%.4f ct2=%.4f playing=%d bg=%d next=%.0f", ct1, ct2, playing, gInBackground, next]);
             });
+            CZFWriteState();
             if (gInBackground) {
                 CZFArmWatchdog(NO);
             }
@@ -228,13 +281,36 @@ static void CZFArmWatchdog(BOOL logArmed) {
     }
 }
 
+/// 上限定时器：起播时按剩余时间单独排一发，到点停播（置 timedOut），
+/// 与看门狗间隔无关、整点触发。
+static void CZFArmLimitTimer(void) {
+    [gLimitTimer invalidate];
+    gLimitTimer = nil;
+    if (gLimitSeconds <= 0 || gPlayStartedAt <= 0) return;
+    NSTimeInterval remaining = gLimitSeconds - ([NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt);
+    if (remaining <= 0) return;
+    gLimitTimer = [NSTimer scheduledTimerWithTimeInterval:remaining repeats:NO block:^(NSTimer *timer) {
+        gLimitTimer = nil;
+        gTimedOut = YES;
+        CZFStopKeepAlive(@"limit");
+    }];
+}
+
 static void CZFStartKeepAlive(void) {
     @try {
         CZFLoadConfig();
+        BOOL fresh = (gPlayStartedAt == 0);
         CZFStartPlayer();
+        if (fresh) {
+            gTimedOut = NO;
+        }
         if (!gWatchdog) {
             CZFArmWatchdog(YES);
         }
+        if (!gLimitTimer) {
+            CZFArmLimitTimer();
+        }
+        CZFWriteState();
     } @catch (__unused NSException *e) {}
 }
 
@@ -244,14 +320,21 @@ static void CZFStopKeepAlive(NSString *reason) {
         NSTimeInterval seconds = gPlayStartedAt > 0 ? [NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt : 0;
         if (wasPlaying || gPlayStartedAt > 0) {
             CZFLog(@"keep-alive-stop", [NSString stringWithFormat:@"reason=%@ wasPlaying=%d seconds=%.1f", reason, wasPlaying, seconds]);
+            gLastEnd = [NSDate timeIntervalSinceReferenceDate] + NSTimeIntervalSince1970;
+            gLastSeconds = seconds;
+            gLastReason = reason;
+            if ([reason isEqualToString:@"limit"]) gTimedOut = YES;
         }
         gPlayStartedAt = 0;
         [gWatchdog invalidate];
         gWatchdog = nil;
+        [gLimitTimer invalidate];
+        gLimitTimer = nil;
         [gPlayer pause];
         [[AVAudioSession sharedInstance] setActive:NO
                                        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
                                              error:nil];
+        CZFWriteState();
     } @catch (__unused NSException *e) {}
 }
 
@@ -402,5 +485,6 @@ static void CZFKeepAliveInit(void) {
                     }]];
 
         CZFLog(@"keep-alive-observers", [NSString stringWithFormat:@"count=%lu", (unsigned long)gCZFKeepAliveObservers.count]);
+        CZFWriteState();
     }
 }
