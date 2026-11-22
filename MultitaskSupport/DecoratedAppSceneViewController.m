@@ -52,28 +52,28 @@ static const CGFloat LCResizeHandleSize = 44;
     // 的 item 布局由栏内部说了算——自定义视图会被拉宽（箭头圆
     // 变药丸）、整组偏下约 4 点。改成窗口视图上的悬浮层：约束
     // 对着栏的中心线定位，栏只剩背景和拖动。
-    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 128, 36)];
+    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 144, 36)];
     self.lightsView = lightsView;
     UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] action:@selector(closeWindow)];
-    closeButton.frame = CGRectMake(0, 0, 32, 36);
+    closeButton.frame = CGRectMake(0, 0, 36, 36);
     [lightsView addSubview:closeButton];
     UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] action:@selector(minimizeWindow)];
-    minimizeButton.frame = CGRectMake(32, 0, 32, 36);
+    minimizeButton.frame = CGRectMake(36, 0, 36, 36);
     [lightsView addSubview:minimizeButton];
     self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] action:@selector(maximizeWindow)];
-    self.maximizeButton.frame = CGRectMake(64, 0, 32, 36);
+    self.maximizeButton.frame = CGRectMake(72, 0, 36, 36);
     [lightsView addSubview:self.maximizeButton];
 
     // 箭头钮排在绿点后面做第四个（Ann 2026-11-22 晚定）：和圆
     // 点同样的间距、同样的点击区，不要圆圈描边，只留箭头本
-    // 身。箭头用苹果自家的 SF Symbol，字号和圆点同径（16），
+    // 身。箭头用苹果自家的 SF Symbol，字号和圆点同径（20），
     // 在 36 高的钮里居中、和圆点同一条中心线（Ann 晚补：不能
-    // 偏下、不能比圆点小）。四个钮的点击区是 32×36 且首尾相
+    // 偏下、不能比圆点小）。四个钮的点击区是 36×36 且首尾相
     // 接、没有缝——点空会落到画面上触发 App 自己的顶栏动作
     // （呼出搜索、回顶部），钮又小，必须把可点范围铺满。
     UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    menuButton.frame = CGRectMake(96, 0, 32, 36);
-    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIFontWeightSemibold];
+    menuButton.frame = CGRectMake(108, 0, 36, 36);
+    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIFontWeightSemibold];
     [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
     menuButton.tintColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
@@ -92,7 +92,7 @@ static const CGFloat LCResizeHandleSize = 44;
     [NSLayoutConstraint activateConstraints:@[
         [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:18],
         [lightsView.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
-        [lightsView.widthAnchor constraintEqualToConstant:128],
+        [lightsView.widthAnchor constraintEqualToConstant:144],
         [lightsView.heightAnchor constraintEqualToConstant:36],
     ]];
     if ([self shouldHideWindowBar]) {
@@ -141,9 +141,9 @@ static const CGFloat LCResizeHandleSize = 44;
 // 不放符号（Ann 2026-11-22 晚定，跟 macOS 一样）。
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(8, 10, 16, 16)];
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(8, 8, 20, 20)];
     dot.backgroundColor = color;
-    dot.layer.cornerRadius = 8;
+    dot.layer.cornerRadius = 10;
     dot.layer.borderWidth = 0.5;
     dot.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
     dot.userInteractionEnabled = NO;
