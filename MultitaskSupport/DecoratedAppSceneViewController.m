@@ -21,12 +21,14 @@ static const CGFloat LCResizeHandleSize = 44;
 @property(nonatomic) CGRect originalFrame;
 @property(nonatomic) UIButton *maximizeButton;
 @property(nonatomic) UIImageView *maximizeGlyph;
-@property(nonatomic) UIBarButtonItem *menuButtonItem;
+@property(nonatomic) UIView *lightsView;
+@property(nonatomic) UIButton *menuButton;
+@property(nonatomic) NSLayoutConstraint *menuButtonTrailing;
 @property(nonatomic) bool isAppTerminationRequested;
 - (UIImage *)trafficLightGlyph:(NSString *)symbolName;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
-- (void)refreshBarButtonItems;
+- (void)refreshBarOverlay;
 @end
 
 @implementation DecoratedAppSceneViewController
@@ -48,8 +50,14 @@ static const CGFloat LCResizeHandleSize = 44;
     // 操作栏（Ann 2026-11-22 定，macOS 风）：左边三个实心红黄绿
     // 圆钮（关 / 最小化 / 最大化），中间不显示 App 名字，右边只
     // 留一个箭头钮，点开还是原来的 PID 菜单（见 windowMenuElements）。
-    // 容器和钮都取满栏高 36、圆点居中，保证在栏里垂直居中。
+    // 按钮不走导航栏的 item 系统：这条独立栏（非导航控制器托管）
+    // 的 item 布局由栏内部说了算——自定义视图会被拉宽（箭头圆
+    // 变药丸）、整组偏下、iOS 26 给按钮组套的玻璃底也关不掉
+    // （hidesSharedBackground 无效，最大化时两组钮上方各一条
+    // 细线就是它；Ann 2026-11-22 两张截图实证）。改成窗口视图
+    // 上的悬浮层：约束对着栏的中心线定位，栏只剩背景和拖动。
     UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 36)];
+    self.lightsView = lightsView;
     UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] symbol:@"xmark" action:@selector(closeWindow)];
     closeButton.frame = CGRectMake(0, 0, 26, 36);
     [lightsView addSubview:closeButton];
@@ -60,19 +68,8 @@ static const CGFloat LCResizeHandleSize = 44;
     self.maximizeButton.frame = CGRectMake(56, 0, 26, 36);
     [lightsView addSubview:self.maximizeButton];
     self.maximizeGlyph = (UIImageView *)[self.maximizeButton viewWithTag:7];
-    UIBarButtonItem *lightsItem = [[UIBarButtonItem alloc] initWithCustomView:lightsView];
-    // iOS 26 导航栏会给栏按钮组套一层共享的液态玻璃背景，Ann
-    // 不要：三钮和右箭头都关掉（hidesSharedBackground）。
-    lightsItem.hidesSharedBackground = YES;
-    // macOS 的红绿灯贴近窗口左缘（圆点左缘离窗边约 12），导航栏
-    // 默认左边距明显更大，用一个负宽空位把整组往左拉回来。
-    UIBarButtonItem *leftSpacer = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
-    leftSpacer.width = -10;
-    self.navigationItem.leftBarButtonItems = @[leftSpacer, lightsItem];
 
-    // 箭头钮就是演示图那样：圆形描边里一个箭头图标。尺寸必须用
-    // 约束钉死 30×30——栏会把自定义视图拉长，圆就会变成药丸
-    // （Ann 2026-11-22 真机发现；不是图标本身的问题）。
+    // 箭头钮就是演示图那样：圆形描边里一个箭头图标，30×30。
     UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
     menuButton.frame = CGRectMake(0, 0, 30, 30);
     menuButton.layer.cornerRadius = 15;
@@ -81,17 +78,37 @@ static const CGFloat LCResizeHandleSize = 44;
     UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIFontWeightSemibold];
     [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
     menuButton.tintColor = UIColor.secondaryLabelColor;
-    [menuButton.widthAnchor constraintEqualToConstant:30].active = YES;
-    [menuButton.heightAnchor constraintEqualToConstant:30].active = YES;
     __weak typeof(self) weakSelf = self;
     UIDeferredMenuElement *deferredMenu = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^ _Nonnull completion)(NSArray<UIMenuElement *> * _Nonnull)) {
         completion(weakSelf ? [weakSelf windowMenuElements] : @[]);
     }];
     menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
     menuButton.showsMenuAsPrimaryAction = YES;
-    self.menuButtonItem = [[UIBarButtonItem alloc] initWithCustomView:menuButton];
-    self.menuButtonItem.hidesSharedBackground = YES;
-    [self refreshBarButtonItems];
+    self.menuButton = menuButton;
+
+    // 悬浮层定位：三钮组左缘离窗边 6（第一个圆点再往里 6，圆点
+    // 左缘正好 12，macOS 的贴边距）；箭头钮右边距 12；两者都对
+    // 着栏的垂直中心，栏在顶部还是底部都跟着栏走。
+    [self.view addSubview:lightsView];
+    [self.view addSubview:menuButton];
+    lightsView.translatesAutoresizingMaskIntoConstraints = NO;
+    menuButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.menuButtonTrailing = [menuButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12];
+    [NSLayoutConstraint activateConstraints:@[
+        [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:6],
+        [lightsView.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
+        [lightsView.widthAnchor constraintEqualToConstant:82],
+        [lightsView.heightAnchor constraintEqualToConstant:36],
+        [menuButton.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
+        [menuButton.widthAnchor constraintEqualToConstant:30],
+        [menuButton.heightAnchor constraintEqualToConstant:30],
+        self.menuButtonTrailing,
+    ]];
+    if ([self shouldHideWindowBar]) {
+        lightsView.hidden = YES;
+        menuButton.hidden = YES;
+    }
+    [self refreshBarOverlay];
 
     return self;
 }
@@ -157,16 +174,12 @@ static const CGFloat LCResizeHandleSize = 44;
     return button;
 }
 
-// 箭头钮固定在右边；操作栏在底部时右下角有缩放把手，给箭头钮
-// 左边留一个空位，免得被把手盖住（左置三钮不受影响）。
-- (void)refreshBarButtonItems {
-    if ([NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"]) {
-        UIBarButtonItem *spacer = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
-        spacer.width = 34;
-        self.navigationItem.rightBarButtonItems = @[spacer, self.menuButtonItem];
-    } else {
-        self.navigationItem.rightBarButtonItems = @[self.menuButtonItem];
-    }
+// 箭头钮的位置恒定（右、居中于栏）；只有操作栏在底部时，右下
+// 角有缩放把手，箭头钮的右边距加大给把手让位（左置三钮不受
+// 影响）。
+- (void)refreshBarOverlay {
+    BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
+    self.menuButtonTrailing.constant = bottomWindowBar ? -46 : -12;
 }
 
 - (void)setupDecoratedView {
@@ -534,8 +547,8 @@ static const CGFloat LCResizeHandleSize = 44;
             [self.view insertArrangedSubview:self.navigationBar atIndex:0];
         }
         // 按钮位置不随栏的位置变（恒左三钮、右箭头）；变的只是
-        // 底部栏时箭头钮要给右下缩放把手让位（refreshBarButtonItems）。
-        [self refreshBarButtonItems];
+        // 底部栏时箭头钮要给右下缩放把手让位（refreshBarOverlay）。
+        [self refreshBarOverlay];
         [self updateVerticalConstraints];
         
         if(_isMaximized) {
@@ -640,6 +653,11 @@ static const CGFloat LCResizeHandleSize = 44;
         CGFloat navBarHeight = hideWindowBar ? 0 : LCWindowBarHeight;
         self.navigationBar.alpha = hideWindowBar ? 0 : 1;
         self.navigationBar.hidden = hideWindowBar;
+        // 悬浮层的钮跟栏一起显隐。
+        self.lightsView.alpha = hideWindowBar ? 0 : 1;
+        self.lightsView.hidden = hideWindowBar;
+        self.menuButton.alpha = hideWindowBar ? 0 : 1;
+        self.menuButton.hidden = hideWindowBar;
         
         // Update safe area insets
         if(self.isMaximized) {
