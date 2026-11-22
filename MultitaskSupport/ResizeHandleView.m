@@ -16,7 +16,6 @@
     backgroundView.center = CGPointMake(frame.size.width, frame.size.height);
     backgroundView.transform = CGAffineTransformMakeRotation(M_PI_4);
     [self addSubview:backgroundView];
-    _wedgeView = backgroundView;
     return self;
 }
 @end
