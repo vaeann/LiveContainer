@@ -476,9 +476,13 @@ static const CGFloat LCResizeHandleSize = 44;
         if (self.tapOutsideScrim || !self.navigationBar) return;
         UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
         scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        // Clear: the scrim only hit-tests. (Placement verified on
-        // device 2026-11-22; the faint red test tint is gone.)
-        scrim.backgroundColor = [UIColor clearColor];
+        // The scrim must carry a slight tint: fully clear views do
+        // not claim touches in this window stack (proven twice on
+        // device 2026-11-22 — the clear scrim and the hidden corner
+        // wedges both went dead; the earlier 0.12 red test tint
+        // worked). Black 0.10 reads as a gentle dim of the app
+        // while the dock is expanded, nothing more.
+        scrim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.10];
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapOutsideScrimTapped)];
         [scrim addGestureRecognizer:tap];
         // Insert above the scene view and its content container, below
