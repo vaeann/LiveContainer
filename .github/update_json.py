@@ -19,6 +19,13 @@ def fetch_latest_release(repo_url, is_nightly: bool):
     headers = {
         "Accept": "application/vnd.github+json",
     }
+    # Authenticate when a token is available (the workflow provides
+    # GITHUB_TOKEN): unauthenticated calls share the runner egress IP's
+    # 60 req/h quota and intermittently fail this step with a 403,
+    # which blocks the whole nightly release.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         response = requests.get(api_url, headers=headers)
         response.raise_for_status()
