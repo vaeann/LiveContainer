@@ -26,7 +26,6 @@ static const CGFloat LCResizeHandleSize = 44;
 - (UIImage *)trafficLightGlyph:(NSString *)symbolName;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
-- (UIImage *)chevronCircleImage;
 - (void)refreshBarButtonItems;
 @end
 
@@ -71,16 +70,26 @@ static const CGFloat LCResizeHandleSize = 44;
     leftSpacer.width = -10;
     self.navigationItem.leftBarButtonItems = @[leftSpacer, lightsItem];
 
-    // 箭头钮用普通图片栏钮（圆圈+箭头画在图里）：自定义 UIButton
-    // 在 iOS 26 的栏里会被套上药丸形底，图片钮不会。
-    UIBarButtonItem *menuItem = [[UIBarButtonItem alloc] initWithImage:[self chevronCircleImage] style:UIBarButtonItemStylePlain target:nil action:nil];
-    menuItem.tintColor = UIColor.secondaryLabelColor;
+    // 箭头钮就是演示图那样：圆形描边里一个箭头图标。尺寸必须用
+    // 约束钉死 30×30——栏会把自定义视图拉长，圆就会变成药丸
+    // （Ann 2026-11-22 真机发现；不是图标本身的问题）。
+    UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    menuButton.frame = CGRectMake(0, 0, 30, 30);
+    menuButton.layer.cornerRadius = 15;
+    menuButton.layer.borderWidth = 1;
+    menuButton.layer.borderColor = UIColor.separatorColor.CGColor;
+    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIFontWeightSemibold];
+    [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
+    menuButton.tintColor = UIColor.secondaryLabelColor;
+    [menuButton.widthAnchor constraintEqualToConstant:30].active = YES;
+    [menuButton.heightAnchor constraintEqualToConstant:30].active = YES;
     __weak typeof(self) weakSelf = self;
     UIDeferredMenuElement *deferredMenu = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^ _Nonnull completion)(NSArray<UIMenuElement *> * _Nonnull)) {
         completion(weakSelf ? [weakSelf windowMenuElements] : @[]);
     }];
-    menuItem.menu = [UIMenu menuWithChildren:@[deferredMenu]];
-    self.menuButtonItem = menuItem;
+    menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
+    menuButton.showsMenuAsPrimaryAction = YES;
+    self.menuButtonItem = [[UIBarButtonItem alloc] initWithCustomView:menuButton];
     self.menuButtonItem.hidesSharedBackground = YES;
     [self refreshBarButtonItems];
 
@@ -121,27 +130,6 @@ static const CGFloat LCResizeHandleSize = 44;
     return menuItems;
 }
 
-// 圆形箭头图：26×26，圆圈描边 + 向下箭头，模板渲染（颜色随
-// tintColor）。画成图片而不是用视图拼，就是为了避开系统给栏里
-// 按钮套的药丸形底。
-- (UIImage *)chevronCircleImage {
-    CGFloat size = 26;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
-    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-        CGContextRef cg = context.CGContext;
-        CGContextSetStrokeColorWithColor(cg, UIColor.blackColor.CGColor);
-        CGContextSetLineWidth(cg, 1.5);
-        CGContextStrokeEllipseInRect(cg, CGRectInset(CGRectMake(0, 0, size, size), 1, 1));
-        CGContextBeginPath(cg);
-        CGContextMoveToPoint(cg, 9, 11);
-        CGContextAddLineToPoint(cg, 13, 15.5);
-        CGContextAddLineToPoint(cg, 17, 11);
-        CGContextSetLineCap(cg, kCGLineCapRound);
-        CGContextSetLineJoin(cg, kCGLineJoinRound);
-        CGContextStrokePath(cg);
-    }];
-    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-}
 
 - (UIImage *)trafficLightGlyph:(NSString *)symbolName {
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:7.5 weight:UIFontWeightBold];
