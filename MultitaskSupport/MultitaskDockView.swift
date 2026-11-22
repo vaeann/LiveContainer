@@ -1064,15 +1064,19 @@ public struct MultitaskDockSwiftView: View {
                     dockManager.closeAllApps()
                 }
             }
+            // Pill-shaped dock (Ann 2026-11-22): a capsule reads as
+            // one floating control, not a panel — collapsed it is a
+            // plain circle around the orb glyph, expanded a vertical
+            // capsule around the icons.
             .modifier { content in
                 if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                    content.glassEffect(.regular, in: .rect(cornerRadius: 15))
+                    content.glassEffect(.regular, in: .capsule)
                 } else {
                     content.background(
-                        RoundedRectangle(cornerRadius: 15)
+                        Capsule()
                             .fill(Color.black.opacity(dockManager.isDockHidden ? 0.3 : 0.7))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 15)
+                                Capsule()
                                     .stroke(Color.white.opacity(dockManager.isDockHidden ? 0.1 : 0.3), lineWidth: 1)
                             )
                     )
