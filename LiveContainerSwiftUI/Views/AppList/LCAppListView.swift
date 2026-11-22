@@ -124,7 +124,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     @State private var isViewAppeared = false
     
-    @ObservedObject var searchContext: SearchContext = SearchContext()
+    // StateObject for the same reason as in LCSourcesView: an
+    // ObservedObject with a default instance is replaced whenever
+    // the parent re-creates this view, wiping the search query.
+    @StateObject private var searchContext = SearchContext()
     var sortedApps: [LCAppModel] {
         return sharedAppSortManager.sortedApps
     }

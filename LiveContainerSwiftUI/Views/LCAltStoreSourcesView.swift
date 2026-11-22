@@ -544,7 +544,13 @@ struct LCSourcesView: View {
     @StateObject private var viewModel = AltStoreSourcesViewModel()
     @State private var errorMessage: String?
     @State private var sourcePendingRemoval: AltStoreSourcesViewModel.SourceItem?
-    @ObservedObject public var searchContext: SearchContext = SearchContext()
+    // Must be a StateObject, not an ObservedObject with a default
+    // instance: the tab view re-creates this view whenever the badge
+    // count is published, and an ObservedObject gets swapped for the
+    // fresh instance each time — which reset the search query to ""
+    // while typing (device report 2026-11-22). A StateObject is
+    // created once per view identity and ignores later initializers.
+    @StateObject private var searchContext = SearchContext()
     @State private var expandedSources: Set<URL> = []
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
