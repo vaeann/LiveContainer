@@ -176,6 +176,18 @@ class AppInfoProvider {
     }
 
     @objc public var windowHostingView = VirtualWindowsHostView()
+
+    /// Tap-outside scrim （挡板）: while the dock is expanded, a clear
+    /// view sits in the key window above the app windows and below
+    /// the dock, so the first tap outside the dock lands on it and
+    /// collapses the dock instead of reaching the guest app. Pure
+    /// host-side hit-testing — the old cross-process design (guest
+    /// sendEvent hook + App-Group state publishing + Darwin signal)
+    /// is gone for good: the bisect proved it kills background
+    /// keep-alive, and host event-stream interception never sees
+    /// guest touches at all (backboardd routes them to the guest
+    /// process). Synced from updateDockFrame and hideDock.
+    private var tapOutsideScrim: UIView?
     internal var hostingController: UIHostingController<AnyView>?
 
     public struct Constants {
@@ -392,6 +404,35 @@ class AppInfoProvider {
 
         applyNewFrame(newFrame, for: hostingController, animated: animated)
         updateStatusBarFix()
+        syncTapOutsideScrim()
+    }
+
+    /// Keep the tap-outside scrim in step with the dock: present only
+    /// while the dock is visible, expanded and not hidden to the side.
+    private func syncTapOutsideScrim() {
+        let shouldShow = isVisible && !isCollapsed && !isDockHidden
+        if shouldShow {
+            guard tapOutsideScrim == nil,
+                  let hostingView = hostingController?.view,
+                  let window = hostingView.superview else { return }
+            let scrim = UIView(frame: window.bounds)
+            scrim.backgroundColor = .clear
+            scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTapOutsideScrim)))
+            window.insertSubview(scrim, belowSubview: hostingView)
+            tapOutsideScrim = scrim
+        } else {
+            tapOutsideScrim?.removeFromSuperview()
+            tapOutsideScrim = nil
+        }
+    }
+
+    @objc private func handleTapOutsideScrim() {
+        // The tap is consumed by the scrim (the guest app never sees
+        // it); all it does is collapse the dock.
+        if !isCollapsed {
+            toggleDockCollapse()
+        }
     }
 
     // MARK: - Frame Calculation Helpers
@@ -558,6 +599,7 @@ class AppInfoProvider {
                 // The next session starts collapsed again (see showDock).
                 self.isCollapsed = true
                 hostingController.view.transform = .identity
+                self.syncTapOutsideScrim()
             }
         }
     }
@@ -933,7 +975,6 @@ class AppInfoProvider {
         }
     }
     
-    // MARK: - Tap-outside collapse via sendEvent
     // MARK: - Multitask Mode Check
     private func isDockEnabled() -> Bool {
         let multitaskMode = MultitaskMode(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCMultitaskMode")) ?? .virtualWindow
@@ -1367,7 +1408,15 @@ struct AppIconView: View {
                     guard inside, movedDistance < 12 else { return }
                     let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
                     impactFeedback.impactOccurred()
-                    let _ = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
+                    let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
+                    // Switching to an app finishes the dock's job:
+                    // collapse it (Ann's 保底 collapse — covers the
+                    // case where tap-outside never fires). The cycle
+                    // button deliberately stays expanded for repeated
+                    // flipping; a direct icon tap does not.
+                    if brought && !dockManager.isCollapsed {
+                        dockManager.toggleDockCollapse()
+                    }
                 },
                 onCancelled: {
                     isPressed = false
