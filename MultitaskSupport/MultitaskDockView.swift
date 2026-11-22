@@ -443,7 +443,11 @@ class AppInfoProvider {
         // and a tap on a blank area collapses the dock too
         // (Ann 2026-11-22).
         if shouldShow {
-            if tapOutsideBackdrop == nil {
+            if let backdrop = tapOutsideBackdrop {
+                // Re-shown while a fade-out was still running:
+                // just fade back in.
+                UIView.animate(withDuration: 0.3) { backdrop.alpha = 1 }
+            } else {
                 let backdrop = UIView(frame: windowHostingView.bounds)
                 backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 // Same 0.10 black as the per-window scrims — and
@@ -451,12 +455,21 @@ class AppInfoProvider {
                 // claim touches in this window stack.
                 backdrop.backgroundColor = UIColor(white: 0, alpha: 0.10)
                 backdrop.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapOutsideBackdropTapped)))
+                // Fade in with the dock's expansion instead of
+                // snapping on: an instant full-screen dim reads
+                // as a black flash (Ann 2026-11-22).
+                backdrop.alpha = 0
                 windowHostingView.insertSubview(backdrop, at: 0)
                 tapOutsideBackdrop = backdrop
+                UIView.animate(withDuration: 0.3) { backdrop.alpha = 1 }
             }
-        } else {
-            tapOutsideBackdrop?.removeFromSuperview()
+        } else if let backdrop = tapOutsideBackdrop {
             tapOutsideBackdrop = nil
+            UIView.animate(withDuration: 0.25, animations: {
+                backdrop.alpha = 0
+            }, completion: { _ in
+                backdrop.removeFromSuperview()
+            })
         }
     }
 

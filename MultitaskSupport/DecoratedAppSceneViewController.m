@@ -508,6 +508,10 @@ static const CGFloat LCResizeHandleSize = 44;
         if (self.tapOutsideScrim || !self.navigationBar) return;
         UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
         scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        // Fade in with the dock's expansion instead of snapping
+        // on: an instant full-screen dim reads as a black flash
+        // (Ann 2026-11-22).
+        scrim.alpha = 0;
         // The scrim must carry a slight tint: fully clear views do
         // not claim touches in this window stack (proven twice on
         // device 2026-11-22 — the clear scrim and the hidden corner
@@ -525,9 +529,18 @@ static const CGFloat LCResizeHandleSize = 44;
         NSInteger targetIndex = (handleIndex == NSNotFound) ? barIndex : MIN(barIndex, handleIndex);
         [self.view insertSubview:scrim atIndex:targetIndex];
         self.tapOutsideScrim = scrim;
+        [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+            scrim.alpha = 1;
+        } completion:nil];
     } else {
-        [self.tapOutsideScrim removeFromSuperview];
+        UIView *scrim = self.tapOutsideScrim;
+        if (!scrim) return;
         self.tapOutsideScrim = nil;
+        [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+            scrim.alpha = 0;
+        } completion:^(BOOL finished) {
+            [scrim removeFromSuperview];
+        }];
     }
 }
 
