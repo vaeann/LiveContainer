@@ -31,10 +31,11 @@ import Intents
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
 
-        // RECOVERY (2026-11-22): keep-alive launch activation is
-        // disabled in this build while a launch crash is diagnosed.
-        // The keeper code stays compiled in; nothing deploys or
-        // installs at launch. Re-enable once the cause is pinned.
+        // 保活分阶段上线（2026-11-22，上一版启动闪退后改走分步验证）：
+        // 阶段 1 只装宿主半观察者；游客 dylib 的部署在
+        // CZFHostKeepAlive.syncGuestModule 里暂缓（阶段 2 再开），
+        // LCBootstrap 里的宿主自加载排除也还在。
+        CZFHostKeepAlive.shared.install()
 
         return true
     }

@@ -359,6 +359,11 @@ final class CZFHostKeepAlive {
     /// 的教训），这里解码后写进两个 Tweaks 文件夹并签名；关开关时
     /// 移除，游客就不再加载它。
     static func syncGuestModule(enabled: Bool) {
+        // 阶段 1（2026-11-22）：部署暂缓，只记日志。阶段 2 删掉这三行
+        // 即恢复下面的完整实现（签名已改串行，见函数后半）。
+        CZFKeepAliveLog.event("LC", "deploy-deferred", ["enabled": "\(enabled)", "stage": "1"])
+        return
+        // (stage 2 removes the deferral above)
         let folders = [LCPath.tweakPath, LCPath.lcGroupTweakPath]
         let fm = FileManager.default
         if !enabled {
@@ -379,9 +384,13 @@ final class CZFHostKeepAlive {
         // 签名纪律：dylib 内容变了才重签；另存一份已签摘要在标准
         // defaults 里（重装 LC 会清掉），摘要对不上时也重签一次——
         // 覆盖“重装后字节没变但签名身份变了”的情况，常态启动不重签。
+        // 两个文件夹的签名在一个 Task 里串行做：LCUtils 的签名机
+        // 器不是并发安全的（上一版每文件夹一个 Task 并发签，是启动
+        // 闪退的嫌疑之一）。
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let alreadySigned = UserDefaults.standard.string(forKey: "CZFKeepAliveSignedDigest") == digest
         CZFKeepAliveLog.event("LC", "deploy", ["bytes": "\(data.count)", "alreadySigned": "\(alreadySigned)"])
+        var foldersToSign: [URL] = []
         for folder in folders {
             try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
             let dest = folder.appendingPathComponent("CZFKeepAlive.dylib")
@@ -398,19 +407,24 @@ final class CZFHostKeepAlive {
                 }
             }
             CZFKeepAliveLog.event("LC", "deployed", ["folder": folder.lastPathComponent, "updated": "\(updated)"])
-            guard updated || !alreadySigned else {
+            if updated || !alreadySigned {
+                foldersToSign.append(folder)
+            } else {
                 CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "skipped": "unchanged"])
-                continue
             }
-            Task {
+        }
+        guard !foldersToSign.isEmpty else { return }
+        Task {
+            for folder in foldersToSign {
                 do {
                     try await LCUtils.signTweaks(tweakFolderUrl: folder, force: true)
-                    UserDefaults.standard.set(digest, forKey: "CZFKeepAliveSignedDigest")
                     CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "true"])
                 } catch {
                     CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "false", "error": error.localizedDescription])
+                    return
                 }
             }
+            UserDefaults.standard.set(digest, forKey: "CZFKeepAliveSignedDigest")
         }
     }
 }

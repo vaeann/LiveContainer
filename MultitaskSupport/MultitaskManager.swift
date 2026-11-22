@@ -28,8 +28,8 @@ enum MultitaskMode : Int {
     private class func postRunningAppsChangedNotification() {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: NSNotification.MultitaskRunningAppsChanged, object: nil)
-            // RECOVERY (2026-11-22): keep-alive refresh hook disabled
-            // while a launch crash is diagnosed.
+            // 游客集合变了，宿主保活重算一次（zh 同款接线）。
+            CZFHostKeepAlive.shared.refresh()
         }
     }
 
