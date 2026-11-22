@@ -24669,25 +24669,25 @@
         }
       }
     },
-    "lc.settings.maximizedFullscreen" : {
+    "lc.settings.hideWindowBar" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Maximized Fullscreen"
+            "value" : "Hide Window Bar"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最大化全屏"
+            "value" : "隐藏操作栏"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最大化全螢幕"
+            "value" : "隱藏操作欄"
           }
         }
       }

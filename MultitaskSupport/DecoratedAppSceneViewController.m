@@ -420,10 +420,9 @@
         if (self.tapOutsideScrim || !self.navigationBar) return;
         UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
         scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        // TEST TINT: faint red so the scrim's coverage is visible on
-        // device. If this placement works, the tint goes away and the
-        // scrim becomes clear.
-        scrim.backgroundColor = [[UIColor redColor] colorWithAlphaComponent:0.12];
+        // Clear: the scrim only hit-tests. (Placement verified on
+        // device 2026-11-22; the faint red test tint is gone.)
+        scrim.backgroundColor = [UIColor clearColor];
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapOutsideScrimTapped)];
         [scrim addGestureRecognizer:tap];
         // Insert above the scene view and its content container, below
@@ -529,13 +528,13 @@
     [self.view.superview bringSubviewToFront:self.view];
 }
 
-// 最大化时是否隐藏窗口栏，由独立开关「最大化全屏」
-// （LCMaximizedFullscreen）控制（Ann 2026-11-22 拆分）：开 = 最大化
-// 即全屏、窗口栏隐藏；关 = 窗口栏常在。「默认最大化多任务窗口」
-// （LCLaunchMultitaskMaximized）已恢复原生职责，只决定窗口打开时
-// 是否最大化，不再掺和窗口栏。
+// 是否隐藏窗口栏（操作栏），由独立开关「隐藏操作栏」
+// （LCHideWindowBar）控制（Ann 2026-11-22 定）：开 = 所有多任务
+// 窗口都不显示窗口栏，不分最大化还是小窗口；关 = 窗口栏常在。
+// 「默认最大化多任务窗口」（LCLaunchMultitaskMaximized）已恢复
+// 原生职责，只决定窗口打开时是否最大化，不再掺和窗口栏。
 - (BOOL)shouldHideWindowBar {
-    return self.isMaximized && [NSUserDefaults.lcUserDefaults boolForKey:@"LCMaximizedFullscreen"];
+    return [NSUserDefaults.lcUserDefaults boolForKey:@"LCHideWindowBar"];
 }
 
 - (void)updateVerticalConstraints {

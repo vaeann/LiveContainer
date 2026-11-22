@@ -940,6 +940,15 @@ class AppInfoProvider {
         _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID)
     }
 
+    /// Toggle a window between maximized and windowed, through the
+    /// very same action as the window bar's maximize button. Used by
+    /// the double-tap on the front app's dock icon.
+    @objc public func toggleMaximized(uuid: String) {
+        guard let app = apps.first(where: { $0.appUUID == uuid }),
+              let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController else { return }
+        vc.maximizeWindow()
+    }
+
     /// Close every multitask app, through the same per-app path as
     /// the red X. The dock empties and hides itself through the
     /// usual running-apps notifications.
@@ -1337,6 +1346,8 @@ struct AppIconView: View {
     let app: DockAppModel
     @State private var isPressed = false
     @State private var closeTriggered = false
+    /// 待执行的「点自己收坞」：给双击留 0.3 秒窗口（见 onEnded）。
+    @State private var pendingSelfTapCollapse: DispatchWorkItem?
     @State private var appIcon: UIImage?
     @State private var isLoading = true
     @EnvironmentObject var dockManager: MultitaskDockManager
@@ -1385,13 +1396,11 @@ struct AppIconView: View {
                     // Tapping the front app's own icon is not a
                     // switch: re-presenting its scene replays a
                     // bring-to-front animation and shifts the app's
-                    // UI down for a moment (Ann 2026-11-22). Skip the
-                    // switch entirely; the tap still collapses the
-                    // dock like any other icon tap.
+                    // UI down for a moment (Ann 2026-11-22). It has
+                    // its own handling: single tap collapses, double
+                    // tap toggles maximized/windowed.
                     if app.appUUID == dockManager.frontAppUUID {
-                        if !dockManager.isCollapsed {
-                            dockManager.toggleDockCollapse()
-                        }
+                        handleFrontAppTap()
                         return
                     }
                     let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
@@ -1438,6 +1447,33 @@ struct AppIconView: View {
         .contentShape(Rectangle())
     }
     
+    /// Taps on the front app's own icon (never a switch — see
+    /// onEnded). Single tap collapses the dock, delayed 0.3s so a
+    /// second tap can preempt it: a double-tap toggles the window
+    /// between maximized and windowed instead (Ann 2026-11-22).
+    /// Only the front app's icon behaves this way; other icons
+    /// switch on the first tap, which collapses the dock before
+    /// any second tap could land.
+    private func handleFrontAppTap() {
+        if let pending = pendingSelfTapCollapse {
+            pending.cancel()
+            pendingSelfTapCollapse = nil
+            dockManager.toggleMaximized(uuid: app.appUUID)
+            if !dockManager.isCollapsed {
+                dockManager.toggleDockCollapse()
+            }
+            return
+        }
+        let work = DispatchWorkItem {
+            pendingSelfTapCollapse = nil
+            if !dockManager.isCollapsed {
+                dockManager.toggleDockCollapse()
+            }
+        }
+        pendingSelfTapCollapse = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
     private func loadAppIcon() {
         let cacheKey = "\(app.appName)_\(app.appUUID)"
         
