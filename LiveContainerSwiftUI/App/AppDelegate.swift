@@ -31,6 +31,11 @@ import Intents
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
 
+        // zh 式两件套保活：宿主侧装观察者；游客侧 dylib 按开关部署
+        // （重装后不打开设置页也要部署到位）。
+        CZFHostKeepAlive.shared.install()
+        CZFHostKeepAlive.syncGuestModule(enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)
+
         return true
     }
     

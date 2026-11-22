@@ -1,0 +1,404 @@
+// CZFHostKeepAlive.swift
+// 宿主侧无声音频保活，移植自 LiveContainer-zh 的同名实现：宿主切后台时
+// 若有游客在跑，让宿主自己播一段静音，宿主进程保持运行，游客所在的
+// LiveProcess Extension 才不被系统回收。与游客侧 CZFKeepAlive.dylib
+// 同一套配方（8kHz 单声道静音循环 + 看门狗），但跑在宿主进程里：
+// 覆盖所有游客（含 dontInject、没挂保活夹的），不依赖游客侧插件。
+// 开关与游客侧保活共用 LCKeepAliveEnabled（默认开）。
+// 只在“开关开 + 有游客在跑 + 宿主已切后台”三者同时满足时播放；
+// 宿主回前台、最后一个游客退出、开关关闭时立即停。
+// 宿主保活按白名单：与游客侧共用 CZFKeepAliveApps.txt，文件不存在
+// = 全保，文件存在 = 只有名单里的游客才触发宿主保活。宿主音频是整
+// 进程一份、没法按 App 切分，所以只要有一个在跑游客在名单里，宿主
+// 照常保；只有在跑游客全都不在名单里时，宿主才停。原生模式下 dock
+// 无记录、场景无法对应 bid，维持全保，避免误停。
+// v1.1 优化（防 1 分钟内被掐）：①提前启动 —— WillResignActive 就先
+// 播，切后台时音频会话已经是激活态；②游客计数补原生模式 —— 虚拟
+// 模式数 dock，原生模式数系统已连接的场景；③后台任务第二通道 ——
+// 音频被打断时，后台任务先顶住，过期时重开音频并续一个新任务。
+//
+// 本 fork 的增补：全程诊断日志（CZFKeepAliveLog，与游客侧 dylib 写
+// 同一个文件），以及游客模块的 base64 部署（syncGuestModule）。
+
+import AVFoundation
+import UIKit
+
+/// Shared keep-alive debug log: host, guests and LC itself append to
+/// <appGroup>/CZFKeepAlive/keepalive.log in the format
+/// `MM-dd HH:mm:ss Tag · event k=v ...`. The guest-side dylib writes
+/// the same file with the same format.
+enum CZFKeepAliveLog {
+    private static let queue = DispatchQueue(label: "czf.keepalive.log")
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM-dd HH:mm:ss"
+        return f
+    }()
+
+    static var fileURL: URL {
+        let root = LCPath.lcGroupDocPath.deletingLastPathComponent()
+        return root.appendingPathComponent("CZFKeepAlive", isDirectory: true)
+            .appendingPathComponent("keepalive.log")
+    }
+
+    static func event(_ tag: String, _ event: String, _ details: [String: String] = [:]) {
+        queue.async {
+            let url = fileURL
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let suffix = details.keys.sorted().map { "\($0)=\(details[$0]!)" }.joined(separator: " ")
+            let line = "\(formatter.string(from: Date())) \(tag) · \(event)\(suffix.isEmpty ? "" : " " + suffix)\n"
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(line.data(using: .utf8)!)
+                try? handle.close()
+            } else {
+                try? line.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
+    /// Keep the log bounded: above 512 KB keep only the last 200 lines.
+    static func trimIfNeeded() {
+        queue.async {
+            let url = fileURL
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = (attrs[.size] as? NSNumber)?.intValue, size > 512 * 1024,
+                  let content = try? String(contentsOf: url, encoding: .utf8) else { return }
+            let lines = content.components(separatedBy: "\n").suffix(200)
+            try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+final class CZFHostKeepAlive {
+    static let shared = CZFHostKeepAlive()
+
+    private var player: AVAudioPlayer?
+    private var watchdog: Timer?
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var isBackgrounded = false
+    private var installed = false
+    private var playStartedAt: Date?
+    // block 观察者返的 token 必须留住——NotificationCenter 不强持有
+    // 它，丢掉就当场注销。
+    private var observerTokens: [NSObjectProtocol] = []
+
+    private init() {}
+
+    /// App 启动时调一次：装后台/前台/音频中断观察者（主队列）。
+    func install() {
+        guard !installed else { return }
+        installed = true
+        isBackgrounded = UIApplication.shared.applicationState == .background
+        CZFKeepAliveLog.trimIfNeeded()
+        CZFKeepAliveLog.event("宿主", "keep-alive-install", [
+            "state": "\(UIApplication.shared.applicationState.rawValue)",
+            "enabled": "\(UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)",
+            "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
+        let center = NotificationCenter.default
+        observerTokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didEnterBackground"])
+            self?.isBackgrounded = true
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willEnterForeground"])
+            self?.isBackgrounded = false
+            self?.refresh()
+        })
+        // 提前启动：上滑切 App 时 WillResignActive 先于 DidEnterBackground，
+        // 这里就先播，切后台时音频会话已经是激活态。
+        observerTokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willResignActive"])
+            self?.isBackgrounded = true
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didBecomeActive"])
+            self?.isBackgrounded = false
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let self = self else { return }
+            guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else {
+                CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": "unknown"])
+                return
+            }
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "interruption", "type": type == .began ? "began" : "ended"])
+            guard type == .ended else { return }
+            self.refresh()
+        })
+        // 音频服务丢了/重置了（mediaserverd 崩了重起等），播放器会静默
+        // 停掉且不发 interruption——直接听这两个通知，丢了就重起。
+        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereLostNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesLost"])
+            self?.refresh()
+        })
+        observerTokens.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "mediaServicesReset"])
+            self?.refresh()
+        })
+    }
+
+    /// 白名单读法：先读 tweakPath，读到即算；两夹文件都不存在 = 全保。
+    /// 空文件读出空名单，不是“不存在”，这时名单外的游客一律不保。
+    /// 按（文件路径 + 修改时间 + 大小）缓存名单，文件没变就不再读全文。
+    private static var keepAliveListCacheURL: URL?
+    private static var keepAliveListCacheMtime: Date?
+    private static var keepAliveListCacheSize: Int?
+    private static var keepAliveListCache: [String]?
+    /// 白名单本身：文件存在返回名单，不存在返回 nil（不是空名单）。
+    private static func cachedWhitelist() -> [String]? {
+        for url in [LCPath.tweakPath, LCPath.lcGroupTweakPath].map({ $0.appendingPathComponent("CZFKeepAliveApps.txt") }) {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let mtime = attrs[.modificationDate] as? Date,
+                  let size = (attrs[.size] as? NSNumber)?.intValue else {
+                continue
+            }
+            if keepAliveListCacheURL == url,
+               keepAliveListCacheMtime == mtime,
+               keepAliveListCacheSize == size,
+               let cached = keepAliveListCache {
+                return cached
+            }
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                let list = content.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                keepAliveListCacheURL = url
+                keepAliveListCacheMtime = mtime
+                keepAliveListCacheSize = size
+                keepAliveListCache = list
+                CZFKeepAliveLog.event("宿主", "keep-alive-whitelist", ["source": url.lastPathComponent, "count": "\(list.count)", "apps": list.joined(separator: ",")])
+                return list
+            }
+        }
+        return nil
+    }
+    private static func keepAliveNeeded(for bid: String) -> Bool {
+        cachedWhitelist()?.contains(bid) ?? true
+    }
+    /// 供最小化自动关豁免用：只有白名单文件存在、且该 App 在名单里时
+    /// 才豁免；文件不存在时返回 false。
+    static func isInKeepAliveWhitelist(for bid: String) -> Bool {
+        cachedWhitelist()?.contains(bid) ?? false
+    }
+
+    /// 开关/游客数/前后台/白名单任一变化时调：重算该不该播（主队列）。
+    func refresh() {
+        let enabled = UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true
+        var guestsNeedKeepAlive = false
+        var guestSource = "scenes"
+        var dockBids: [String] = []
+        if #available(iOS 16.0, *) {
+            let dockApps = MultitaskDockManager.shared.apps
+            if !dockApps.isEmpty {
+                guestSource = "dock"
+                // 虚拟模式：按 dock 记录逐个对白名单，bid 未知时保守全保。
+                guestsNeedKeepAlive = dockApps.contains { app in
+                    guard let bid = app.appInfo?.bundleIdentifier(), !bid.isEmpty else { return true }
+                    dockBids.append(bid)
+                    return Self.keepAliveNeeded(for: bid)
+                }
+            } else {
+                // 原生模式下 dock 不启用：游客是系统场景，主场景之外多
+                // 一个即有游客；场景无法对应 bid，只能全保。
+                guestsNeedKeepAlive = UIApplication.shared.connectedScenes.count > 1
+            }
+        } else {
+            guestsNeedKeepAlive = UIApplication.shared.connectedScenes.count > 1
+        }
+        let shouldPlay = enabled && guestsNeedKeepAlive && isBackgrounded
+        CZFKeepAliveLog.event("宿主", "keep-alive-refresh", [
+            "enabled": "\(enabled)",
+            "guests": "\(guestsNeedKeepAlive)",
+            "source": guestSource,
+            "bids": dockBids.joined(separator: ","),
+            "scenes": "\(UIApplication.shared.connectedScenes.count)",
+            "bg": "\(isBackgrounded)",
+            "playing": "\(player?.isPlaying ?? false)",
+            "decision": shouldPlay ? "start" : "stop"])
+        if shouldPlay {
+            start()
+        } else {
+            stop()
+        }
+    }
+
+    /// 后台任务第二通道：音频被打断时先顶住，过期时重开音频并续一个新任务。
+    private func beginBackgroundTask() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+            guard let self else { return }
+            CZFKeepAliveLog.event("宿主", "keep-alive-bgtask-expire", ["id": "\(self.backgroundTask.rawValue)", "bg": "\(self.isBackgrounded)"])
+            UIApplication.shared.endBackgroundTask(self.backgroundTask)
+            self.backgroundTask = .invalid
+            if self.isBackgrounded { self.start() }
+        }
+        CZFKeepAliveLog.event("宿主", "keep-alive-bgtask-begin", ["id": "\(backgroundTask.rawValue)"])
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        CZFKeepAliveLog.event("宿主", "keep-alive-bgtask-end", ["id": "\(backgroundTask.rawValue)"])
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
+    private func start() {
+        beginBackgroundTask()
+        if let player = player, player.isPlaying { return }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, options: .mixWithOthers)
+            try session.setActive(true)
+            let created = player == nil
+            if created {
+                player = try AVAudioPlayer(data: CZFHostKeepAlive.silentWAVData())
+                player?.numberOfLoops = -1
+                player?.volume = 0.0
+                player?.prepareToPlay()
+            }
+            player?.play()
+            if playStartedAt == nil { playStartedAt = Date() }
+            CZFKeepAliveLog.event("宿主", "keep-alive-start", [
+                "created": "\(created)",
+                "playing": "\(player?.isPlaying ?? false)",
+                "currentTime": "\(player?.currentTime ?? -1)",
+                "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
+        } catch {
+            // 宿主保活绝不能拖垮宿主：起不来就安静失败（但要留日志）。
+            CZFKeepAliveLog.event("宿主", "keep-alive-start-failed", ["error": error.localizedDescription])
+            return
+        }
+        if watchdog == nil {
+            // 看门狗只作兜底：主因（中断结束、音频服务丢/重置、前后台
+            // 切换）都已有通知直接触发 refresh() 重起；这表只防通知没
+            // 覆盖到的漏网情况，5 分钟一轮，tolerance 60 秒让系统并批。
+            watchdog = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                // 只在真后台才重起：applicationState 才是真后台。
+                let inBg = UIApplication.shared.applicationState == .background
+                let playing = self.player?.isPlaying ?? false
+                CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
+                    "state": "\(UIApplication.shared.applicationState.rawValue)",
+                    "playing": "\(playing)",
+                    "currentTime": "\(self.player?.currentTime ?? -1)",
+                    "action": (inBg && !playing) ? "restart" : "none"])
+                if inBg && !playing {
+                    self.start()
+                }
+            }
+            watchdog?.tolerance = 60.0
+            CZFKeepAliveLog.event("宿主", "keep-alive-watchdog-armed", ["interval": "300"])
+        }
+    }
+
+    private func stop() {
+        let wasPlaying = player?.isPlaying ?? false
+        let seconds = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+        if wasPlaying || playStartedAt != nil {
+            CZFKeepAliveLog.event("宿主", "keep-alive-stop", [
+                "wasPlaying": "\(wasPlaying)",
+                "seconds": "\(seconds)",
+                "bg": "\(isBackgrounded)"])
+        }
+        playStartedAt = nil
+        watchdog?.invalidate()
+        watchdog = nil
+        player?.pause()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        endBackgroundTask()
+    }
+
+    /// 1 秒静音 WAV（8000Hz 单声道 16bit PCM），与游客侧 CZFKeepAlive.m 同配方。
+    private static func silentWAVData() -> Data {
+        let sampleRate: UInt32 = 8000
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let dataSize = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
+        let chunkSize = 36 + dataSize
+        let blockAlign = channels * (bitsPerSample / 8)
+        let byteRate = sampleRate * UInt32(blockAlign)
+        var data = Data()
+        func append<T>(_ value: T) {
+            var v = value
+            data.append(Data(bytes: &v, count: MemoryLayout<T>.size))
+        }
+        data.append("RIFF".data(using: .ascii)!)
+        append(chunkSize)
+        data.append("WAVE".data(using: .ascii)!)
+        data.append("fmt ".data(using: .ascii)!)
+        append(UInt32(16))
+        append(UInt16(1))
+        append(channels)
+        append(sampleRate)
+        append(byteRate)
+        append(blockAlign)
+        append(bitsPerSample)
+        data.append("data".data(using: .ascii)!)
+        append(dataSize)
+        data.append(Data(count: Int(dataSize)))
+        return data
+    }
+
+    // MARK: - 开关与游客模块部署
+
+    /// 保活总开关：写键 + 同步游客 dylib + 刷新宿主保活。
+    static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "LCKeepAliveEnabled")
+        CZFKeepAliveLog.event("LC", "keep-alive-setting", ["enabled": "\(enabled)"])
+        syncGuestModule(enabled: enabled)
+        shared.refresh()
+    }
+
+    /// 游客侧 CZFKeepAlive.dylib 的部署。构建产物以 base64 文本形式
+    /// 放在 App 包里（散装 dylib 会被装机重签改坏加载命令——FMK 时代
+    /// 的教训），这里解码后写进两个 Tweaks 文件夹并签名；关开关时
+    /// 移除，游客就不再加载它。
+    static func syncGuestModule(enabled: Bool) {
+        let folders = [LCPath.tweakPath, LCPath.lcGroupTweakPath]
+        let fm = FileManager.default
+        if !enabled {
+            for folder in folders {
+                let dest = folder.appendingPathComponent("CZFKeepAlive.dylib")
+                let existed = fm.fileExists(atPath: dest.path)
+                try? fm.removeItem(at: dest)
+                CZFKeepAliveLog.event("LC", "deploy-remove", ["folder": folder.lastPathComponent, "existed": "\(existed)"])
+            }
+            return
+        }
+        guard let b64URL = Bundle.main.url(forResource: "CZFKeepAlive.dylib", withExtension: "b64"),
+              let b64Data = try? Data(contentsOf: b64URL),
+              let data = Data(base64Encoded: b64Data, options: .ignoreUnknownCharacters) else {
+            CZFKeepAliveLog.event("LC", "deploy-failed", ["reason": "resource-missing-or-undecodable"])
+            return
+        }
+        CZFKeepAliveLog.event("LC", "deploy", ["bytes": "\(data.count)"])
+        for folder in folders {
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let dest = folder.appendingPathComponent("CZFKeepAlive.dylib")
+            let existing = try? Data(contentsOf: dest)
+            var updated = false
+            if existing != data {
+                // 先写临时文件再换位，写失败时旧文件原样保留。
+                let tmp = dest.appendingPathExtension("tmp")
+                try? fm.removeItem(at: tmp)
+                if (try? data.write(to: tmp)) != nil {
+                    try? fm.removeItem(at: dest)
+                    try? fm.moveItem(at: tmp, to: dest)
+                    updated = true
+                }
+            }
+            CZFKeepAliveLog.event("LC", "deployed", ["folder": folder.lastPathComponent, "updated": "\(updated)"])
+            Task {
+                do {
+                    try await LCUtils.signTweaks(tweakFolderUrl: folder, force: true)
+                    CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "true"])
+                } catch {
+                    CZFKeepAliveLog.event("LC", "sign-tweaks", ["folder": folder.lastPathComponent, "done": "false", "error": error.localizedDescription])
+                }
+            }
+        }
+    }
+}

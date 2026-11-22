@@ -46,6 +46,7 @@ struct LCSettingsView: View {
     @StateObject private var certificateImportFileAlert = AlertHelper<URL>()
     @StateObject private var certificateImportPasswordAlert = InputHelper()
     
+    @AppStorage("LCKeepAliveEnabled") var keepAliveEnabled = true
     @AppStorage("LCFrameShortcutIcons") var frameShortIcon = false
     @AppStorage("LCSwitchAppWithoutAsking") var silentSwitchApp = false
     @AppStorage("LCOpenWebPageWithoutAsking") var silentOpenWebPage = false
@@ -157,6 +158,28 @@ struct LCSettingsView: View {
                     } footer: {
                         Text("lc.settings.multitaskDesc".loc)
                     }
+                }
+
+                Section {
+                    Toggle(isOn: $keepAliveEnabled) {
+                        Text("lc.keepAlive.title".loc)
+                    }
+                    .onChange(of: keepAliveEnabled) { newValue in
+                        CZFHostKeepAlive.setEnabled(newValue)
+                    }
+                    NavigationLink {
+                        LCKeepAliveLogView()
+                    } label: {
+                        Text("lc.keepAlive.logView".loc)
+                    }
+                    Button(role: .destructive) {
+                        try? FileManager.default.removeItem(at: CZFKeepAliveLog.fileURL)
+                        CZFKeepAliveLog.event("LC", "keep-alive-log-cleared")
+                    } label: {
+                        Text("lc.keepAlive.logClear".loc)
+                    }
+                } footer: {
+                    Text("lc.keepAlive.desc".loc)
                 }
 
                 Section {

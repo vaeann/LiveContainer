@@ -59,6 +59,18 @@ jobs:
           filetype_parameter: ${{ steps.filetype_parameter.outputs.filetype_parameter }}
           file_to_build: ${{ steps.file_to_build.outputs.file_to_build }}
         run: xcodebuild archive -archivePath "$archive_path" -scheme "$scheme" -"$filetype_parameter" "$file_to_build" -sdk iphoneos -arch arm64 -configuration Release | xcpretty && exit ${PIPESTATUS[0]}
+      - name: Build Bundled Tweaks
+        run: |
+          # CZFKeepAlive (guest keep-alive dylib, ported from
+          # LiveContainer-zh) ships base64-encoded inside the app: a
+          # loose dylib in the bundle gets its load commands rewritten
+          # by install-time re-signing, which broke deployment before.
+          # LC decodes CZFKeepAlive.dylib.b64 into the Tweaks folders
+          # at runtime and signs it there.
+          APP_PATH=$(find "$archive_path.xcarchive/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+          xcrun --sdk iphoneos clang -arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -mios-version-min=15.0 -fobjc-arc -dynamiclib -framework Foundation -framework UIKit -framework AVFoundation -o /tmp/CZFKeepAlive.dylib BundledTweaks/CZFKeepAlive.m
+          base64 -i /tmp/CZFKeepAlive.dylib -o "$APP_PATH/CZFKeepAlive.dylib.b64"
+          ls -la "$APP_PATH/CZFKeepAlive.dylib.b64"
       - name: Tar Build Artifact
         run: tar -cvf "$archive_path.xcarchive.tar" "$archive_path.xcarchive"
       - name: Upload a Build Artifact
