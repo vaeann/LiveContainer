@@ -8,13 +8,25 @@
 #import "../LiveContainer/Localization.h"
 #import "utils.h"
 
+// 操作栏高度（Ann 2026-11-22 定）：36，比上游的 44 矮一截、
+// 和 macOS 风的三钮更协调。右下缩放把手仍是 44×44（单独常量，
+// 不再跟栏高绑在一起）。
+static const CGFloat LCWindowBarHeight = 36;
+static const CGFloat LCResizeHandleSize = 44;
+
 @interface DecoratedAppSceneViewController()
 @property(nonatomic) NSArray* activatedVerticalConstraints;
 @property(nonatomic) NSString* dataUUID;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
-@property(nonatomic) UIBarButtonItem *maximizeButton;
+@property(nonatomic) UIButton *maximizeButton;
+@property(nonatomic) UIImageView *maximizeGlyph;
+@property(nonatomic) UIBarButtonItem *menuButtonItem;
 @property(nonatomic) bool isAppTerminationRequested;
+- (UIImage *)trafficLightGlyph:(NSString *)symbolName;
+- (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action;
+- (UIMenu *)windowMenu;
+- (void)refreshBarButtonItems;
 @end
 
 @implementation DecoratedAppSceneViewController
@@ -33,6 +45,49 @@
     
     [MultitaskDockManager.shared addRunningApp:windowName appUUID:dataUUID view:self.view];
     
+    // 操作栏（Ann 2026-11-22 定，macOS 风）：左边三个实心红黄绿
+    // 圆钮（关 / 最小化 / 最大化），中间不显示 App 名字，右边只
+    // 留一个箭头钮，点开还是原来的 PID 菜单（见 windowMenu）。
+    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 30)];
+    UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] symbol:@"xmark" action:@selector(closeWindow)];
+    closeButton.frame = CGRectMake(0, 0, 26, 30);
+    [lightsView addSubview:closeButton];
+    UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] symbol:@"minus" action:@selector(minimizeWindow)];
+    minimizeButton.frame = CGRectMake(28, 0, 26, 30);
+    [lightsView addSubview:minimizeButton];
+    self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] symbol:_isMaximized ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right" action:@selector(maximizeWindow)];
+    self.maximizeButton.frame = CGRectMake(56, 0, 26, 30);
+    [lightsView addSubview:self.maximizeButton];
+    self.maximizeGlyph = (UIImageView *)[self.maximizeButton viewWithTag:7];
+    self.navigationItem.leftBarButtonItems = @[[[UIBarButtonItem alloc] initWithCustomView:lightsView]];
+
+    UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    menuButton.frame = CGRectMake(0, 0, 28, 28);
+    menuButton.layer.cornerRadius = 14;
+    menuButton.layer.borderWidth = 1;
+    menuButton.layer.borderColor = UIColor.separatorColor.CGColor;
+    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIFontWeightSemibold];
+    [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
+    menuButton.tintColor = UIColor.secondaryLabelColor;
+    __weak typeof(self) weakSelf = self;
+    UIDeferredMenuElement *deferredMenu = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^ _Nonnull completion)(NSArray<UIMenuElement *> * _Nonnull)) {
+        completion(weakSelf ? @[[weakSelf windowMenu]] : @[]);
+    }];
+    menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
+    menuButton.showsMenuAsPrimaryAction = YES;
+    self.menuButtonItem = [[UIBarButtonItem alloc] initWithCustomView:menuButton];
+    [self refreshBarButtonItems];
+
+    return self;
+}
+
+// 箭头钮的菜单：就是原来点标题弹出的 PID 菜单（标题 = PID，项 =
+// 复制 PID / PiP 开关 / 缩放滑杆）。每次打开时现建，PID 和运行
+// 状态都是最新的（标题菜单的 provider 语义用延迟元素复刻）。
+- (UIMenu *)windowMenu {
+    if (!self.appSceneVC.isAppRunning) {
+        return [UIMenu menuWithTitle:NSLocalizedString(@"lc.multitaskAppWindow.appTerminated", nil) children:@[]];
+    }
     NSArray *menuItems = @[
         [UIAction actionWithTitle:@"lc.multitask.copyPid".loc image:[UIImage systemImageNamed:@"doc.on.doc"] identifier:nil handler:^(UIAction * _Nonnull action) {
             UIPasteboard.generalPasteboard.string = @(self.appSceneVC.pid).stringValue;
@@ -48,54 +103,50 @@
             return [self scaleSliderViewWithTitle:@"lc.multitask.scale".loc min:0.5 max:2.0 value:self.scaleRatio stepInterval:0.01];
         }]
     ];
-    
+    NSString *pidText = [NSString stringWithFormat:@"PID: %d", self.pid];
+    return [UIMenu menuWithTitle:pidText children:menuItems];
+}
 
-    __weak typeof(self) weakSelf = self;
-    [self.navigationItem setTitleMenuProvider:^UIMenu *(NSArray<UIMenuElement *> *suggestedActions){
-        if(!weakSelf.appSceneVC.isAppRunning) {
-            return [UIMenu menuWithTitle:NSLocalizedString(@"lc.multitaskAppWindow.appTerminated", nil) children:@[]];
-        } else {
-            NSString *pidText = [NSString stringWithFormat:@"PID: %d", weakSelf.pid];
-            return [UIMenu menuWithTitle:pidText children:menuItems];
-        }
-    }];
-    
-    UIImage *minimizeImage = [UIImage systemImageNamed:@"minus.circle"];
-    UIImageConfiguration *minimizeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
-    minimizeImage = [minimizeImage imageWithConfiguration:minimizeConfig];
-    UIBarButtonItem *minimizeButton = [[UIBarButtonItem alloc] initWithImage:minimizeImage style:UIBarButtonItemStylePlain target:self action:@selector(minimizeWindow)];
-    minimizeButton.tintColor = [UIColor systemYellowColor];
-    
-    NSString *maximizeImageName = _isMaximized ? @"arrow.down.right.and.arrow.up.left.circle" : @"arrow.up.left.and.arrow.down.right.circle";
-    UIImage *maximizeImage = [UIImage systemImageNamed:maximizeImageName];
-    UIImageConfiguration *maximizeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
-    maximizeImage = [maximizeImage imageWithConfiguration:maximizeConfig];
-    self.maximizeButton = [[UIBarButtonItem alloc] initWithImage:maximizeImage style:UIBarButtonItemStylePlain target:self action:@selector(maximizeWindow)];
-    self.maximizeButton.tintColor = [UIColor systemGreenColor];
-    
-    UIImage *closeImage = [UIImage systemImageNamed:@"xmark.circle"];
-    UIImageConfiguration *closeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
-    closeImage = [closeImage imageWithConfiguration:closeConfig];
-    UIBarButtonItem *closeButton = [[UIBarButtonItem alloc] initWithImage:closeImage style:UIBarButtonItemStylePlain target:self action:@selector(closeWindow)];
-    closeButton.tintColor = [UIColor systemRedColor];
-    
-    NSArray *barButtonItems = @[closeButton, self.maximizeButton, minimizeButton];
-    if([NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"]) {
-        // resize handle overlaps the close button, so put the buttons on the left
-        self.navigationItem.leftBarButtonItems = barButtonItems;
+- (UIImage *)trafficLightGlyph:(NSString *)symbolName {
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:7.5 weight:UIFontWeightBold];
+    return [[UIImage systemImageNamed:symbolName] imageWithConfiguration:config];
+}
+
+// 一个红绿灯钮：26×30 的点击区里居中放 14 的实心圆，圆里是深色
+// 小字形（tag 7，最大化钮靠它换展开/还原字形）。
+- (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(6, 8, 14, 14)];
+    dot.backgroundColor = color;
+    dot.layer.cornerRadius = 7;
+    dot.layer.borderWidth = 0.5;
+    dot.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
+    dot.userInteractionEnabled = NO;
+    UIImageView *glyph = [[UIImageView alloc] initWithFrame:dot.bounds];
+    glyph.image = [self trafficLightGlyph:symbolName];
+    glyph.tintColor = [UIColor colorWithWhite:0 alpha:0.55];
+    glyph.contentMode = UIViewContentModeCenter;
+    glyph.tag = 7;
+    [dot addSubview:glyph];
+    [button addSubview:dot];
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+// 箭头钮固定在右边；操作栏在底部时右下角有缩放把手，给箭头钮
+// 左边留一个空位，免得被把手盖住（左置三钮不受影响）。
+- (void)refreshBarButtonItems {
+    if ([NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"]) {
+        UIBarButtonItem *spacer = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
+        spacer.width = 34;
+        self.navigationItem.rightBarButtonItems = @[spacer, self.menuButtonItem];
     } else {
-        self.navigationItem.rightBarButtonItems = barButtonItems;
+        self.navigationItem.rightBarButtonItems = @[self.menuButtonItem];
     }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self adjustNavigationBarButtonSpacingWithNegativeSpacing:-8.0 rightMargin:-4.0];
-    });
-
-    return self;
 }
 
 - (void)setupDecoratedView {
-    CGFloat navBarHeight = 44;
+    CGFloat navBarHeight = LCWindowBarHeight;
     BOOL isLandscape = UIInterfaceOrientationIsLandscape(UIApp.statusBarOrientation);
     CGRect frame = CGRectMake(0, 0, isLandscape ? 480 : 320, (isLandscape ? 320 : 480) + navBarHeight);
     CGPoint rootViewCenter = self.view.superview.center;
@@ -121,12 +172,15 @@
         navigationBar.alpha = 0;
         navigationBar.hidden = YES;
     }
-    UINavigationItem *navigationItem = [[UINavigationItem alloc] initWithTitle:self.title];
+    // 栏上不显示 App 名字（Ann 2026-11-22 定），标题留空。
+    UINavigationItem *navigationItem = [[UINavigationItem alloc] initWithTitle:@""];
     navigationBar.items = @[navigationItem];
     
     self.view.axis = UILayoutConstraintAxisVertical;
     self.view.backgroundColor = UIColor.systemBackgroundColor;
-    self.view.layer.cornerRadius = 10;
+    // 窗口圆角 16（原 10）：操作栏贴在窗口顶部、左右两角跟着
+    // 窗口一起圆（masksToBounds 裁切），和新栏更协调。
+    self.view.layer.cornerRadius = 16;
     self.view.layer.masksToBounds = YES;
 
     self.navigationBar = navigationBar;
@@ -159,7 +213,7 @@
     UIPanGestureRecognizer *resizeGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(resizeWindow:)];
     resizeGesture.minimumNumberOfTouches = 1;
     resizeGesture.maximumNumberOfTouches = 1;
-    self.resizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(self.view.frame.size.width - navBarHeight, self.view.frame.size.height - navBarHeight, navBarHeight, navBarHeight)];
+    self.resizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(self.view.frame.size.width - LCResizeHandleSize, self.view.frame.size.height - LCResizeHandleSize, LCResizeHandleSize, LCResizeHandleSize)];
     self.resizeHandle.alpha = _isMaximized ? 0.0 : 1.0;
     [self.resizeHandle addGestureRecognizer:resizeGesture];
     [self.view addSubview:self.resizeHandle];
@@ -304,9 +358,7 @@
             [self.view layoutIfNeeded];
         } completion:^(BOOL finished) {
             self.isMaximized = NO;
-            UIImage *maximizeImage = [UIImage systemImageNamed:@"arrow.up.left.and.arrow.down.right.circle"];
-            UIImageConfiguration *maximizeConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
-            self.maximizeButton.image = [maximizeImage imageWithConfiguration:maximizeConfig];
+            self.maximizeGlyph.image = [self trafficLightGlyph:@"arrow.up.left.and.arrow.down.right"];
             [[MultitaskDockManager shared] updateStatusBarFix];
             [self updateCornerHandles];
         }];
@@ -326,9 +378,7 @@
             
             [self.view layoutIfNeeded];
         } completion:^(BOOL finished) {
-            UIImage *restoreImage = [UIImage systemImageNamed:@"arrow.down.right.and.arrow.up.left.circle"];
-            UIImageConfiguration *restoreConfig = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
-            self.maximizeButton.image = [restoreImage imageWithConfiguration:restoreConfig];
+            self.maximizeGlyph.image = [self trafficLightGlyph:@"arrow.down.right.and.arrow.up.left"];
             [[MultitaskDockManager shared] updateStatusBarFix];
             [self updateCornerHandles];
         }];
@@ -412,11 +462,6 @@
     }];
 }
 
-- (void)adjustNavigationBarButtonSpacingWithNegativeSpacing:(CGFloat)spacing rightMargin:(CGFloat)margin {
-    if (!self.navigationBar) return;
-    [self findAndAdjustButtonBarStackView:self.navigationBar withSpacing:spacing rightMargin:margin];
-}
-
 - (void)setTapOutsideScrimVisible:(BOOL)visible {
     if (visible) {
         if (self.tapOutsideScrim || !self.navigationBar) return;
@@ -447,50 +492,19 @@
     [[MultitaskDockManager shared] toggleDockCollapse];
 }
 
-- (void)findAndAdjustButtonBarStackView:(UIView *)view withSpacing:(CGFloat)spacing rightMargin:(CGFloat)margin {
-    for (UIView *subview in view.subviews) {
-        if ([subview isKindOfClass:NSClassFromString(@"_UIButtonBarStackView")]) {
-            if ([subview respondsToSelector:@selector(setSpacing:)]) {
-                [(_UIButtonBarStackView *)subview setSpacing:spacing];
-            }
-            
-            if (subview.superview) {
-                for (NSLayoutConstraint *constraint in subview.superview.constraints) {
-                    if ((constraint.firstItem == subview && constraint.firstAttribute == NSLayoutAttributeTrailing) ||
-                        (constraint.secondItem == subview && constraint.secondAttribute == NSLayoutAttributeTrailing)) {
-                        constraint.constant = (constraint.firstItem == subview) ? -margin : margin;
-                        break;
-                    }
-                }
-                
-                [subview setNeedsLayout];
-                [subview.superview setNeedsLayout];
-            }
-            
-            return;
-        }
-        
-        [self findAndAdjustButtonBarStackView:subview withSpacing:spacing rightMargin:margin];
-    }
-}
-
-
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
     [self.view layoutIfNeeded];
     [UIView animateWithDuration:0.3 animations:^{
         BOOL bottomWindowBar = [change[NSKeyValueChangeNewKey] boolValue];
         if(bottomWindowBar) {
-            self.navigationItem.leftBarButtonItems = self.navigationItem.rightBarButtonItems;
-            self.navigationItem.rightBarButtonItems = nil;
             [self.view addArrangedSubview:self.navigationBar];
         } else {
-            self.navigationItem.rightBarButtonItems = self.navigationItem.leftBarButtonItems;
-            self.navigationItem.leftBarButtonItems = nil;
             [self.view insertArrangedSubview:self.navigationBar atIndex:0];
         }
-        
+        // 按钮位置不随栏的位置变（恒左三钮、右箭头）；变的只是
+        // 底部栏时箭头钮要给右下缩放把手让位（refreshBarButtonItems）。
+        [self refreshBarButtonItems];
         [self updateVerticalConstraints];
-        [self adjustNavigationBarButtonSpacingWithNegativeSpacing:-8.0 rightMargin:-4.0];
         
         if(_isMaximized) {
             [self.appSceneVC updateSettingsWithBlock:^(UIMutableApplicationSceneSettings *settings) {
@@ -597,7 +611,7 @@
     [UIView animateWithDuration:0.3 animations:^{
         BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
         BOOL hideWindowBar = [self shouldHideWindowBar];
-        CGFloat navBarHeight = hideWindowBar ? 0 : 44;
+        CGFloat navBarHeight = hideWindowBar ? 0 : LCWindowBarHeight;
         self.navigationBar.alpha = hideWindowBar ? 0 : 1;
         self.navigationBar.hidden = hideWindowBar;
         
