@@ -1208,63 +1208,18 @@ struct CollapsedDockView: View {
             // theme text color, like Weizhu's glyphs on glass.
             Image(systemName: "square.grid.2x2.fill")
                 .foregroundStyle(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.42, weight: .bold))
+                .font(.system(size: dockManager.adaptiveIconSize * 0.5, weight: .bold))
                 .opacity(breathing ? 1.0 : 0.38)
                 .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true), value: breathing)
                 .onAppear { breathing = true }
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier { content in
-            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                content.glassEffect(.regular, in: .rect(cornerRadius: 8))
-            } else {
-                content.background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                gradient: Gradient(colors: [Color.blue.opacity(0.8), Color.blue.opacity(0.6)]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        )
-                )
-            }
-        }
+        // No tile of its own (Ann 2026-11-22): the glyph sits
+        // directly on the dock's glass, like a system toolbar
+        // glyph. The glyph is slightly larger than the tiled
+        // version to keep its optical weight in the slot.
         .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
-    }
-}
-
-// The Weizhu single-column compact tile: a translucent white rounded
-// plate (corner radius 26% of the tile, thin white border, soft shadow).
-// Crucially, Weizhu tints the glyph with its theme TEXT color, not fixed
-// white — a white glyph on the translucent white plate vanishes over
-// light app content. The buttons below therefore use Color.primary
-// (black in light mode, white in dark mode) for their glyphs. The plate
-// here is noticeably stronger than Weizhu's: on LC's iOS 26 liquid
-// glass the original translucency washed out completely, and the two
-// dock buttons became hard to tell apart from the glass and each
-// other.
-@available(iOS 16.0, *)
-private struct DockCompactTileBackground: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    let size: CGFloat
-
-    func body(content: Content) -> some View {
-        let dark = colorScheme == .dark
-        return content.background(
-            RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                .fill(Color.white.opacity(dark ? 0.30 : 0.32))
-                .overlay(
-                    RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                        .stroke(Color.white.opacity(dark ? 0.6 : 0.45), lineWidth: 0.8)
-                )
-                .shadow(color: .black.opacity(dark ? 0.2 : 0.12), radius: 3, x: 0, y: 1)
-        )
     }
 }
 
@@ -1277,12 +1232,14 @@ struct CycleButtonView: View {
         ZStack {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .foregroundColor(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.4, weight: .semibold))
+                .font(.system(size: dockManager.adaptiveIconSize * 0.46, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        .modifier(DockCompactTileBackground(size: dockManager.adaptiveIconSize))
-        // The same drop shadow the app icons carry, so the button
-        // lifts off the glass like they do.
+        // No app-icon-style tile (Ann 2026-11-22): app icons are
+        // content and keep their tiles; this is a control, so its
+        // glyph sits directly on the dock's glass like the
+        // collapsed button's. The shadow keeps the bare glyph
+        // readable over busy content.
         .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
