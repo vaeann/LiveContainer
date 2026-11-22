@@ -329,6 +329,120 @@ NSString *LCRunGuestExtension(NSDictionary *request, int argc, char *argv[], cha
     return nil;
 }
 
+// LCDockTapGuestHook: tap-outside-to-collapse for the multitask dock,
+// guest side. A front guest's touches never enter the host process —
+// backboardd routes them straight to the process owning the touched
+// scene — so the host's own sendEvent hook cannot see them and no
+// host-side layer ever worked. This hook lives where the touches
+// actually arrive: in the guest. While its dock is expanded, the
+// host publishes LCDockTapOutsideState in the shared defaults: an
+// armed flag, a generation counter bumped on every expansion, and
+// the dock's frame converted into each visible guest's scene
+// coordinates. A touch beginning outside that frame is swallowed
+// here, for its whole lifetime, and the host is told through a
+// Darwin notification; the host collapses the dock. At most one
+// touch sequence is eaten per expansion: after signalling, the
+// generation is latched until the host expands again, which also
+// covers the lag before the host's collapse reaches the defaults.
+static NSString *lcDockTapDataUUID = nil;
+static NSInteger lcDockTapSignaledGeneration = -1;
+static NSMutableSet *lcDockTapSwallowedTouches = nil;
+static NSTimeInterval lcDockTapLastStateSync = 0;
+
+static BOOL LCDockTapGuestShouldSwallow(UIEvent *event) {
+    if (event.type != UIEventTypeTouches) {
+        return NO;
+    }
+    NSSet *touches = event.allTouches;
+    if (touches.count == 0) {
+        return NO;
+    }
+    // A touch swallowed at its start stays swallowed for its
+    // whole lifetime, so the guest never receives half a touch.
+    BOOL eventSwallowed = NO;
+    for (UITouch *touch in touches) {
+        if ([lcDockTapSwallowedTouches containsObject:touch]) {
+            eventSwallowed = YES;
+            if (touch.phase == UITouchPhaseEnded || touch.phase == UITouchPhaseCancelled) {
+                [lcDockTapSwallowedTouches removeObject:touch];
+            }
+        }
+    }
+    if (eventSwallowed) {
+        return YES;
+    }
+
+    UITouch *beganTouch = nil;
+    for (UITouch *touch in touches) {
+        if (touch.phase == UITouchPhaseBegan) {
+            beganTouch = touch;
+            break;
+        }
+    }
+    if (!beganTouch || !lcDockTapDataUUID) {
+        return NO;
+    }
+
+    // Cross-process defaults can lag; refresh at most twice a second.
+    NSUserDefaults *defaults = [NSUserDefaults lcSharedDefaults];
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now - lcDockTapLastStateSync > 0.5) {
+        lcDockTapLastStateSync = now;
+        [defaults synchronize];
+    }
+    NSDictionary *state = [defaults dictionaryForKey:@"LCDockTapOutsideState"];
+    if (![state[@"armed"] boolValue]) {
+        return NO;
+    }
+    NSInteger generation = [state[@"generation"] integerValue];
+    if (generation == lcDockTapSignaledGeneration) {
+        return NO;
+    }
+    NSDictionary *rects = state[@"rects"];
+    NSString *rectString = rects[lcDockTapDataUUID];
+    if (!rectString) {
+        return NO;
+    }
+    CGPoint location = [beganTouch locationInView:beganTouch.window];
+    if (CGRectContainsPoint(CGRectFromString(rectString), location)) {
+        return NO;
+    }
+
+    [lcDockTapSwallowedTouches addObject:beganTouch];
+    lcDockTapSignaledGeneration = generation;
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.livecontainer.dockTapOutside"),
+                                         NULL, NULL, true);
+    return YES;
+}
+
+@interface UIApplication (LCDockTapGuest)
+- (void)lc_dockTap_sendEvent:(UIEvent *)event;
+@end
+
+@implementation UIApplication (LCDockTapGuest)
+- (void)lc_dockTap_sendEvent:(UIEvent *)event {
+    if (!LCDockTapGuestShouldSwallow(event)) {
+        [self lc_dockTap_sendEvent:event];
+    }
+}
+@end
+
+static void LCDockTapGuestHookInit(NSString *dataUUID) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        lcDockTapSwallowedTouches = [NSMutableSet set];
+        Method original = class_getInstanceMethod(UIApplication.class, @selector(sendEvent:));
+        Method hooked = class_getInstanceMethod(UIApplication.class, @selector(lc_dockTap_sendEvent:));
+        if (original && hooked) {
+            method_exchangeImplementations(original, hooked);
+        }
+    });
+    // A LiveProcess process can be reused for another guest; the
+    // identity follows the latest launch.
+    lcDockTapDataUUID = [dataUUID copy];
+}
+
 static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContainer, int argc, char *argv[]) {
     NSString *appError = nil;
     if([[lcUserDefaults objectForKey:@"LCWaitForDebugger"] boolValue]) {
@@ -721,6 +835,14 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         NSLog(@"[LCBootstrap] %@", appError);
         *path = oldPath;
         return appError;
+    }
+
+    // Tap-outside-to-collapse, guest side: only LiveProcess guests
+    // need the hook. Classic guests run in the host process, whose
+    // own sendEvent hook already sees their touches — and a second
+    // swizzle in that process would double up.
+    if (isLiveProcess) {
+        LCDockTapGuestHookInit(dataUUID);
     }
 
     // Go!

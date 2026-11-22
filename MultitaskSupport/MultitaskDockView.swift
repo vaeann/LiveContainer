@@ -151,6 +151,7 @@ class AppInfoProvider {
 
     /// Status bar fix state: whether the host status bar override is
     /// currently applied.
+    private var statusBarFixApplied = false
 
     /// The app currently in front in multitask (nil when every window
     /// is minimized, i.e. the user is on the LC home screen). The dock
@@ -319,6 +320,23 @@ class AppInfoProvider {
     
     override init() {
         super.init()
+        Self.tapOutsideInstance = self
+        // LiveProcess guests report taps outside the expanded dock
+        // through a Darwin notification: their touches never enter
+        // this process (see publishTapOutsideState below and
+        // LCDockTapGuestHook in LCBootstrap.m).
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let manager = Unmanaged<MultitaskDockManager>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { manager.handleGuestTapOutsideSignal() }
+            },
+            "com.livecontainer.dockTapOutside" as CFString,
+            nil,
+            .deliverImmediately
+        )
         keyWindow!.rootViewController!.view.subviews.first!.addSubview(self.windowHostingView)
         setupDockView()
         NotificationCenter.default.addObserver(
@@ -391,6 +409,7 @@ class AppInfoProvider {
 
         applyNewFrame(newFrame, for: hostingController, animated: animated)
         updateStatusBarFix()
+        publishTapOutsideState()
     }
 
     // MARK: - Frame Calculation Helpers
@@ -556,6 +575,7 @@ class AppInfoProvider {
                 self.isVisible = false
                 // The next session starts collapsed again (see showDock).
                 self.isCollapsed = true
+                self.publishTapOutsideState()
                 hostingController.view.transform = .identity
             }
         }
@@ -874,21 +894,27 @@ class AppInfoProvider {
     /// desired state changes, and it is restored as soon as another app
     /// comes to front, everything minimizes to the LC home screen, or
     /// the window closes.
-    /// BISECT ONLY: the status-bar override (private
-    /// _setOverridingStatusBarHidden:) is reverted here so the
-    /// keep-alive bisect can tell whether it matters. Front-app
-    /// tracking stays: the green front-app marker reads it.
     @objc public func updateStatusBarFix() {
         if !Thread.isMainThread {
             DispatchQueue.main.async { self.updateStatusBarFix() }
             return
         }
+        var hide = false
         var frontUUID: String? = nil
         if let index = frontAppIndex() {
-            frontUUID = apps[index].appUUID
+            let app = apps[index]
+            frontUUID = app.appUUID
+            if let info = app.appInfo, info.statusBarFix,
+               let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController {
+                hide = vc.isMaximized
+            }
         }
         if frontAppUUID != frontUUID {
             frontAppUUID = frontUUID
+        }
+        if hide != statusBarFixApplied,
+           LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
+            statusBarFixApplied = hide
         }
     }
 
@@ -927,6 +953,132 @@ class AppInfoProvider {
     }
     
     // MARK: - Tap-outside collapse via sendEvent
+    /// The live manager for the UIApplication sendEvent hook in
+    /// UIKitHooks.m, registered in init. The hook exists app-wide
+    /// once the first multitask scene is created, but it only acts
+    /// while this manager's dock is expanded.
+    private static weak var tapOutsideInstance: MultitaskDockManager?
+    /// Touches swallowed because they began outside the expanded
+    /// dock: their remaining phases are swallowed too, so the guest
+    /// never receives half a touch.
+    private var swallowedTouches: Set<UITouch> = []
+
+    /// Guest-side tap-outside state: the current expansion's
+    /// generation (bumped every time the published state becomes
+    /// armed, so a guest eats at most one tap sequence per
+    /// expansion) and whether the published state is armed.
+    private var tapOutsideGeneration = 0
+    private var tapOutsideArmed = false
+
+    /// Called from the UIApplication sendEvent hook (UIKitHooks.m)
+    /// for every event entering the host app; returns true when the
+    /// event was consumed by the tap-outside collapse and must not
+    /// be delivered. Three catcher layers (in-window below, in-window
+    /// above, dedicated window) failed before this: on iOS 18+ a
+    /// front guest's scene defers its events to itself before the
+    /// host window's hit-testing runs, so no host layer ever sees
+    /// taps that land on the guest. sendEvent is the one entry
+    /// point upstream of that deferral.
+    @objc public static func dockShouldSwallowEvent(_ event: UIEvent) -> Bool {
+        guard let manager = tapOutsideInstance else { return false }
+        return manager.handleTapOutsideEvent(event)
+    }
+
+    private func handleTapOutsideEvent(_ event: UIEvent) -> Bool {
+        guard event.type == .touches, let touches = event.allTouches, !touches.isEmpty else {
+            return false
+        }
+        // A touch swallowed at its start stays swallowed for its
+        // whole lifetime.
+        var eventSwallowed = false
+        for touch in touches where swallowedTouches.contains(touch) {
+            eventSwallowed = true
+            if touch.phase == .ended || touch.phase == .cancelled {
+                swallowedTouches.remove(touch)
+            }
+        }
+        if eventSwallowed { return true }
+
+        guard isVisible, !isCollapsed,
+              let hostingView = hostingController?.view,
+              let window = hostingView.window,
+              !hasModalPresentation(in: window) else {
+            return false
+        }
+        for touch in touches where touch.phase == .began {
+            let location = touch.location(in: window)
+            if !hostingView.frame.contains(location) {
+                swallowedTouches.insert(touch)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                toggleDockCollapse()
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Alerts and sheets (including the dock's own close-all
+    /// confirmation) must keep receiving their taps: while anything
+    /// is presented over the multitask window, tap-outside stays off.
+    private func hasModalPresentation(in window: UIWindow) -> Bool {
+        if UIApplication.shared.windows.contains(where: { $0.windowLevel >= .alert && !$0.isHidden }) {
+            return true
+        }
+        if hostingController?.presentedViewController != nil {
+            return true
+        }
+        return window.rootViewController?.presentedViewController != nil
+    }
+
+    // MARK: - Tap-outside collapse, guest side
+
+    /// Publish the dock's tap-outside state for LiveProcess guests
+    /// (consumed by LCDockTapGuestHook in LCBootstrap.m). Taps on a
+    /// front guest are routed by backboardd straight to the guest
+    /// process, so the guest itself must spot the outside tap; it
+    /// needs the dock's frame in its own scene coordinates, which
+    /// only the host can compute. Published whenever the dock's
+    /// frame, expansion, visibility or app set changes.
+    private func publishTapOutsideState() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.publishTapOutsideState() }
+            return
+        }
+        let armed = isVisible && !isCollapsed
+        if armed && !tapOutsideArmed {
+            tapOutsideGeneration += 1
+        }
+        tapOutsideArmed = armed
+        var rects: [String: String] = [:]
+        if armed, let hostingView = hostingController?.view, let hostWindow = hostingView.window {
+            let dockScreen = hostingView.frame.offsetBy(dx: hostWindow.frame.origin.x,
+                                                         dy: hostWindow.frame.origin.y)
+            for app in apps {
+                guard let view = app.view, let window = view.window else { continue }
+                let sceneInWindow = view.convert(view.bounds, to: window)
+                let rect = dockScreen.offsetBy(dx: -(window.frame.origin.x + sceneInWindow.origin.x),
+                                               dy: -(window.frame.origin.y + sceneInWindow.origin.y))
+                // NSStringFromCGRect is obsoleted in the iOS 27 SDK's
+                // Swift overlay; emit its canonical format manually —
+                // the guest parses it back with CGRectFromString.
+                rects[app.appUUID] = "{{\(rect.origin.x), \(rect.origin.y)}, {\(rect.size.width), \(rect.size.height)}}"
+            }
+        }
+        LCUtils.appGroupUserDefault.set([
+            "armed": armed,
+            "generation": tapOutsideGeneration,
+            "rects": rects
+        ], forKey: "LCDockTapOutsideState")
+    }
+
+    /// A LiveProcess guest swallowed an outside tap and signalled
+    /// the collapse (see LCDockTapGuestHook in LCBootstrap.m).
+    private func handleGuestTapOutsideSignal() {
+        guard isVisible, !isCollapsed else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        toggleDockCollapse()
+    }
+
     // MARK: - Multitask Mode Check
     private func isDockEnabled() -> Bool {
         let multitaskMode = MultitaskMode(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCMultitaskMode")) ?? .virtualWindow
