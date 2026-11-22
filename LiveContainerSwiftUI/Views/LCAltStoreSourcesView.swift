@@ -210,6 +210,10 @@ final class AltStoreSourcesViewModel: ObservableObject {
     @Published private(set) var sources: [SourceItem] = []
     @Published var isRefreshingAll = false
     private let defaultsKey = "LCAltStoreSourceURLs"
+    /// When the last full refresh ran (any path: initial load, manual,
+    /// auto). Persisted so the auto-refresh throttle survives the view
+    /// being recreated — see autoRefreshSourcesIfNeeded.
+    static let lastFullRefreshKey = "LCLastSourceFullRefreshDate"
 
     private let cacheDirectoryName = "AltStoreSourceCache"
     private var hasLoadedSources = false
@@ -252,6 +256,7 @@ final class AltStoreSourcesViewModel: ObservableObject {
         guard !sources.isEmpty else {
             return
         }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastFullRefreshKey)
         isRefreshingAll = true
         for url in sources.map({ $0.url }) {
             await refreshSource(url: url)
@@ -555,8 +560,6 @@ struct LCSourcesView: View {
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
-    @State private var lastAutoRefreshDate = Date.distantPast
-    @State private var didInitialLoad = false
 
     @EnvironmentObject private var sharedModel : SharedModel
 
@@ -671,12 +674,7 @@ struct LCSourcesView: View {
         .onAppear {
             if sharedModel.selectedTab == .sources {
                 viewModel.loadSourcesIfNeeded()
-                if didInitialLoad {
-                    autoRefreshSourcesIfNeeded()
-                } else {
-                    didInitialLoad = true
-                    lastAutoRefreshDate = Date()
-                }
+                autoRefreshSourcesIfNeeded()
             }
             publishBadgeCount()
             expandedSources = []
@@ -935,13 +933,16 @@ struct LCSourcesView: View {
         }
     }
 
-    /// Refresh all sources in the background at most once per 5 minutes
-    /// when the sources page is shown.
+    /// Refresh all sources in the background at most once per
+    /// 30 minutes when the sources page is shown (Ann 2026-11-22:
+    /// was 5 minutes). The throttle reads the persisted last-refresh
+    /// time stamped by refreshAllSources itself — the previous
+    /// @State-based clock did not survive this view being recreated,
+    /// so the page silently refreshed on every visit.
     private func autoRefreshSourcesIfNeeded() {
         guard sharedModel.selectedTab == .sources, !viewModel.isRefreshingAll else { return }
-        let now = Date()
-        guard now.timeIntervalSince(lastAutoRefreshDate) > 300 else { return }
-        lastAutoRefreshDate = now
+        let last = Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: AltStoreSourcesViewModel.lastFullRefreshKey))
+        guard Date().timeIntervalSince(last) > 1800 else { return }
         Task { await viewModel.refreshAllSources() }
     }
 
