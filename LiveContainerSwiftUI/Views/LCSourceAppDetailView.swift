@@ -239,12 +239,17 @@ struct LCSourceAppVersionDetailView: View {
             }
 
             Section {
+                // 分隔线的起点是跟着行里文字的左缘走的：这两个
+                // 按钮的文字居中，左缘被顶到行中间，行下面的分
+                // 隔线就只剩右半截（Ann 2026-11-23 真机）。把分
+                // 隔线的对齐点钉回行首，和普通行一致。
                 Button {
                     installAction()
                 } label: {
                     Text("lc.sources.detail.installVersion".loc)
                         .bold()
                         .frame(maxWidth: .infinity)
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
                 Button {
                     UIPasteboard.general.string = version.downloadURL.absoluteString
@@ -256,6 +261,7 @@ struct LCSourceAppVersionDetailView: View {
                     Label(copied ? "lc.common.copied".loc : "lc.sources.detail.copyDownloadURL".loc,
                           systemImage: copied ? "checkmark" : "doc.on.doc")
                         .frame(maxWidth: .infinity)
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
             }
         }
