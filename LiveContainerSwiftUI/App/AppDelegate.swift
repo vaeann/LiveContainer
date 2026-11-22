@@ -31,10 +31,10 @@ import Intents
             LCUtils.appGroupUserDefault.setValue(UIDevice.current.buildVersion, forKey: "LCLastIOSBuildVersion")
         }
 
-        // zh 式两件套保活：宿主侧装观察者；游客侧 dylib 按开关部署
-        // （重装后不打开设置页也要部署到位）。
-        CZFHostKeepAlive.shared.install()
-        CZFHostKeepAlive.syncGuestModule(enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)
+        // RECOVERY (2026-11-22): keep-alive launch activation is
+        // disabled in this build while a launch crash is diagnosed.
+        // The keeper code stays compiled in; nothing deploys or
+        // installs at launch. Re-enable once the cause is pinned.
 
         return true
     }
