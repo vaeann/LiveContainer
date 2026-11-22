@@ -125,9 +125,13 @@ struct LCAppGridView: View {
 /// land on it and forwards them up the responder chain untouched.
 private struct LCGridTouchObserver: UIViewRepresentable {
     @Binding var isPressed: Bool
+    /// Side of the top-trailing corner square reserved for the close
+    /// badge (0 when the badge is not shown); see LCGridTouchView.
+    var badgeExclusion: CGFloat = 0
 
     func makeUIView(context: Context) -> LCGridTouchView {
         let view = LCGridTouchView()
+        view.badgeExclusion = badgeExclusion
         view.onPressChange = { [self] pressed in
             if isPressed != pressed {
                 isPressed = pressed
@@ -137,6 +141,7 @@ private struct LCGridTouchObserver: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: LCGridTouchView, context: Context) {
+        uiView.badgeExclusion = badgeExclusion
         uiView.onPressChange = { [self] pressed in
             if isPressed != pressed {
                 isPressed = pressed
@@ -147,7 +152,22 @@ private struct LCGridTouchObserver: UIViewRepresentable {
 
 private final class LCGridTouchView: UIView {
     var onPressChange: ((Bool) -> Void)?
+    var badgeExclusion: CGFloat = 0
     private var clearWorkItem: DispatchWorkItem?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // This view is a real UIView spread over the whole icon, and
+        // UIKit hit-tests it before the SwiftUI-drawn close badge that
+        // overlaps the icon's top-trailing corner — the badge rendered
+        // on top but its touches landed here and were forwarded up the
+        // responder chain as ordinary cell touches. Carve the badge's
+        // corner out so those touches reach the badge instead.
+        if badgeExclusion > 0,
+           point.x >= bounds.width - badgeExclusion, point.y <= badgeExclusion {
+            return nil
+        }
+        return super.hitTest(point, with: event)
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         clearWorkItem?.cancel()
@@ -188,6 +208,11 @@ private struct LCAppGridCell: View {
     let onUninstall: () -> Void
     @State private var isPressed = false
 
+    // Close-badge diameter, scaled with the icon (0.4x, clamped).
+    private var badgeSize: CGFloat {
+        min(max(iconSize * 0.4, 18), 34)
+    }
+
     var body: some View {
             VStack(spacing: 6) {
                 ZStack(alignment: .topTrailing) {
@@ -204,42 +229,12 @@ private struct LCAppGridCell: View {
                     // no gesture recognizers, so taps, double-taps, the
                     // context menu and scrolling all work as before, and
                     // a scroll cancels the touch (and the press) exactly
-                    // like on the home screen.
-                    LCGridTouchObserver(isPressed: $isPressed)
-
-                    if actions.isRunning(app) {
-                        // Badge diameter scales with the icon (0.4x, clamped).
-                        // Like the iOS home screen's numeric badges, the
-                        // badge center sits a quarter of its diameter inside
-                        // the icon's top-right corner: the ZStack aligns the
-                        // badge's top-trailing corner with the icon's, and
-                        // shifting by a quarter badge (not half) pulls the
-                        // center in from the corner point.
-                        //
-                        // NOT the shared LCRunningCloseBadge (a Button):
-                        // the cell's composed tap gesture sits on an
-                        // ancestor, and SwiftUI lets an ancestor gesture
-                        // swallow a child Button's taps — in the grid the
-                        // badge rendered but never fired (the list is
-                        // unaffected: UIKit hit-testing there reaches the
-                        // button first). A high-priority tap gesture on
-                        // the badge itself wins over the cell gesture.
-                        let badgeSize = min(max(iconSize * 0.4, 18), 34)
-                        ZStack {
-                            Circle()
-                                .fill(Color.red)
-                            Image(systemName: "xmark")
-                                .font(.system(size: badgeSize * 0.5, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: badgeSize, height: badgeSize)
-                        .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
-                        .contentShape(Circle())
-                        .highPriorityGesture(TapGesture().onEnded {
-                            actions.onCloseRunning(app)
-                        })
-                        .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
-                    }
+                    // like on the home screen. The badge's corner is
+                    // carved out of its hit area (see LCGridTouchView):
+                    // the close badge lives in the cell's overlay, and
+                    // this UIKit layer would otherwise claim its touches.
+                    LCGridTouchObserver(isPressed: $isPressed,
+                                        badgeExclusion: actions.isRunning(app) ? badgeSize : 0)
                 }
                 .frame(width: iconSize, height: iconSize)
                 // Feedback identical to the iOS home screen (and to
@@ -297,6 +292,30 @@ private struct LCAppGridCell: View {
         )
         .contextMenu {
             contextMenuItems
+        }
+        // The running close badge lives in an overlay, outside the
+        // gesture-carrying cell — the same structure as the list, whose
+        // badge overlays the banner and works. Inside the cell it
+        // rendered but never fired: the cell's composed tap gesture
+        // competes for the same touches, and the UIKit touch observer
+        // over the icon claims them at the UIKit level first. The
+        // spacer matches the icon's frame and the overlay is top-
+        // centered like the icon, so top-trailing alignment plus the
+        // quarter-diameter offset put the badge's center a quarter of
+        // its diameter inside the icon's top-right corner, like the
+        // iOS home screen's numeric badges.
+        .overlay(alignment: .top) {
+            if actions.isRunning(app) {
+                ZStack(alignment: .topTrailing) {
+                    Color.clear
+                        .allowsHitTesting(false)
+                    LCRunningCloseBadge(size: badgeSize) {
+                        actions.onCloseRunning(app)
+                    }
+                    .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
+                }
+                .frame(width: iconSize, height: iconSize)
+            }
         }
     }
 
