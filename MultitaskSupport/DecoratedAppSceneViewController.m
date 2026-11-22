@@ -544,7 +544,10 @@
 // 左上移动、右上最大化/还原、左下最小化（右下缩放是原有的，
 // 不归这里管）。仅在「隐藏操作栏」开启时生效：操作栏在时有它
 // 的按钮和拖动，不需要四角。ResizeHandleView 的三角长在右下
-// 角，其余三个角靠旋转/翻转把手视图把三角转过去。
+// 角（东南），其余三个角靠旋转/翻转把手视图把三角转过去：
+// 左上 = 旋转 180° 到西北；右上 = 垂直翻转 (1,-1) 到东北；
+// 左下 = 水平翻转 (-1,1) 到西南。（右上/左下的翻转曾经写反，
+// 三角跑到了把手框的内侧角，Ann 2026-11-22 真机发现后修正。）
 - (void)updateCornerHandles {
     BOOL active = [self shouldHideWindowBar];
     if (active && !self.moveHandle) {
@@ -561,13 +564,13 @@
         [self.view addSubview:self.moveHandle];
         // 右上：最大化/还原（点击）
         self.maximizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
-        self.maximizeHandle.transform = CGAffineTransformMakeScale(-1, 1);
+        self.maximizeHandle.transform = CGAffineTransformMakeScale(1, -1);
         self.maximizeHandle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
         [self.maximizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(maximizeWindow)]];
         [self.view addSubview:self.maximizeHandle];
         // 左下：最小化（点击）
         self.minimizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(0, bounds.size.height - size, size, size)];
-        self.minimizeHandle.transform = CGAffineTransformMakeScale(1, -1);
+        self.minimizeHandle.transform = CGAffineTransformMakeScale(-1, 1);
         self.minimizeHandle.autoresizingMask = UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin;
         [self.minimizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(minimizeWindow)]];
         [self.view addSubview:self.minimizeHandle];
