@@ -14,9 +14,9 @@
 // 本 fork 的增补：全程诊断日志——与宿主侧 CZFHostKeepAlive 写同一个
 // 文件（<AppGroup>/CZFKeepAlive/keepalive.log），格式一致；另补了
 // 音频服务丢失/重置两个通知的观察（zh 只有宿主侧有）。
-// 播放层（2026-11-22 实验变量）：不用 AVAudioPlayer，改 AVAudioEngine
-// + AVAudioPlayerNode 循环播 44.1kHz 立体声静音缓冲（Palladium 同款）；
-// 触发、看门狗、白名单等逻辑与 zh v1.4 一致。
+// 微珠式设置（2026-11-22）：保活上限与日志开关由宿主写进同目录的
+// config.plist 下发；看门狗改自适应间隔（见 CZFWatchdogInterval）。
+// 播放层定版为 AVAudioPlayer（引擎版是二分期的实验，已移除）。
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -29,11 +29,18 @@
 + (NSString *)lcAppGroupPath;
 @end
 
-static AVAudioEngine *gEngine = nil;
-static AVAudioPlayerNode *gNode = nil;
+static AVAudioPlayer *gPlayer = nil;
 static NSTimer *gWatchdog = nil;
 static BOOL gInBackground = NO;
 static NSTimeInterval gPlayStartedAt = 0;
+// 宿主下发的配置（<AppGroup>/CZFKeepAlive/config.plist）：保活上限
+// 秒数（0 = 不限）与日志开关。游客进程读不到宿主的标准 defaults，
+// 只能走这个文件；加载、起播、看门狗轮次时各刷新一次。
+static NSTimeInterval gLimitSeconds = 0;
+static BOOL gLogEnabled = YES;
+
+static void CZFStartPlayer(void);
+static void CZFStopKeepAlive(NSString *reason);
 // block 观察者返的 token 必须留住，丢掉就当场注销。
 static NSMutableArray *gCZFKeepAliveObservers = nil;
 
@@ -55,7 +62,20 @@ static NSString *CZFLogFilePath(void) {
     return [[root stringByAppendingPathComponent:@"CZFKeepAlive"] stringByAppendingPathComponent:@"keepalive.log"];
 }
 
+static void CZFLoadConfig(void) {
+    if (![NSUserDefaults respondsToSelector:@selector(lcAppGroupPath)]) return;
+    NSString *root = [NSUserDefaults lcAppGroupPath];
+    if (!root.length) return;
+    NSString *path = [[root stringByAppendingPathComponent:@"CZFKeepAlive"] stringByAppendingPathComponent:@"config.plist"];
+    NSDictionary *config = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSNumber *limit = config[@"limitSeconds"];
+    if (limit) gLimitSeconds = limit.doubleValue;
+    NSNumber *logEnabled = config[@"logEnabled"];
+    if (logEnabled) gLogEnabled = logEnabled.boolValue;
+}
+
 static void CZFLog(NSString *event, NSString *details) {
+    if (!gLogEnabled) return;
     NSString *path = CZFLogFilePath();
     if (!path) return;
     NSString *tag = [[NSBundle mainBundle] bundleIdentifier] ?: @"guest";
@@ -93,59 +113,43 @@ static void CZFLogTrimIfNeeded(void) {
     });
 }
 
-static BOOL CZFIsPlaying(void) {
-    return gNode.isPlaying;
+// 生成 1 秒静音 WAV 数据（8000Hz 单声道 16bit PCM），生成一次后缓存
+static NSData *CZFSilentWAVData(void) {
+    static NSData *cached = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        const uint32_t sampleRate = 8000;
+        const uint16_t channels = 1;
+        const uint16_t bitsPerSample = 16;
+        const uint32_t dataSize = sampleRate * channels * (bitsPerSample / 8);
+        const uint32_t chunkSize = 36 + dataSize;
+        const uint16_t blockAlign = channels * (bitsPerSample / 8);
+        const uint32_t byteRate = sampleRate * (uint32_t)blockAlign;
+
+        NSMutableData *data = [NSMutableData dataWithCapacity:44 + dataSize];
+        [data appendBytes:"RIFF" length:4];
+        [data appendBytes:&chunkSize length:4];
+        [data appendBytes:"WAVE" length:4];
+        [data appendBytes:"fmt " length:4];
+        uint32_t subChunk1Size = 16;
+        uint16_t audioFormat = 1; // PCM
+        [data appendBytes:&subChunk1Size length:4];
+        [data appendBytes:&audioFormat length:2];
+        [data appendBytes:&channels length:2];
+        [data appendBytes:&sampleRate length:4];
+        [data appendBytes:&byteRate length:4];
+        [data appendBytes:&blockAlign length:2];
+        [data appendBytes:&bitsPerSample length:2];
+        [data appendBytes:"data" length:4];
+        [data appendBytes:&dataSize length:4];
+        [data increaseLengthBy:dataSize]; // 补零 = 静音采样
+        cached = [data copy];
+    });
+    return cached;
 }
 
-/// 节点播放时间轴上的秒数（单调递增），取不到时 -1。心跳双采样用它
-/// 证明渲染真的在推进（等价于旧版 AVAudioPlayer 的 currentTime）。
-static double CZFNodeTime(void) {
-    if (!gNode) return -1;
-    AVAudioTime *last = gNode.lastRenderTime;
-    if (!last) return -1;
-    AVAudioTime *pt = [gNode playerTimeForNodeTime:last];
-    if (!pt || pt.sampleRate <= 0) return -1;
-    return (double)pt.sampleTime / pt.sampleRate;
-}
-
-/// 1 秒静音 PCM 缓冲（44.1kHz 立体声浮点，全零），与宿主侧同配方。
-static AVAudioPCMBuffer *CZFSilentBuffer(void) {
-    AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
-    if (!format) return nil;
-    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:44100];
-    if (!buffer || !buffer.floatChannelData) return nil;
-    buffer.frameLength = 44100;
-    for (UInt32 ch = 0; ch < format.channelCount; ch++) {
-        memset(buffer.floatChannelData[ch], 0, 44100 * sizeof(float));
-    }
-    return buffer;
-}
-
-/// 搭引擎图：播放节点 → 主混音器，挂静音缓冲无限循环。
-static void CZFBuildGraph(void) {
-    AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
-    AVAudioPCMBuffer *buffer = CZFSilentBuffer();
-    if (!format || !buffer) return;
-    gEngine = [[AVAudioEngine alloc] init];
-    gNode = [[AVAudioPlayerNode alloc] init];
-    [gEngine attachNode:gNode];
-    [gEngine connect:gNode to:gEngine.mainMixerNode format:format];
-    [gNode scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
-}
-
-static BOOL CZFRunEngine(NSError **outError) {
-    if (!gEngine) CZFBuildGraph();
-    if (!gEngine || !gNode) return NO;
-    if (!gEngine.isRunning) {
-        [gEngine prepare];
-        if (![gEngine startAndReturnError:outError]) return NO;
-    }
-    if (!gNode.isPlaying) [gNode play];
-    return YES;
-}
-
-static void CZFStartEngine(void) {
-    if (CZFIsPlaying()) return;
+static void CZFStartPlayer(void) {
+    if (gPlayer && gPlayer.isPlaying) return;
     AVAudioSession *session = [AVAudioSession sharedInstance];
     NSError *categoryError = nil;
     [session setCategory:AVAudioSessionCategoryPlayback
@@ -153,55 +157,90 @@ static void CZFStartEngine(void) {
                    error:&categoryError];
     NSError *activeError = nil;
     [session setActive:YES error:&activeError];
-    BOOL created = (gEngine == nil);
-    NSError *engineError = nil;
-    if (!CZFRunEngine(&engineError)) {
-        // 引擎可能在音频服务重置后失效：整套重建再试一次。
-        [gNode stop];
-        [gEngine stop];
-        gEngine = nil;
-        gNode = nil;
-        CZFRunEngine(&engineError);
+    BOOL created = NO;
+    NSError *playerError = nil;
+    if (!gPlayer) {
+        gPlayer = [[AVAudioPlayer alloc] initWithData:CZFSilentWAVData() error:&playerError];
+        gPlayer.numberOfLoops = -1; // 无限循环
+        gPlayer.volume = 0.0;
+        [gPlayer prepareToPlay];
+        created = YES;
     }
+    [gPlayer play];
     if (gPlayStartedAt == 0) gPlayStartedAt = [NSDate timeIntervalSinceReferenceDate];
-    CZFLog(@"keep-alive-start", [NSString stringWithFormat:@"created=%d playing=%d nodeTime=%.3f categoryError=%@ activeError=%@ engineError=%@ pid=%d",
-        created, CZFIsPlaying(), CZFNodeTime(),
+    CZFLog(@"keep-alive-start", [NSString stringWithFormat:@"created=%d playing=%d currentTime=%.3f categoryError=%@ activeError=%@ playerError=%@ pid=%d",
+        created, gPlayer.isPlaying, gPlayer.currentTime,
         categoryError ? categoryError.localizedDescription : @"none",
         activeError ? activeError.localizedDescription : @"none",
-        engineError ? engineError.localizedDescription : @"none",
+        playerError ? playerError.localizedDescription : @"none",
         getpid()]);
+}
+
+// 看门狗自适应：单次定时、每轮按状态重算间隔。没在播时 5 秒快查
+// （尽快恢复）；有上限时取剩余时间的四分之一（最短 5、最长 30），
+// 越接近上限查得越密，到点能及时停；其余情况 30 秒一轮。
+static NSTimeInterval CZFWatchdogInterval(void) {
+    if (!gPlayer.isPlaying) return 5.0;
+    if (gLimitSeconds > 0 && gPlayStartedAt > 0) {
+        NSTimeInterval remaining = gLimitSeconds - ([NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt);
+        if (remaining <= 0) return 5.0;
+        return MIN(30.0, MAX(5.0, remaining / 4.0));
+    }
+    return 30.0;
+}
+
+static void CZFArmWatchdog(BOOL logArmed) {
+    [gWatchdog invalidate];
+    NSTimeInterval interval = CZFWatchdogInterval();
+    gWatchdog = [NSTimer scheduledTimerWithTimeInterval:interval repeats:NO block:^(NSTimer *timer) {
+        gWatchdog = nil;
+        @try {
+            CZFLoadConfig();
+            // 上限先于健康检查：到点就停（宿主半也会停，两边互为兜底）。
+            if (gInBackground && gLimitSeconds > 0 && gPlayStartedAt > 0 &&
+                [NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt >= gLimitSeconds) {
+                CZFStopKeepAlive(@"limit");
+                return;
+            }
+            // 被打断/暂停后自动恢复
+            if (gInBackground && !gPlayer.isPlaying) {
+                CZFLog(@"keep-alive-watchdog", @"action=restart playing=0");
+                CZFStartPlayer();
+            }
+            // 心跳：currentTime 间隔 0.5 秒双读，差值 ≈0.5 = 真在播；
+            // next 是下一轮的自适应间隔。
+            double ct1 = gPlayer.currentTime;
+            BOOL playing = gPlayer.isPlaying;
+            NSTimeInterval next = CZFWatchdogInterval();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                double ct2 = gPlayer.currentTime;
+                CZFLog(@"keep-alive-beat", [NSString stringWithFormat:@"ct1=%.4f ct2=%.4f playing=%d bg=%d next=%.0f", ct1, ct2, playing, gInBackground, next]);
+            });
+            if (gInBackground) {
+                CZFArmWatchdog(NO);
+            }
+        } @catch (__unused NSException *e) {}
+    }];
+    // 容差随间隔缩放，系统可合并唤醒、减发热
+    gWatchdog.tolerance = interval * 0.3;
+    if (logArmed) {
+        CZFLog(@"keep-alive-watchdog-armed", [NSString stringWithFormat:@"interval=%.0f tolerance=%.0f", interval, interval * 0.3]);
+    }
 }
 
 static void CZFStartKeepAlive(void) {
     @try {
-        CZFStartEngine();
+        CZFLoadConfig();
+        CZFStartPlayer();
         if (!gWatchdog) {
-            gWatchdog = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *timer) {
-                @try {
-                    // 被打断/暂停后自动恢复
-                    if (gInBackground && !CZFIsPlaying()) {
-                        CZFLog(@"keep-alive-watchdog", @"action=restart playing=0");
-                        CZFStartEngine();
-                    }
-                    // 心跳：节点时间间隔 0.5 秒双读，差值 ≈0.5 = 渲染真在推进
-                    double ct1 = CZFNodeTime();
-                    BOOL playing = CZFIsPlaying();
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        double ct2 = CZFNodeTime();
-                        CZFLog(@"keep-alive-beat", [NSString stringWithFormat:@"ct1=%.4f ct2=%.4f playing=%d bg=%d", ct1, ct2, playing, gInBackground]);
-                    });
-                } @catch (__unused NSException *e) {}
-            }];
-            // 减发热：容差 10 秒，系统可合并唤醒
-            gWatchdog.tolerance = 10.0;
-            CZFLog(@"keep-alive-watchdog-armed", @"interval=30 tolerance=10");
+            CZFArmWatchdog(YES);
         }
     } @catch (__unused NSException *e) {}
 }
 
 static void CZFStopKeepAlive(NSString *reason) {
     @try {
-        BOOL wasPlaying = CZFIsPlaying();
+        BOOL wasPlaying = gPlayer.isPlaying;
         NSTimeInterval seconds = gPlayStartedAt > 0 ? [NSDate timeIntervalSinceReferenceDate] - gPlayStartedAt : 0;
         if (wasPlaying || gPlayStartedAt > 0) {
             CZFLog(@"keep-alive-stop", [NSString stringWithFormat:@"reason=%@ wasPlaying=%d seconds=%.1f", reason, wasPlaying, seconds]);
@@ -209,8 +248,7 @@ static void CZFStopKeepAlive(NSString *reason) {
         gPlayStartedAt = 0;
         [gWatchdog invalidate];
         gWatchdog = nil;
-        [gNode pause];
-        [gEngine stop];
+        [gPlayer pause];
         [[AVAudioSession sharedInstance] setActive:NO
                                        withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
                                              error:nil];
@@ -251,7 +289,8 @@ static BOOL CZFShouldActivate(void) {
 __attribute__((constructor))
 static void CZFKeepAliveInit(void) {
     @autoreleasepool {
-        CZFLogTrimIfNeeded();
+        CZFLoadConfig();
+        if (gLogEnabled) CZFLogTrimIfNeeded();
         NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
         CZFLog(@"keep-alive-loaded", [NSString stringWithFormat:@"bundle=%@ pid=%d", bundleId, getpid()]);
         if (!CZFShouldActivate()) {
@@ -347,8 +386,8 @@ static void CZFKeepAliveInit(void) {
         [gCZFKeepAliveObservers addObject:[nc addObserverForName:AVAudioSessionMediaServicesWereLostNotification
                         object:nil queue:mainQ
                     usingBlock:^(NSNotification *note) {
-                        CZFLog(@"keep-alive-notify", [NSString stringWithFormat:@"name=mediaServicesLost bg=%d playing=%d", gInBackground, CZFIsPlaying()]);
-                        if (gInBackground && !CZFIsPlaying()) {
+                        CZFLog(@"keep-alive-notify", [NSString stringWithFormat:@"name=mediaServicesLost bg=%d playing=%d", gInBackground, gPlayer.isPlaying]);
+                        if (gInBackground && !gPlayer.isPlaying) {
                             CZFStartKeepAlive();
                         }
                     }]];
@@ -356,8 +395,8 @@ static void CZFKeepAliveInit(void) {
         [gCZFKeepAliveObservers addObject:[nc addObserverForName:AVAudioSessionMediaServicesWereResetNotification
                         object:nil queue:mainQ
                     usingBlock:^(NSNotification *note) {
-                        CZFLog(@"keep-alive-notify", [NSString stringWithFormat:@"name=mediaServicesReset bg=%d playing=%d", gInBackground, CZFIsPlaying()]);
-                        if (gInBackground && !CZFIsPlaying()) {
+                        CZFLog(@"keep-alive-notify", [NSString stringWithFormat:@"name=mediaServicesReset bg=%d playing=%d", gInBackground, gPlayer.isPlaying]);
+                        if (gInBackground && !gPlayer.isPlaying) {
                             CZFStartKeepAlive();
                         }
                     }]];

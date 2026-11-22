@@ -51,7 +51,13 @@ enum CZFKeepAliveLog {
             .appendingPathComponent("keepalive.log")
     }
 
+    /// 日志开关（微珠式设置）：关了就一行都不写。键缺省 = 开。
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: "LCKeepAliveLogEnabled") as? Bool ?? true
+    }
+
     static func event(_ tag: String, _ event: String, _ details: [String: String] = [:]) {
+        guard isEnabled else { return }
         queue.async {
             let url = fileURL
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -84,32 +90,20 @@ enum CZFKeepAliveLog {
 final class CZFHostKeepAlive {
     static let shared = CZFHostKeepAlive()
 
-    // 播放层（2026-11-22 实验变量）：不用 AVAudioPlayer，改
-    // AVAudioEngine + AVAudioPlayerNode 循环播 44.1kHz 立体声静音
-    // 缓冲（Palladium 同款）。五套 AVAudioPlayer 方案都死在后台约
-    // 1 分钟，这是最后一个没试过的实现变量；其余逻辑与 zh 原版一致。
-    private var engine: AVAudioEngine?
-    private var playerNode: AVAudioPlayerNode?
+    private var player: AVAudioPlayer?
     private var watchdog: Timer?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var isBackgrounded = false
     private var installed = false
     private var playStartedAt: Date?
+    /// 保活上限闩锁：本轮后台播满上限后置位，refresh 不再重起；
+    /// 回前台时清零，下一轮后台重新计时。
+    private var limitReached = false
     // block 观察者返的 token 必须留住——NotificationCenter 不强持有
     // 它，丢掉就当场注销。
     private var observerTokens: [NSObjectProtocol] = []
 
     private init() {}
-
-    private var isPlaying: Bool { playerNode?.isPlaying ?? false }
-
-    /// 节点播放时间轴上的秒数（单调递增），取不到时 -1。心跳双采样
-    /// 用它证明渲染真的在推进（等价于旧版 player 的 currentTime）。
-    private var nodeTime: Double {
-        guard let node = playerNode, let last = node.lastRenderTime,
-              let pt = node.playerTime(forNodeTime: last), pt.sampleRate > 0 else { return -1 }
-        return Double(pt.sampleTime) / pt.sampleRate
-    }
 
     /// App 启动时调一次：装后台/前台/音频中断观察者（主队列）。
     func install() {
@@ -121,6 +115,9 @@ final class CZFHostKeepAlive {
             "state": "\(UIApplication.shared.applicationState.rawValue)",
             "enabled": "\(UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)",
             "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
+        // 把当前上限/日志开关同步给游客侧（config.plist），保证用户
+        // 从没动过新设置时游客读到的也是现值。
+        Self.writeGuestConfig()
         let center = NotificationCenter.default
         observerTokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didEnterBackground"])
@@ -130,6 +127,7 @@ final class CZFHostKeepAlive {
         observerTokens.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
             CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "willEnterForeground"])
             self?.isBackgrounded = false
+            self?.limitReached = false
             self?.refresh()
         })
         // 提前启动：上滑切 App 时 WillResignActive 先于 DidEnterBackground，
@@ -142,6 +140,7 @@ final class CZFHostKeepAlive {
         observerTokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             CZFKeepAliveLog.event("宿主", "keep-alive-notify", ["name": "didBecomeActive"])
             self?.isBackgrounded = false
+            self?.limitReached = false
             self?.refresh()
         })
         observerTokens.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
@@ -177,14 +176,21 @@ final class CZFHostKeepAlive {
         let multitasking = MultitaskManager.isMultitasking()
         let sceneCount = UIApplication.shared.connectedScenes.count
         let guestsRunning = multitasking || sceneCount > 1
-        let shouldPlay = enabled && guestsRunning && isBackgrounded
+        // 保活上限：本轮已播满就闩锁，refresh 不再重起（看门狗也会查，
+        // 这里是事件驱动路径的同一道闸）。
+        if !limitReached, Self.limitSeconds > 0, let started = playStartedAt,
+           Date().timeIntervalSince(started) >= Self.limitSeconds {
+            limitReached = true
+        }
+        let shouldPlay = enabled && guestsRunning && isBackgrounded && !limitReached
         CZFKeepAliveLog.event("宿主", "keep-alive-refresh", [
             "enabled": "\(enabled)",
             "guests": "\(guestsRunning)",
             "multitask": "\(multitasking)",
             "scenes": "\(sceneCount)",
             "bg": "\(isBackgrounded)",
-            "playing": "\(isPlaying)",
+            "playing": "\(player?.isPlaying ?? false)",
+            "limitReached": "\(limitReached)",
             "decision": shouldPlay ? "start" : "stop"])
         if shouldPlay {
             start()
@@ -213,87 +219,92 @@ final class CZFHostKeepAlive {
         backgroundTask = .invalid
     }
 
-    /// 搭引擎图：播放节点 → 主混音器，挂一块 1 秒静音缓冲无限循环。
-    private func buildEngineGraph() {
-        let engine = AVAudioEngine()
-        let node = AVAudioPlayerNode()
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
-              let buffer = Self.silentBuffer(format: format) else { return }
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        node.scheduleBuffer(buffer, at: nil, options: .loops)
-        self.engine = engine
-        self.playerNode = node
-    }
-
-    private func teardownEngine() {
-        playerNode?.stop()
-        engine?.stop()
-        engine = nil
-        playerNode = nil
-    }
-
-    private func runEngine() throws {
-        if engine == nil { buildEngineGraph() }
-        guard let engine = engine, let node = playerNode else { throw CocoaError(.featureUnsupported) }
-        if !engine.isRunning {
-            engine.prepare()
-            try engine.start()
-        }
-        if !node.isPlaying { node.play() }
-    }
-
     private func start() {
         beginBackgroundTask()
-        if isPlaying { return }
-        let created = engine == nil
+        if watchdog == nil { armWatchdog() }
+        if let player = player, player.isPlaying { return }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, options: .mixWithOthers)
             try session.setActive(true)
-            do {
-                try runEngine()
-            } catch {
-                // 引擎可能在音频服务重置后失效：整套重建再试一次。
-                teardownEngine()
-                try runEngine()
+            let created = player == nil
+            if created {
+                player = try AVAudioPlayer(data: CZFHostKeepAlive.silentWAVData())
+                player?.numberOfLoops = -1
+                player?.volume = 0.0
+                player?.prepareToPlay()
             }
+            player?.play()
             if playStartedAt == nil { playStartedAt = Date() }
             CZFKeepAliveLog.event("宿主", "keep-alive-start", [
                 "created": "\(created)",
-                "playing": "\(isPlaying)",
-                "nodeTime": "\(nodeTime)",
+                "playing": "\(player?.isPlaying ?? false)",
+                "currentTime": "\(player?.currentTime ?? -1)",
                 "pid": "\(ProcessInfo.processInfo.processIdentifier)"])
         } catch {
             // 宿主保活绝不能拖垮宿主：起不来就安静失败（但要留日志）。
             CZFKeepAliveLog.event("宿主", "keep-alive-start-failed", ["error": error.localizedDescription])
             return
         }
-        if watchdog == nil {
-            // 看门狗只作兜底：主因（中断结束、音频服务丢/重置、前后台
-            // 切换）都已有通知直接触发 refresh() 重起；这表只防通知没
-            // 覆盖到的漏网情况，5 分钟一轮，tolerance 60 秒让系统并批。
-            watchdog = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                // 只在真后台才重起：applicationState 才是真后台。
-                let inBg = UIApplication.shared.applicationState == .background
-                let playing = self.isPlaying
-                CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
-                    "state": "\(UIApplication.shared.applicationState.rawValue)",
-                    "playing": "\(playing)",
-                    "nodeTime": "\(self.nodeTime)",
-                    "action": (inBg && !playing) ? "restart" : "none"])
-                if inBg && !playing {
-                    self.start()
-                }
-            }
-            watchdog?.tolerance = 60.0
-            CZFKeepAliveLog.event("宿主", "keep-alive-watchdog-armed", ["interval": "300"])
+        // 刚起播时 playStartedAt 才定下来，有上限就按剩余时间重排
+        // 一次看门狗，上限附近的间隔才算得准。
+        if Self.limitSeconds > 0 { armWatchdog() }
+    }
+
+    // MARK: - 看门狗（自适应）
+
+    /// 看门狗只作兜底：主因（中断结束、音频服务丢/重置、前后台切换）
+    /// 都已有通知直接触发 refresh() 重起；这表防通知没覆盖到的漏网
+    /// 情况，顺带执行保活上限。单次定时、每轮按状态重算间隔——
+    /// 自适应：没上限时 300 秒一轮；有上限时取剩余时间的一半
+    /// （最短 30 秒），越接近上限查得越密，到点能及时停。
+    private func armWatchdog() {
+        watchdog?.invalidate()
+        let interval = watchdogInterval()
+        watchdog = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            self?.watchdogTick()
+        }
+        watchdog?.tolerance = interval * 0.2
+        CZFKeepAliveLog.event("宿主", "keep-alive-watchdog-armed", ["interval": "\(Int(interval))"])
+    }
+
+    private func watchdogInterval() -> TimeInterval {
+        let limit = Self.limitSeconds
+        guard limit > 0, let started = playStartedAt else { return 300 }
+        let remaining = limit - Date().timeIntervalSince(started)
+        return min(300, max(30, remaining / 2))
+    }
+
+    private func watchdogTick() {
+        watchdog = nil
+        // 只在真后台才动作：applicationState 才是真后台。
+        let inBg = UIApplication.shared.applicationState == .background
+        let playing = player?.isPlaying ?? false
+        // 上限先于健康检查：到点就停并闩锁，本轮后台不再重起。
+        if inBg, playing, Self.limitSeconds > 0, let started = playStartedAt,
+           Date().timeIntervalSince(started) >= Self.limitSeconds {
+            CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
+                "state": "\(UIApplication.shared.applicationState.rawValue)",
+                "playing": "\(playing)",
+                "action": "limit-stop"])
+            limitReached = true
+            stop()
+            return
+        }
+        CZFKeepAliveLog.event("宿主", "keep-alive-watchdog", [
+            "state": "\(UIApplication.shared.applicationState.rawValue)",
+            "playing": "\(playing)",
+            "currentTime": "\(player?.currentTime ?? -1)",
+            "action": (inBg && !playing) ? "restart" : "none"])
+        if inBg && !playing {
+            start()
+        } else if inBg {
+            armWatchdog()
         }
     }
 
     private func stop() {
-        let wasPlaying = isPlaying
+        let wasPlaying = player?.isPlaying ?? false
         let seconds = playStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         if wasPlaying || playStartedAt != nil {
             CZFKeepAliveLog.event("宿主", "keep-alive-stop", [
@@ -304,22 +315,40 @@ final class CZFHostKeepAlive {
         playStartedAt = nil
         watchdog?.invalidate()
         watchdog = nil
-        playerNode?.pause()
-        engine?.stop()
+        player?.pause()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         endBackgroundTask()
     }
 
-    /// 1 秒静音 PCM 缓冲（44.1kHz 立体声浮点，全零），与游客侧同配方。
-    private static func silentBuffer(format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        let frames = AVAudioFrameCount(44_100)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-              let channels = buffer.floatChannelData else { return nil }
-        buffer.frameLength = frames
-        for ch in 0..<Int(format.channelCount) {
-            channels[ch].update(repeating: 0, count: Int(frames))
+    /// 1 秒静音 WAV（8000Hz 单声道 16bit PCM），与游客侧 CZFKeepAlive.m 同配方。
+    private static func silentWAVData() -> Data {
+        let sampleRate: UInt32 = 8000
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let dataSize = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
+        let chunkSize = 36 + dataSize
+        let blockAlign = channels * (bitsPerSample / 8)
+        let byteRate = sampleRate * UInt32(blockAlign)
+        var data = Data()
+        func append<T>(_ value: T) {
+            var v = value
+            data.append(Data(bytes: &v, count: MemoryLayout<T>.size))
         }
-        return buffer
+        data.append("RIFF".data(using: .ascii)!)
+        append(chunkSize)
+        data.append("WAVE".data(using: .ascii)!)
+        data.append("fmt ".data(using: .ascii)!)
+        append(UInt32(16))
+        append(UInt16(1))
+        append(channels)
+        append(sampleRate)
+        append(byteRate)
+        append(blockAlign)
+        append(bitsPerSample)
+        data.append("data".data(using: .ascii)!)
+        append(dataSize)
+        data.append(Data(count: Int(dataSize)))
+        return data
     }
 
     // MARK: - 开关与游客模块部署
@@ -330,6 +359,67 @@ final class CZFHostKeepAlive {
         CZFKeepAliveLog.event("LC", "keep-alive-setting", ["enabled": "\(enabled)"])
         syncGuestModule(enabled: enabled)
         shared.refresh()
+    }
+
+    // MARK: - 微珠式设置：上限 / 日志开关 / 状态
+
+    /// 保活上限（秒）：0 = 不限。设置键 LCKeepAliveLimitMinutes 存分钟。
+    static var limitSeconds: TimeInterval {
+        let minutes = UserDefaults.standard.integer(forKey: "LCKeepAliveLimitMinutes")
+        return minutes > 0 ? TimeInterval(minutes * 60) : 0
+    }
+
+    static func setLimitMinutes(_ minutes: Int) {
+        UserDefaults.standard.set(minutes, forKey: "LCKeepAliveLimitMinutes")
+        CZFKeepAliveLog.event("LC", "keep-alive-setting", ["limitMinutes": "\(minutes)"])
+        writeGuestConfig()
+        // 正在播且已超过新上限时，refresh 里的闸会立刻停掉。
+        shared.refresh()
+    }
+
+    static func setLogEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "LCKeepAliveLogEnabled")
+        writeGuestConfig()
+        if enabled {
+            CZFKeepAliveLog.event("LC", "keep-alive-setting", ["logEnabled": "true"])
+        }
+    }
+
+    /// 游客侧配置：写进与日志同目录的 config.plist，游客 dylib 在
+    /// 加载、起播和看门狗轮次里读（上限秒数 + 日志开关）——游客进程
+    /// 读不到宿主的标准 defaults，只能走 App Group 文件。
+    static func writeGuestConfig() {
+        let dir = CZFKeepAliveLog.fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let config: [String: Any] = [
+            "limitSeconds": limitSeconds,
+            "logEnabled": CZFKeepAliveLog.isEnabled,
+        ]
+        if let data = try? PropertyListSerialization.data(fromPropertyList: config, format: .xml, options: 0) {
+            try? data.write(to: dir.appendingPathComponent("config.plist"), options: .atomic)
+        }
+    }
+
+    /// 设置页「保活状态」行的数据。在主线程读（设置页调用）。
+    /// 游客判定与 refresh 同源：注册表 + 场景数，不碰坞管理器。
+    struct Status {
+        var enabled: Bool
+        var playing: Bool
+        var elapsed: TimeInterval
+        var limitMinutes: Int
+        var guestsRunning: Bool
+        var limitReached: Bool
+    }
+
+    func statusSnapshot() -> Status {
+        let guests = MultitaskManager.isMultitasking() || UIApplication.shared.connectedScenes.count > 1
+        return Status(
+            enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true,
+            playing: player?.isPlaying ?? false,
+            elapsed: playStartedAt.map { Date().timeIntervalSince($0) } ?? 0,
+            limitMinutes: UserDefaults.standard.integer(forKey: "LCKeepAliveLimitMinutes"),
+            guestsRunning: guests,
+            limitReached: limitReached)
     }
 
     /// 游客侧 CZFKeepAlive.dylib 的部署。构建产物以 base64 文本形式

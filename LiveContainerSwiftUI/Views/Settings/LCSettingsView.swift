@@ -47,6 +47,9 @@ struct LCSettingsView: View {
     @StateObject private var certificateImportPasswordAlert = InputHelper()
     
     @AppStorage("LCKeepAliveEnabled") var keepAliveEnabled = true
+    @AppStorage("LCKeepAliveLimitMinutes") var keepAliveLimitMinutes = 0
+    @AppStorage("LCKeepAliveLogEnabled") var keepAliveLogEnabled = true
+    @State private var keepAliveStatus = CZFHostKeepAlive.shared.statusSnapshot()
     @AppStorage("LCFrameShortcutIcons") var frameShortIcon = false
     @AppStorage("LCSwitchAppWithoutAsking") var silentSwitchApp = false
     @AppStorage("LCOpenWebPageWithoutAsking") var silentOpenWebPage = false
@@ -80,6 +83,25 @@ struct LCSettingsView: View {
         _store = State(initialValue: LCUtils.store())
     }
     
+    /// 保活状态行：未启用 / 待机 / 保活中 · 已持续 mm:ss（有上限时
+    /// 附上限，被上限停掉时注明）。快照每秒刷新一次（见保活 Section
+    /// 的 onReceive）。
+    private var keepAliveStatusText: String {
+        let status = keepAliveStatus
+        guard status.enabled else { return "lc.keepAlive.statusOff".loc }
+        if status.limitReached {
+            return "lc.keepAlive.statusLimited".loc
+        }
+        guard status.playing else { return "lc.keepAlive.statusIdle".loc }
+        let elapsed = Int(status.elapsed)
+        let duration = String(format: "%02d:%02d", elapsed / 60, elapsed % 60)
+        var text = "lc.keepAlive.statusRunning".localizeWithFormat(duration)
+        if status.limitMinutes > 0 {
+            text += " / " + "lc.keepAlive.limitMinutes".localizeWithFormat(status.limitMinutes)
+        }
+        return text
+    }
+
     var body: some View {
         NavigationView {
             Form {
@@ -167,6 +189,29 @@ struct LCSettingsView: View {
                     .onChange(of: keepAliveEnabled) { newValue in
                         CZFHostKeepAlive.setEnabled(newValue)
                     }
+                    HStack {
+                        Text("lc.keepAlive.status".loc)
+                        Spacer()
+                        Text(keepAliveStatusText)
+                            .foregroundColor(.secondary)
+                    }
+                    Picker(selection: $keepAliveLimitMinutes) {
+                        Text("lc.keepAlive.limitUnlimited".loc).tag(0)
+                        ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
+                            Text("lc.keepAlive.limitMinutes".localizeWithFormat(minutes)).tag(minutes)
+                        }
+                    } label: {
+                        Text("lc.keepAlive.limit".loc)
+                    }
+                    .onChange(of: keepAliveLimitMinutes) { newValue in
+                        CZFHostKeepAlive.setLimitMinutes(newValue)
+                    }
+                    Toggle(isOn: $keepAliveLogEnabled) {
+                        Text("lc.keepAlive.logEnabled".loc)
+                    }
+                    .onChange(of: keepAliveLogEnabled) { newValue in
+                        CZFHostKeepAlive.setLogEnabled(newValue)
+                    }
                     NavigationLink {
                         LCKeepAliveLogView()
                     } label: {
@@ -180,6 +225,9 @@ struct LCSettingsView: View {
                     }
                 } footer: {
                     Text("lc.keepAlive.desc".loc)
+                }
+                .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+                    keepAliveStatus = CZFHostKeepAlive.shared.statusSnapshot()
                 }
 
                 Section {
