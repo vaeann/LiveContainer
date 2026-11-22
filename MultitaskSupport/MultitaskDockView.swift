@@ -151,6 +151,7 @@ class AppInfoProvider {
 
     /// Status bar fix state: whether the host status bar override is
     /// currently applied.
+    private var statusBarFixApplied = false
 
     /// The app currently in front in multitask (nil when every window
     /// is minimized, i.e. the user is on the LC home screen). The dock
