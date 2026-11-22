@@ -671,6 +671,17 @@ struct LCSourcesView: View {
         }
         .searchable(text: $searchContext.query, placement: .navigationBarDrawer(displayMode: .always))
 
+        // 页面可能在已经显示的状态下被重建（角标发布会让标签
+        // 页重跑一遍并重建本页）：新实例的 onAppear 和标签切换
+        // 事件可能都已经错过，数据源就永远等不到加载、整页停
+        // 在空状态（Ann 2026-11-23 真机：装完 App 切回软件源
+        // 偶尔整页空白，连源都看不见）。 .task 跟着视图实例
+        // 走、重建必重跑，在这里补上加载；loadSourcesIfNeeded
+        // 本身防重入，重复调用没有副作用。
+        .task {
+            viewModel.loadSourcesIfNeeded()
+            autoRefreshSourcesIfNeeded()
+        }
         .onAppear {
             if sharedModel.selectedTab == .sources {
                 viewModel.loadSourcesIfNeeded()
@@ -945,7 +956,12 @@ struct LCSourcesView: View {
     }
 
     private func publishBadgeCount() {
-        UserDefaults.standard.set(updateBadgeCount, forKey: "LCSourceUpdateBadgeCount")
+        // 只在真的变了时才写：写这个键会让标签页重跑并重建
+        // 本页面，没变化时反复写只是白白增加撞上重建竞态的
+        // 机会（整页空白问题的一半在触发端）。
+        let count = updateBadgeCount
+        guard UserDefaults.standard.integer(forKey: "LCSourceUpdateBadgeCount") != count else { return }
+        UserDefaults.standard.set(count, forKey: "LCSourceUpdateBadgeCount")
     }
 
     private var isFiltering: Bool {
