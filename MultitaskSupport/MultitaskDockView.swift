@@ -187,9 +187,11 @@ class AppInfoProvider {
     /// fired. Still pure host-side hit-testing: no cross-process
     /// machinery, no sendEvent hooks (both bisect-proven dead ends).
     /// Synced from updateDockFrame and hideDock; the per-window
-    /// scrim is tinted faint red in this test build so its coverage
-    /// is visible, and becomes clear once the placement is verified.
+    /// scrim carries a faint black 0.10 tint (a clear view claims
+    /// no touches in this stack). A matching full-screen backdrop
+    /// inside the hosting view covers the non-window areas.
     internal var hostingController: UIHostingController<AnyView>?
+    private var tapOutsideBackdrop: UIView?
 
     public struct Constants {
         // MARK: - Layout & Sizing
@@ -418,6 +420,32 @@ class AppInfoProvider {
                   let vc = view._viewDelegate() as? DecoratedAppSceneViewController else { continue }
             vc.setTapOutsideScrimVisible(shouldShow)
         }
+        // The per-window scrims only cover the window areas; the
+        // rest of the screen (LC's home interface around and
+        // between windows) gets a matching backdrop inside the
+        // hosting view, below every window, so the dim is uniform
+        // and a tap on a blank area collapses the dock too
+        // (Ann 2026-11-22).
+        if shouldShow {
+            if tapOutsideBackdrop == nil {
+                let backdrop = UIView(frame: windowHostingView.bounds)
+                backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                // Same 0.10 black as the per-window scrims — and
+                // the tint is load-bearing: clear views do not
+                // claim touches in this window stack.
+                backdrop.backgroundColor = UIColor(white: 0, alpha: 0.10)
+                backdrop.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapOutsideBackdropTapped)))
+                windowHostingView.insertSubview(backdrop, at: 0)
+                tapOutsideBackdrop = backdrop
+            }
+        } else {
+            tapOutsideBackdrop?.removeFromSuperview()
+            tapOutsideBackdrop = nil
+        }
+    }
+
+    @objc private func tapOutsideBackdropTapped() {
+        toggleDockCollapse()
     }
 
     // MARK: - Frame Calculation Helpers
