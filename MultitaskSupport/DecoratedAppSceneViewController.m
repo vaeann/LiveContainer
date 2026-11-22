@@ -712,11 +712,11 @@ static const CGFloat LCResizeHandleSize = 44;
     } else {
         settings.peripheryInsets = UIEdgeInsetsMake(0, safeAreaInsets.left, safeAreaInsets.bottom, safeAreaInsets.right);
         safeAreaInsets.bottom = safeAreaInsets.left = safeAreaInsets.right = 0;
-        // 探针（Ann 2026-11-22 晚）：最大化窗口顶边上移 20 点，
-        // 看状态栏下方那两条淡影线跟不跟着窗口走。跟着走 = 线是
-        // 窗口的；留在原地（屏幕 y≈58）= 线是状态栏那侧的。定性
-        // 后决定去留。
-        safeAreaInsets.top = MAX(0, safeAreaInsets.top - 20);
+        // 最大化顶边上移 10 点（Ann 2026-11-23 定）：圆点上沿正好落
+        // 在屏幕 y=59，即系统状态栏触摸区的下边界。再多移，圆点就
+        // 被状态栏那层挡住（−20 时圆点中心在 y=57、落在区内，上半
+        // 截点不上，真机实证）；10 点是圆点完整可点的最大压缩量。
+        safeAreaInsets.top = MAX(0, safeAreaInsets.top - 10);
     }
     
     // scale peripheryInsets to match the scale ratio
