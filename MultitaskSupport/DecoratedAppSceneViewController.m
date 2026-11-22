@@ -20,13 +20,12 @@ static const CGFloat LCResizeHandleSize = 44;
 @property(nonatomic) int pid;
 @property(nonatomic) CGRect originalFrame;
 @property(nonatomic) UIButton *maximizeButton;
-@property(nonatomic) UIImageView *maximizeGlyph;
+
 @property(nonatomic) UIView *lightsView;
 @property(nonatomic) UIButton *menuButton;
 @property(nonatomic) NSLayoutConstraint *menuButtonTrailing;
 @property(nonatomic) bool isAppTerminationRequested;
-- (UIImage *)trafficLightGlyph:(NSString *)symbolName;
-- (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action;
+- (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
 - (void)refreshBarOverlay;
 @end
@@ -48,26 +47,24 @@ static const CGFloat LCResizeHandleSize = 44;
     [MultitaskDockManager.shared addRunningApp:windowName appUUID:dataUUID view:self.view];
     
     // 操作栏（Ann 2026-11-22 定，macOS 风）：左边三个实心红黄绿
-    // 圆钮（关 / 最小化 / 最大化），中间不显示 App 名字，右边只
-    // 留一个箭头钮，点开还是原来的 PID 菜单（见 windowMenuElements）。
+    // 圆钮（关 / 最小化 / 最大化，圆内不放符号，就是 macOS 那种
+    // 纯色圆点），中间不显示 App 名字，右边只留一个箭头钮，点
+    // 开还是原来的 PID 菜单（见 windowMenuElements）。
     // 按钮不走导航栏的 item 系统：这条独立栏（非导航控制器托管）
     // 的 item 布局由栏内部说了算——自定义视图会被拉宽（箭头圆
-    // 变药丸）、整组偏下、iOS 26 给按钮组套的玻璃底也关不掉
-    // （hidesSharedBackground 无效，最大化时两组钮上方各一条
-    // 细线就是它；Ann 2026-11-22 两张截图实证）。改成窗口视图
-    // 上的悬浮层：约束对着栏的中心线定位，栏只剩背景和拖动。
+    // 变药丸）、整组偏下约 4 点。改成窗口视图上的悬浮层：约束
+    // 对着栏的中心线定位，栏只剩背景和拖动。
     UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 36)];
     self.lightsView = lightsView;
-    UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] symbol:@"xmark" action:@selector(closeWindow)];
+    UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] action:@selector(closeWindow)];
     closeButton.frame = CGRectMake(0, 0, 26, 36);
     [lightsView addSubview:closeButton];
-    UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] symbol:@"minus" action:@selector(minimizeWindow)];
+    UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] action:@selector(minimizeWindow)];
     minimizeButton.frame = CGRectMake(28, 0, 26, 36);
     [lightsView addSubview:minimizeButton];
-    self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] symbol:_isMaximized ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right" action:@selector(maximizeWindow)];
+    self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] action:@selector(maximizeWindow)];
     self.maximizeButton.frame = CGRectMake(56, 0, 26, 36);
     [lightsView addSubview:self.maximizeButton];
-    self.maximizeGlyph = (UIImageView *)[self.maximizeButton viewWithTag:7];
 
     // 箭头钮就是演示图那样：圆形描边里一个箭头图标，30×30。
     UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -86,16 +83,17 @@ static const CGFloat LCResizeHandleSize = 44;
     menuButton.showsMenuAsPrimaryAction = YES;
     self.menuButton = menuButton;
 
-    // 悬浮层定位：三钮组左缘离窗边 6（第一个圆点再往里 6，圆点
-    // 左缘正好 12，macOS 的贴边距）；箭头钮右边距 12；两者都对
-    // 着栏的垂直中心，栏在顶部还是底部都跟着栏走。
+    // 悬浮层定位：三钮组左缘离窗边 20（第一个圆点左缘 26 ——
+    // Ann 2026-11-22 晚定：贴 12 太靠左，回到早先那版的距离）；
+    // 箭头钮右边距 12；两者都对着栏的垂直中心，栏在顶部还是
+    // 底部都跟着栏走。
     [self.view addSubview:lightsView];
     [self.view addSubview:menuButton];
     lightsView.translatesAutoresizingMaskIntoConstraints = NO;
     menuButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.menuButtonTrailing = [menuButton.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12];
     [NSLayoutConstraint activateConstraints:@[
-        [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:6],
+        [lightsView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
         [lightsView.centerYAnchor constraintEqualToAnchor:self.navigationBar.centerYAnchor],
         [lightsView.widthAnchor constraintEqualToConstant:82],
         [lightsView.heightAnchor constraintEqualToConstant:36],
@@ -148,14 +146,9 @@ static const CGFloat LCResizeHandleSize = 44;
 }
 
 
-- (UIImage *)trafficLightGlyph:(NSString *)symbolName {
-    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:7.5 weight:UIFontWeightBold];
-    return [[UIImage systemImageNamed:symbolName] imageWithConfiguration:config];
-}
-
-// 一个红绿灯钮：26×36 的点击区里居中放 14 的实心圆，圆里是深色
-// 小字形（tag 7，最大化钮靠它换展开/还原字形）。
-- (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action {
+// 一个红绿灯钮：26×36 的点击区里居中放 14 的实心圆，纯色、
+// 不放符号（Ann 2026-11-22 晚定，跟 macOS 一样）。
+- (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
     UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(6, 11, 14, 14)];
     dot.backgroundColor = color;
@@ -163,12 +156,6 @@ static const CGFloat LCResizeHandleSize = 44;
     dot.layer.borderWidth = 0.5;
     dot.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.15].CGColor;
     dot.userInteractionEnabled = NO;
-    UIImageView *glyph = [[UIImageView alloc] initWithFrame:dot.bounds];
-    glyph.image = [self trafficLightGlyph:symbolName];
-    glyph.tintColor = [UIColor colorWithWhite:0 alpha:0.55];
-    glyph.contentMode = UIViewContentModeCenter;
-    glyph.tag = 7;
-    [dot addSubview:glyph];
     [button addSubview:dot];
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
@@ -398,7 +385,6 @@ static const CGFloat LCResizeHandleSize = 44;
             [self.view layoutIfNeeded];
         } completion:^(BOOL finished) {
             self.isMaximized = NO;
-            self.maximizeGlyph.image = [self trafficLightGlyph:@"arrow.up.left.and.arrow.down.right"];
             [[MultitaskDockManager shared] updateStatusBarFix];
             [self updateCornerHandles];
         }];
@@ -419,7 +405,6 @@ static const CGFloat LCResizeHandleSize = 44;
             
             [self.view layoutIfNeeded];
         } completion:^(BOOL finished) {
-            self.maximizeGlyph.image = [self trafficLightGlyph:@"arrow.down.right.and.arrow.up.left"];
             [[MultitaskDockManager shared] updateStatusBarFix];
             [self updateCornerHandles];
         }];
@@ -716,6 +701,11 @@ static const CGFloat LCResizeHandleSize = 44;
     } else {
         settings.peripheryInsets = UIEdgeInsetsMake(0, safeAreaInsets.left, safeAreaInsets.bottom, safeAreaInsets.right);
         safeAreaInsets.bottom = safeAreaInsets.left = safeAreaInsets.right = 0;
+        // 探针（Ann 2026-11-22 晚）：最大化窗口顶边上移 20 点，
+        // 看状态栏下方那两条淡影线跟不跟着窗口走。跟着走 = 线是
+        // 窗口的；留在原地（屏幕 y≈58）= 线是状态栏那侧的。定性
+        // 后决定去留。
+        safeAreaInsets.top = MAX(0, safeAreaInsets.top - 20);
     }
     
     // scale peripheryInsets to match the scale ratio
