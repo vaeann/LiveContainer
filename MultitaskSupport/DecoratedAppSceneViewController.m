@@ -25,7 +25,8 @@ static const CGFloat LCResizeHandleSize = 44;
 @property(nonatomic) bool isAppTerminationRequested;
 - (UIImage *)trafficLightGlyph:(NSString *)symbolName;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action;
-- (UIMenu *)windowMenu;
+- (NSArray<UIMenuElement *> *)windowMenuElements;
+- (UIImage *)chevronCircleImage;
 - (void)refreshBarButtonItems;
 @end
 
@@ -47,16 +48,17 @@ static const CGFloat LCResizeHandleSize = 44;
     
     // 操作栏（Ann 2026-11-22 定，macOS 风）：左边三个实心红黄绿
     // 圆钮（关 / 最小化 / 最大化），中间不显示 App 名字，右边只
-    // 留一个箭头钮，点开还是原来的 PID 菜单（见 windowMenu）。
-    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 30)];
+    // 留一个箭头钮，点开还是原来的 PID 菜单（见 windowMenuElements）。
+    // 容器和钮都取满栏高 36、圆点居中，保证在栏里垂直居中。
+    UIView *lightsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 82, 36)];
     UIButton *closeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:1.0 green:0.373 blue:0.341 alpha:1.0] symbol:@"xmark" action:@selector(closeWindow)];
-    closeButton.frame = CGRectMake(0, 0, 26, 30);
+    closeButton.frame = CGRectMake(0, 0, 26, 36);
     [lightsView addSubview:closeButton];
     UIButton *minimizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.996 green:0.737 blue:0.180 alpha:1.0] symbol:@"minus" action:@selector(minimizeWindow)];
-    minimizeButton.frame = CGRectMake(28, 0, 26, 30);
+    minimizeButton.frame = CGRectMake(28, 0, 26, 36);
     [lightsView addSubview:minimizeButton];
     self.maximizeButton = [self trafficLightButtonWithColor:[UIColor colorWithRed:0.157 green:0.784 blue:0.251 alpha:1.0] symbol:_isMaximized ? @"arrow.down.right.and.arrow.up.left" : @"arrow.up.left.and.arrow.down.right" action:@selector(maximizeWindow)];
-    self.maximizeButton.frame = CGRectMake(56, 0, 26, 30);
+    self.maximizeButton.frame = CGRectMake(56, 0, 26, 36);
     [lightsView addSubview:self.maximizeButton];
     self.maximizeGlyph = (UIImageView *)[self.maximizeButton viewWithTag:7];
     UIBarButtonItem *lightsItem = [[UIBarButtonItem alloc] initWithCustomView:lightsView];
@@ -69,35 +71,39 @@ static const CGFloat LCResizeHandleSize = 44;
     leftSpacer.width = -10;
     self.navigationItem.leftBarButtonItems = @[leftSpacer, lightsItem];
 
-    UIButton *menuButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    menuButton.frame = CGRectMake(0, 0, 28, 28);
-    menuButton.layer.cornerRadius = 14;
-    menuButton.layer.borderWidth = 1;
-    menuButton.layer.borderColor = UIColor.separatorColor.CGColor;
-    UIImageSymbolConfiguration *chevronConfig = [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIFontWeightSemibold];
-    [menuButton setImage:[[UIImage systemImageNamed:@"chevron.down"] imageWithConfiguration:chevronConfig] forState:UIControlStateNormal];
-    menuButton.tintColor = UIColor.secondaryLabelColor;
+    // 箭头钮用普通图片栏钮（圆圈+箭头画在图里）：自定义 UIButton
+    // 在 iOS 26 的栏里会被套上药丸形底，图片钮不会。
+    UIBarButtonItem *menuItem = [[UIBarButtonItem alloc] initWithImage:[self chevronCircleImage] style:UIBarButtonItemStylePlain target:nil action:nil];
+    menuItem.tintColor = UIColor.secondaryLabelColor;
     __weak typeof(self) weakSelf = self;
     UIDeferredMenuElement *deferredMenu = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^ _Nonnull completion)(NSArray<UIMenuElement *> * _Nonnull)) {
-        completion(weakSelf ? @[[weakSelf windowMenu]] : @[]);
+        completion(weakSelf ? [weakSelf windowMenuElements] : @[]);
     }];
-    menuButton.menu = [UIMenu menuWithChildren:@[deferredMenu]];
-    menuButton.showsMenuAsPrimaryAction = YES;
-    self.menuButtonItem = [[UIBarButtonItem alloc] initWithCustomView:menuButton];
+    menuItem.menu = [UIMenu menuWithChildren:@[deferredMenu]];
+    self.menuButtonItem = menuItem;
     self.menuButtonItem.hidesSharedBackground = YES;
     [self refreshBarButtonItems];
 
     return self;
 }
 
-// 箭头钮的菜单：就是原来点标题弹出的 PID 菜单（标题 = PID，项 =
-// 复制 PID / PiP 开关 / 缩放滑杆）。每次打开时现建，PID 和运行
-// 状态都是最新的（标题菜单的 provider 语义用延迟元素复刻）。
-- (UIMenu *)windowMenu {
+// 箭头钮菜单的元素：就是原来点标题弹出的 PID 菜单的内容（PID
+// 一行 + 复制 PID / PiP 开关 / 缩放滑杆），直接作为菜单元素返回，
+// 不能再包一层 UIMenu——那样点箭头会先弹一个子菜单（Ann
+// 2026-11-22 真机发现）。每次打开时现建，PID 和运行状态都是
+// 最新的（标题菜单的 provider 语义用延迟元素复刻）；PID 行是
+// 禁用态，只展示不可点。
+- (NSArray<UIMenuElement *> *)windowMenuElements {
     if (!self.appSceneVC.isAppRunning) {
-        return [UIMenu menuWithTitle:NSLocalizedString(@"lc.multitaskAppWindow.appTerminated", nil) children:@[]];
+        UIAction *terminated = [UIAction actionWithTitle:NSLocalizedString(@"lc.multitaskAppWindow.appTerminated", nil) image:nil identifier:nil handler:^(UIAction * _Nonnull action) {}];
+        terminated.attributes = UIMenuElementAttributesDisabled;
+        return @[terminated];
     }
+    NSString *pidText = [NSString stringWithFormat:@"PID: %d", self.pid];
+    UIAction *pidHeader = [UIAction actionWithTitle:pidText image:nil identifier:nil handler:^(UIAction * _Nonnull action) {}];
+    pidHeader.attributes = UIMenuElementAttributesDisabled;
     NSArray *menuItems = @[
+        pidHeader,
         [UIAction actionWithTitle:@"lc.multitask.copyPid".loc image:[UIImage systemImageNamed:@"doc.on.doc"] identifier:nil handler:^(UIAction * _Nonnull action) {
             UIPasteboard.generalPasteboard.string = @(self.appSceneVC.pid).stringValue;
         }],
@@ -112,8 +118,29 @@ static const CGFloat LCResizeHandleSize = 44;
             return [self scaleSliderViewWithTitle:@"lc.multitask.scale".loc min:0.5 max:2.0 value:self.scaleRatio stepInterval:0.01];
         }]
     ];
-    NSString *pidText = [NSString stringWithFormat:@"PID: %d", self.pid];
-    return [UIMenu menuWithTitle:pidText children:menuItems];
+    return menuItems;
+}
+
+// 圆形箭头图：26×26，圆圈描边 + 向下箭头，模板渲染（颜色随
+// tintColor）。画成图片而不是用视图拼，就是为了避开系统给栏里
+// 按钮套的药丸形底。
+- (UIImage *)chevronCircleImage {
+    CGFloat size = 26;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
+    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+        CGContextRef cg = context.CGContext;
+        CGContextSetStrokeColorWithColor(cg, UIColor.blackColor.CGColor);
+        CGContextSetLineWidth(cg, 1.5);
+        CGContextStrokeEllipseInRect(cg, CGRectInset(CGRectMake(0, 0, size, size), 1, 1));
+        CGContextBeginPath(cg);
+        CGContextMoveToPoint(cg, 9, 11);
+        CGContextAddLineToPoint(cg, 13, 15.5);
+        CGContextAddLineToPoint(cg, 17, 11);
+        CGContextSetLineCap(cg, kCGLineCapRound);
+        CGContextSetLineJoin(cg, kCGLineJoinRound);
+        CGContextStrokePath(cg);
+    }];
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
 - (UIImage *)trafficLightGlyph:(NSString *)symbolName {
@@ -121,11 +148,11 @@ static const CGFloat LCResizeHandleSize = 44;
     return [[UIImage systemImageNamed:symbolName] imageWithConfiguration:config];
 }
 
-// 一个红绿灯钮：26×30 的点击区里居中放 14 的实心圆，圆里是深色
+// 一个红绿灯钮：26×36 的点击区里居中放 14 的实心圆，圆里是深色
 // 小字形（tag 7，最大化钮靠它换展开/还原字形）。
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color symbol:(NSString *)symbolName action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(6, 8, 14, 14)];
+    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(6, 11, 14, 14)];
     dot.backgroundColor = color;
     dot.layer.cornerRadius = 7;
     dot.layer.borderWidth = 0.5;
@@ -188,8 +215,10 @@ static const CGFloat LCResizeHandleSize = 44;
     self.view.axis = UILayoutConstraintAxisVertical;
     self.view.backgroundColor = UIColor.systemBackgroundColor;
     // 窗口圆角 16（原 10）：操作栏贴在窗口顶部、左右两角跟着
-    // 窗口一起圆（masksToBounds 裁切），和新栏更协调。
-    self.view.layer.cornerRadius = 16;
+    // 窗口一起圆（masksToBounds 裁切），和新栏更协调。最大化时
+    // 圆角归零：圆角会在屏幕顶边左右各留一块黑三角，看着像黑线
+    // （Ann 2026-11-22 真机发现），归零后和屏幕无缝衔接。
+    self.view.layer.cornerRadius = _isMaximized ? 0 : 16;
     self.view.layer.masksToBounds = YES;
 
     self.navigationBar = navigationBar;
@@ -360,6 +389,7 @@ static const CGFloat LCResizeHandleSize = 44;
         [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
             self.view.frame = newFrame;
             self.view.layer.borderWidth = 1;
+            self.view.layer.cornerRadius = 16;
             self.resizeHandle.alpha = 1;
             
             [self.appSceneVC updateSettingsWithBlock:updateSettingsBlock];
@@ -381,6 +411,7 @@ static const CGFloat LCResizeHandleSize = 44;
             [self updateVerticalConstraints];
             
             self.view.layer.borderWidth = 0;
+            self.view.layer.cornerRadius = 0;
             self.resizeHandle.alpha = 0;
             
             [self.appSceneVC updateSettingsWithBlock:updateSettingsBlock];
