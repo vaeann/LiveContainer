@@ -177,17 +177,18 @@ class AppInfoProvider {
 
     @objc public var windowHostingView = VirtualWindowsHostView()
 
-    /// Tap-outside scrim （挡板）: while the dock is expanded, a clear
-    /// view sits in the key window above the app windows and below
-    /// the dock, so the first tap outside the dock lands on it and
-    /// collapses the dock instead of reaching the guest app. Pure
-    /// host-side hit-testing — the old cross-process design (guest
-    /// sendEvent hook + App-Group state publishing + Darwin signal)
-    /// is gone for good: the bisect proved it kills background
-    /// keep-alive, and host event-stream interception never sees
-    /// guest touches at all (backboardd routes them to the guest
-    /// process). Synced from updateDockFrame and hideDock.
-    private var tapOutsideScrim: UIView?
+    /// Tap-outside scrim （挡板）, second placement: the scrim lives
+    /// inside each visible guest window's container (DecoratedApp-
+    /// SceneViewController), above the scene and below the window bar
+    /// and resize handle — the one spot proven to receive touches
+    /// over a scene (the window bar does). The first attempt put the
+    /// scrim in the key window above the app windows; on device the
+    /// scene's remote layer still claimed those touches, so it never
+    /// fired. Still pure host-side hit-testing: no cross-process
+    /// machinery, no sendEvent hooks (both bisect-proven dead ends).
+    /// Synced from updateDockFrame and hideDock; the per-window
+    /// scrim is tinted faint red in this test build so its coverage
+    /// is visible, and becomes clear once the placement is verified.
     internal var hostingController: UIHostingController<AnyView>?
 
     public struct Constants {
@@ -407,31 +408,15 @@ class AppInfoProvider {
         syncTapOutsideScrim()
     }
 
-    /// Keep the tap-outside scrim in step with the dock: present only
-    /// while the dock is visible, expanded and not hidden to the side.
+    /// Keep the tap-outside scrim in step with the dock: present on
+    /// every visible guest window only while the dock is visible,
+    /// expanded and not hidden to the side.
     private func syncTapOutsideScrim() {
         let shouldShow = isVisible && !isCollapsed && !isDockHidden
-        if shouldShow {
-            guard tapOutsideScrim == nil,
-                  let hostingView = hostingController?.view,
-                  let window = hostingView.superview else { return }
-            let scrim = UIView(frame: window.bounds)
-            scrim.backgroundColor = .clear
-            scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTapOutsideScrim)))
-            window.insertSubview(scrim, belowSubview: hostingView)
-            tapOutsideScrim = scrim
-        } else {
-            tapOutsideScrim?.removeFromSuperview()
-            tapOutsideScrim = nil
-        }
-    }
-
-    @objc private func handleTapOutsideScrim() {
-        // The tap is consumed by the scrim (the guest app never sees
-        // it); all it does is collapse the dock.
-        if !isCollapsed {
-            toggleDockCollapse()
+        for app in apps {
+            guard let view = app.view, !view.isHidden, view.alpha >= 0.1,
+                  let vc = view._viewDelegate() as? DecoratedAppSceneViewController else { continue }
+            vc.setTapOutsideScrimVisible(shouldShow)
         }
     }
 

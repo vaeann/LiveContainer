@@ -425,6 +425,37 @@
     [self findAndAdjustButtonBarStackView:self.navigationBar withSpacing:spacing rightMargin:margin];
 }
 
+- (void)setTapOutsideScrimVisible:(BOOL)visible {
+    if (visible) {
+        if (self.tapOutsideScrim || !self.navigationBar) return;
+        UIView *scrim = [[UIView alloc] initWithFrame:self.view.bounds];
+        scrim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        // TEST TINT: faint red so the scrim's coverage is visible on
+        // device. If this placement works, the tint goes away and the
+        // scrim becomes clear.
+        scrim.backgroundColor = [[UIColor redColor] colorWithAlphaComponent:0.12];
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapOutsideScrimTapped)];
+        [scrim addGestureRecognizer:tap];
+        // Insert above the scene view and its content container, below
+        // the window bar and the resize handle (both direct subviews
+        // of self.view and both must stay interactive).
+        NSInteger barIndex = [self.view.subviews indexOfObject:self.navigationBar];
+        NSInteger handleIndex = self.resizeHandle ? [self.view.subviews indexOfObject:self.resizeHandle] : NSNotFound;
+        NSInteger targetIndex = (handleIndex == NSNotFound) ? barIndex : MIN(barIndex, handleIndex);
+        [self.view insertSubview:scrim atIndex:targetIndex];
+        self.tapOutsideScrim = scrim;
+    } else {
+        [self.tapOutsideScrim removeFromSuperview];
+        self.tapOutsideScrim = nil;
+    }
+}
+
+- (void)tapOutsideScrimTapped {
+    // The tap is consumed by the scrim (the guest app never sees it);
+    // all it does is collapse the dock.
+    [[MultitaskDockManager shared] toggleDockCollapse];
+}
+
 - (void)findAndAdjustButtonBarStackView:(UIView *)view withSpacing:(CGFloat)spacing rightMargin:(CGFloat)margin {
     for (UIView *subview in view.subviews) {
         if ([subview isKindOfClass:NSClassFromString(@"_UIButtonBarStackView")]) {
