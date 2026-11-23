@@ -1079,6 +1079,30 @@ public struct MultitaskDockSwiftView: View {
         let extraPadding = (dockManager.dockWidth - MultitaskDockManager.Constants.defaultDockWidth) * 0.2
         return max(basePadding, basePadding + extraPadding)
     }
+
+    /// How one expanded-dock element (icon, cycle button) comes
+    /// and goes when the dock expands or collapses: in with a
+    /// fade and a slight grow, out with a plain fade. Together
+    /// with the capsule clip on the dock body this turns the old
+    /// pop-in swap into a reveal (Ann 2026-11-23: the expand
+    /// animation felt disjointed — icons appeared instantly at
+    /// their final spots and poked outside the pill while its
+    /// frame was still growing).
+    private var dockElementTransition: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.85)),
+            removal: .opacity)
+    }
+
+    /// Stagger delay for one expanded-dock element. The pill
+    /// grows from its center (the orb's seat), so elements
+    /// cascade outward from the middle of the stack: the delay
+    /// grows with the distance from the center element. Only
+    /// applied while expanding (see the call sites).
+    private func staggerDelay(for index: Int, total: Int) -> Double {
+        let center = Double(total - 1) / 2
+        return abs(Double(index) - center) * 0.04
+    }
     
     public var body: some View {
         GeometryReader { g in
@@ -1098,6 +1122,7 @@ public struct MultitaskDockSwiftView: View {
                     // the target is visible. The long press's flag
                     // keeps its release from also firing the tap.
                     CollapsedDockView()
+                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
                         .onTapGesture {
                             if collapsedLongPressTriggered {
                                 collapsedLongPressTriggered = false
@@ -1116,8 +1141,10 @@ public struct MultitaskDockSwiftView: View {
                         )
                 } else {
                     VStack(spacing: 8) {
-                        ForEach(dockManager.apps) { app in
-                            AppIconView(app: app)
+                        ForEach(Array(dockManager.apps.enumerated()), id: \.element.id) { pair in
+                            AppIconView(app: pair.element)
+                                .transition(dockElementTransition)
+                                .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping).delay(dockManager.isCollapsed ? 0 : staggerDelay(for: pair.offset, total: dockManager.apps.count + 1)), value: dockManager.isCollapsed)
                         }
 
                         // Cycle button: tap flips to the next app in
@@ -1142,6 +1169,8 @@ public struct MultitaskDockSwiftView: View {
                                         showCloseAllConfirm = true
                                     }
                             )
+                            .transition(dockElementTransition)
+                            .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping).delay(dockManager.isCollapsed ? 0 : staggerDelay(for: dockManager.apps.count, total: dockManager.apps.count + 1)), value: dockManager.isCollapsed)
 
                     }
                 }
@@ -1175,6 +1204,11 @@ public struct MultitaskDockSwiftView: View {
                     )
                 }
             }
+            // Clip everything to the pill: while the frame grows
+            // or shrinks, elements are only visible inside the
+            // capsule, so the expansion reads as a reveal instead
+            // of icons poking out of the glass (Ann 2026-11-23).
+            .clipShape(Capsule())
             .scaleEffect(dockManager.isVisible ? 1.0 : 0.8)
             // Collapsed button: 60% opacity, dimming to 20% after 3s
             // idle. Expanded dock: fully opaque. Hidden to the side:
@@ -1183,7 +1217,11 @@ public struct MultitaskDockSwiftView: View {
             .opacity(dockManager.isDockHidden ? (hideCollapsedDock && dockManager.isCollapsed ? 0.01 : 0.4) : (dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0))
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockHidden)
-            .animation(.easeInOut(duration: 0.35), value: dockManager.isCollapsed)
+            // The padding rides the same spring as the rest of
+            // the collapse change — it used to ease on its own
+            // 0.35 s curve, a third clock next to the UIKit frame
+            // spring and the layout spring (Ann 2026-11-23).
+            .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.isCollapsed)
             .offset(dragOffset)
             .position(x: g.size.width / 2, y: g.size.height / 2)
         }
