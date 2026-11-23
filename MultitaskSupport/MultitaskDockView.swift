@@ -1204,6 +1204,18 @@ public struct MultitaskDockSwiftView: View {
                         )
                         .offset(y: morphOffset(for: dockManager.apps.count, total: dockManager.apps.count + 1))
                 }
+                // The stack must not size the dock while it is
+                // collapsed: the glass hugs the container, so a
+                // full-height stack in the tree stretched the
+                // orb into a pill (Ann 2026-11-24, first jelly
+                // build). Its layout height rides the morph —
+                // zero at the orb (the glyph alone sizes the
+                // container, exactly the pre-morph geometry),
+                // full at the capsule — while the icons
+                // themselves overflow the small layout frame on
+                // their offsets and are revealed by the capsule
+                // clip as it grows.
+                .frame(height: (CGFloat(dockManager.apps.count + 1) * dockManager.adaptiveIconSize + CGFloat(dockManager.apps.count) * 8) * morphProgress)
                 .opacity(Double(min(1, morphProgress * 2.2)))
                 .allowsHitTesting(!dockManager.isCollapsed)
 
