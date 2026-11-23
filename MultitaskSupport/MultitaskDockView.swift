@@ -773,8 +773,11 @@ class AppInfoProvider {
         }
     }
     
-    // Find and bring corresponding multitask view to front
-    func bringMultitaskViewToFront(uuid: String, from center: CGPoint? = nil) -> Bool {
+    // Find and bring corresponding multitask view to front. When the
+    // caller knows which icon was tapped (dock icon, grid cell, banner),
+    // it passes that icon's frame in window coordinates and the window
+    // grows out of it, iOS-style (Ann 2026-11-23).
+    func bringMultitaskViewToFront(uuid: String, from sourceRect: CGRect? = nil) -> Bool {
         noteDockInteraction()
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             return false
@@ -783,7 +786,7 @@ class AppInfoProvider {
         for window in windowScene.windows {
             if let targetView = findMultitaskView(in: window, withUUID: uuid) {
                 passURLSchemeToView(targetView)
-                animateViewAppearance(targetView, from: center, in: window)
+                animateViewAppearance(targetView, from: sourceRect, in: window)
                 updateStatusBarFix()
                 return true
             }
@@ -801,7 +804,7 @@ class AppInfoProvider {
         }
     }
 
-    private func animateViewAppearance(_ view: UIView, from center: CGPoint?, in window: UIWindow) {
+    private func animateViewAppearance(_ view: UIView, from sourceRect: CGRect?, in window: UIWindow) {
         let isHidden = view.isHidden || view.alpha < 0.1
         let decoratedVC = view._viewDelegate() as? DecoratedAppSceneViewController
         let isMaximized = decoratedVC?.isMaximized ?? false
@@ -816,28 +819,42 @@ class AppInfoProvider {
             view.isHidden = true
             view.transform = .identity
             let origFrame = view.frame
+            let origCornerRadius = view.layer.cornerRadius
             let pipManager = PiPManager.shared!
+            // iOS 式入场（Ann 2026-11-23 定）：调用方带了被点图标的
+            // 方框时，窗口就从那个方框长出来——起点的位置和大小与
+            // 图标一致、圆角先取图标圆角，弹簧放大到最终帧的同时
+            // 把圆角收回窗口自己的。没有方框的调用（循环切换、模
+            // 型层）沿用原来的方块入场。
+            var zoomsFromIcon = false
             if let decoratedVC = view._viewDelegate(), pipManager.isPiP(withDecoratedVC: decoratedVC) {
                 pipManager.stopPiP()
+            } else if let sourceRect, let superview = view.superview {
+                zoomsFromIcon = true
+                let startRect = superview.convert(sourceRect, from: window)
+                view.frame = startRect
+                view.layer.cornerRadius = startRect.height * 0.22
+                view.alpha = 1.0
+                view.isHidden = false
             } else {
                 view.transform = CGAffineTransform(scaleX: 0.1, y: 0.1)
                 view.isHidden = false
                 let smaller = min(view.frame.size.width, view.frame.size.height)
                 view.frame.size = CGSize(width: smaller, height: smaller)
-                if let center { view.center = center }
             }
             
             self.bringViewToFront(view, in: window)
             UIView.animate(
-                withDuration: Constants.standardAnimationDuration,
+                withDuration: zoomsFromIcon ? 0.45 : Constants.standardAnimationDuration,
                 delay: 0,
-                usingSpringWithDamping: 1.0,
+                usingSpringWithDamping: zoomsFromIcon ? 0.85 : 1.0,
                 initialSpringVelocity: 0,
                 options: .curveEaseInOut,
                 animations: {
                     view.alpha = 1.0
                     view.transform = .identity
                     view.frame = origFrame
+                    view.layer.cornerRadius = origCornerRadius
                 }
             )
         } else {
@@ -1401,7 +1418,7 @@ struct AppIconView: View {
                         isPressed = inside
                     }
                 },
-                onEnded: { inside, center, movedDistance in
+                onEnded: { inside, iconRect, movedDistance in
                     isPressed = false
                     // A long-press already closed this app; the
                     // release must not also bring it to the front.
@@ -1425,7 +1442,7 @@ struct AppIconView: View {
                         handleFrontAppTap()
                         return
                     }
-                    let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: center)
+                    let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: iconRect)
                     // Switching to an app finishes the dock's job:
                     // collapse it (Ann's 保底 collapse — covers the
                     // case where tap-outside never fires). The cycle
@@ -1540,7 +1557,7 @@ struct AppIconView: View {
 private final class DockIconTouchView: UIView {
     var onBegan: (() -> Void)?
     var onMoved: ((Bool) -> Void)?
-    var onEnded: ((Bool, CGPoint, CGFloat) -> Void)?
+    var onEnded: ((Bool, CGRect, CGFloat) -> Void)?
     var onCancelled: (() -> Void)?
     private var startLocation: CGPoint = .zero
 
@@ -1563,11 +1580,11 @@ private final class DockIconTouchView: UIView {
         if let touch = touches.first {
             let location = touch.location(in: self)
             let inside = bounds.contains(location)
-            // The switch animation grows from the icon's center, in
-            // window coordinates.
-            let center = convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            // The switch animation grows out of the icon's own rect,
+            // in window coordinates.
+            let iconRect = convert(bounds, to: nil)
             let moved = hypot(location.x - startLocation.x, location.y - startLocation.y)
-            onEnded?(inside, center, moved)
+            onEnded?(inside, iconRect, moved)
         }
         super.touchesEnded(touches, with: event)
     }
@@ -1581,7 +1598,7 @@ private final class DockIconTouchView: UIView {
 private struct DockIconTouchObserver: UIViewRepresentable {
     var onBegan: () -> Void
     var onMoved: (Bool) -> Void
-    var onEnded: (Bool, CGPoint, CGFloat) -> Void
+    var onEnded: (Bool, CGRect, CGFloat) -> Void
     var onCancelled: () -> Void
 
     func makeUIView(context: Context) -> DockIconTouchView {

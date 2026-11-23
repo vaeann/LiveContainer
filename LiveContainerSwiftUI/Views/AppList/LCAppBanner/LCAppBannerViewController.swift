@@ -137,7 +137,7 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
                 found = MultitaskWindowManager.openExistingAppWindow(dataUUID: currentDataFolder)
             }
             if !found {
-                found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: currentDataFolder)
+                found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: currentDataFolder, from: bannerView.iconFrameInWindow)
             }
             if found {
                 return

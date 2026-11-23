@@ -628,7 +628,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     var gridActions: LCAppGridActions {
         LCAppGridActions(
-            onLaunch: { app in gridLaunchApp(app) },
+            onLaunch: { app, iconRect in gridLaunchApp(app, from: iconRect) },
             onLaunchMultitaskToggle: { app in gridLaunchApp(app, multitask: !(app.shouldLaunchInMultitaskMode)) },
             onOpenSettings: { app in
                 openNavigationView(view: AnyView(LCAppSettingsView(model: app)))
@@ -647,7 +647,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         )
     }
 
-    func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil) {
+    func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil, from iconRect: CGRect? = nil) {
         // Already running: bring it to the front, exactly like the banner's run button.
         if multitask == nil, #available(iOS 16.0, *),
            let folderName = app.uiSelectedContainer?.folderName,
@@ -657,7 +657,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 found = MultitaskWindowManager.openExistingAppWindow(dataUUID: folderName)
             }
             if !found {
-                found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: folderName)
+                found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: folderName, from: iconRect)
             }
             if found {
                 return

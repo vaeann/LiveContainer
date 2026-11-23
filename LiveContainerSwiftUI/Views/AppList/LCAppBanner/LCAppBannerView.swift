@@ -29,6 +29,13 @@ final class LCAppBannerRootView: UIView {
         CGSize(width: UIView.noIntrinsicMetric, height: Self.bannerHeight)
     }
 
+    /// 图标在窗口坐标系里的方框：点运行把已在运行的 App 切回前
+    /// 台时，窗口从这个方框长出来（iOS 式入场，Ann 2026-11-23 定）。
+    var iconFrameInWindow: CGRect? {
+        guard let window else { return nil }
+        return iconImageView.convert(iconImageView.bounds, to: window)
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupView()

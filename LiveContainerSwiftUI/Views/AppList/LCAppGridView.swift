@@ -12,7 +12,9 @@ import SwiftUI
 import UIKit
 
 struct LCAppGridActions {
-    let onLaunch: (LCAppModel) -> Void
+    // The rect is the tapped cell icon's frame in window coordinates:
+    // a running app's window grows out of it (iOS-style entrance).
+    let onLaunch: (LCAppModel, CGRect?) -> Void
     let onLaunchMultitaskToggle: (LCAppModel) -> Void
     let onOpenSettings: (LCAppModel) -> Void
     let onOpenDataFolder: (LCAppModel) -> Void
@@ -23,6 +25,13 @@ struct LCAppGridActions {
     let onError: (String) -> Void
     let isRunning: (LCAppModel) -> Bool
     let onCloseRunning: (LCAppModel) -> Void
+}
+
+private struct LCGridIconFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
 }
 
 struct LCAppGridView: View {
@@ -207,6 +216,9 @@ private struct LCAppGridCell: View {
     let actions: LCAppGridActions
     let onUninstall: () -> Void
     @State private var isPressed = false
+    // This cell's icon frame in window coordinates, kept current by
+    // the preference reporter on the icon below (scrolling included).
+    @State private var iconFrame: CGRect = .zero
 
     // Close-badge diameter, scaled with the icon (0.4x, clamped).
     private var badgeSize: CGFloat {
@@ -237,6 +249,15 @@ private struct LCAppGridCell: View {
                                         badgeExclusion: actions.isRunning(app) ? badgeSize : 0)
                 }
                 .frame(width: iconSize, height: iconSize)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: LCGridIconFrameKey.self,
+                            value: geo.frame(in: .global)
+                        )
+                    }
+                )
+                .onPreferenceChange(LCGridIconFrameKey.self) { iconFrame = $0 }
                 // Feedback identical to the iOS home screen (and to
                 // the list banner's icon): no shrink, no animation —
                 // the icon just dims to 0.7 the moment it is pressed
@@ -287,7 +308,7 @@ private struct LCAppGridCell: View {
                 }
                 .exclusively(before: TapGesture(count: 1)
                     .onEnded {
-                        actions.onLaunch(app)
+                        actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
                     })
         )
         .contextMenu {
