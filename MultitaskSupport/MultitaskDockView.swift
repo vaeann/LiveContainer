@@ -159,6 +159,10 @@ class AppInfoProvider {
     /// updateStatusBarFix(), which already runs on every front-app
     /// change.
     @Published var frontAppUUID: String?
+    /// The app that was in front before the current one — or the
+    /// last one before everything went home: the collapsed orb's
+    /// long press jumps back to it (Ann 2026-11-23).
+    var previousAppUUID: String?
 
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
@@ -299,7 +303,7 @@ class AppInfoProvider {
     }
 
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
-        // Expanded dock contents: the app icons and the cycle button
+        // Expanded dock contents: the app icons and the home button
         // at the bottom — (apps.count + 1) items, apps.count gaps
         // between them, and one button-height allowance. (The
         // collapse button that used to sit on top is gone: tapping
@@ -926,7 +930,8 @@ class AppInfoProvider {
     /// The dock's home rect in window coordinates: where a
     /// minimizing window flies to (Ann 2026-11-23: the exit mirrors
     /// the iOS-style entrance and shrinks into the dock), and where
-    /// a window switched to via the cycle button grows out of.
+    /// a window with no icon source — a previous-app jump, a
+    /// model-level launch — grows out of.
     /// Collapsed, the dock's frame IS the orb's frame. Expanded, aim
     /// at the square at the capsule's center — where the orb sits
     /// when collapsed. Zero when the dock isn't up, so minimize
@@ -1011,6 +1016,13 @@ class AppInfoProvider {
             }
         }
         if frontAppUUID != frontUUID {
+            // Any departure from an app records it as the
+            // previous one: app -> app keeps the one we left,
+            // app -> home keeps the last app, so the orb's long
+            // press can also resume it from the home screen.
+            if let old = frontAppUUID {
+                previousAppUUID = old
+            }
             frontAppUUID = frontUUID
         }
         if hide != statusBarFixApplied,
@@ -1019,22 +1031,21 @@ class AppInfoProvider {
         }
     }
 
-    /// Cycle button: bring the next app in dock order to the front,
-    /// keeping the dock expanded so it can be tapped repeatedly to flip
-    /// through apps. With fewer than two apps there is nothing to cycle
-    /// to — a warning haptic says so instead.
-    @objc public func cycleToNextApp() {
+    /// Orb long press: jump straight back to the previous app —
+    /// the two-app bounce (chat <-> browser) without opening the
+    /// dock (Ann 2026-11-23; going home moved to the expanded
+    /// dock's home button the same evening, and the cycle button
+    /// this method used to serve is gone — blind flipping made
+    /// no sense once every icon is visible). Grows out of the
+    /// dock like every other switch. Returns whether there was
+    /// somewhere to go, so the caller can skip its haptic when
+    /// there was not.
+    @discardableResult
+    @objc public func switchToPreviousApp() -> Bool {
         noteDockInteraction()
-        guard apps.count > 1 else {
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            return
-        }
-        let nextIndex = ((frontAppIndex() ?? -1) + 1) % apps.count
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        // Grow out of the dock itself, like every other switch: the
-        // old no-source entrance squashed the window into a square,
-        // the awkward scaling Ann flagged (2026-11-23).
-        _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID, from: dockHomeRect())
+        guard let prev = previousAppUUID, prev != frontAppUUID,
+              apps.contains(where: { $0.appUUID == prev }) else { return false }
+        return bringMultitaskViewToFront(uuid: prev, from: dockHomeRect())
     }
 
     /// Toggle a window between maximized and windowed, through the
@@ -1068,7 +1079,7 @@ public struct MultitaskDockSwiftView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
     @State private var dragOffset = CGSize.zero
     @State private var isMoving: Bool = false
-    @State private var cycleLongPressTriggered = false
+    @State private var homeLongPressTriggered = false
     @State private var collapsedLongPressTriggered = false
     @AppStorage("LCHideCollapsedDock", store: LCUtils.appGroupUserDefault) var hideCollapsedDock: Bool = false
     @State private var showCloseAllConfirm = false
@@ -1080,7 +1091,7 @@ public struct MultitaskDockSwiftView: View {
         return max(basePadding, basePadding + extraPadding)
     }
 
-    /// How one expanded-dock element (icon, cycle button) comes
+    /// How one expanded-dock element (icon, home button) comes
     /// and goes when the dock expands or collapses: in with a
     /// fade and a slight grow, out with a plain fade. Together
     /// with the capsule clip on the dock body this turns the old
@@ -1114,12 +1125,14 @@ public struct MultitaskDockSwiftView: View {
                     // heaviest thing): single tap expands — the
                     // most-used, zero-risk action, and instant now
                     // that no double tap has to be waited out; long
-                    // press goes home (minimize all windows) — the
-                    // heavy gesture for the heavy action, matching
-                    // the expanded dock, where long presses close
-                    // apps. Double tap (blind cycling) is gone:
-                    // switching happens in the expanded dock, where
-                    // the target is visible. The long press's flag
+                    // press jumps back to the previous app — the
+                    // one quick switch worth doing blind, because
+                    // where "back" lands is predictable (it briefly
+                    // went home instead, until the expanded dock
+                    // got its own home button the same evening).
+                    // Double tap (blind cycling) is gone: switching
+                    // happens in the expanded dock, where the
+                    // target is visible. The long press's flag
                     // keeps its release from also firing the tap.
                     CollapsedDockView()
                         .transition(.opacity.combined(with: .scale(scale: 0.7)))
@@ -1135,8 +1148,9 @@ public struct MultitaskDockSwiftView: View {
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
                                     collapsedLongPressTriggered = true
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    dockManager.minimizeAllWindows()
+                                    if dockManager.switchToPreviousApp() {
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    }
                                 }
                         )
                 } else {
@@ -1147,24 +1161,31 @@ public struct MultitaskDockSwiftView: View {
                                 .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping).delay(dockManager.isCollapsed ? 0 : staggerDelay(for: pair.offset, total: dockManager.apps.count + 1)), value: dockManager.isCollapsed)
                         }
 
-                        // Cycle button: tap flips to the next app in
-                        // dock order without collapsing; long-press
-                        // asks to close every app instead (with a
+                        // Home button (Ann 2026-11-23, replacing
+                        // the cycle button — with every icon
+                        // visible, blind flipping was dead weight):
+                        // tap goes home (minimize every window and
+                        // collapse the dock); long-press asks to
+                        // close every app instead (with a
                         // confirmation, like Weizhu's close-all).
-                        CycleButtonView()
+                        HomeButtonView()
                             .onTapGesture {
                                 // A long-press already fired; the
-                                // release must not also cycle.
-                                if cycleLongPressTriggered {
-                                    cycleLongPressTriggered = false
+                                // release must not also go home.
+                                if homeLongPressTriggered {
+                                    homeLongPressTriggered = false
                                     return
                                 }
-                                dockManager.cycleToNextApp()
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                dockManager.minimizeAllWindows()
+                                if !dockManager.isCollapsed {
+                                    dockManager.toggleDockCollapse()
+                                }
                             }
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.5)
                                     .onEnded { _ in
-                                        cycleLongPressTriggered = true
+                                        homeLongPressTriggered = true
                                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                         showCloseAllConfirm = true
                                     }
@@ -1358,14 +1379,14 @@ struct CollapsedDockView: View {
     }
 }
 
-// MARK: - Cycle Button View
+// MARK: - Home Button View
 @available(iOS 16.0, *)
-struct CycleButtonView: View {
+struct HomeButtonView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
 
     var body: some View {
         ZStack {
-            Image(systemName: "arrow.triangle.2.circlepath")
+            Image(systemName: "house.fill")
                 .foregroundColor(.primary)
                 .font(.system(size: dockManager.adaptiveIconSize * 0.46, weight: .semibold))
         }
