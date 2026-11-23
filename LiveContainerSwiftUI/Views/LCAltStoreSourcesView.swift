@@ -210,6 +210,12 @@ final class AltStoreSourcesViewModel: ObservableObject {
     @Published private(set) var sources: [SourceItem] = []
     @Published var isRefreshingAll = false
     private let defaultsKey = "LCAltStoreSourceURLs"
+    /// Built-in source (Ann's own AltSource collection): seeded into
+    /// the stored list once, so it comes preinstalled on fresh and
+    /// existing installs alike. The seed flag is set when the seed
+    /// runs — if the user later removes the source, it stays removed.
+    private static let builtInSourceURLString = "https://raw.githubusercontent.com/vaeann/AltSource/main/apps-all.json"
+    private static let builtInSourceSeededKey = "LCBuiltInSourceSeededV1"
     /// When the last full refresh ran (any path: initial load, manual,
     /// auto). Persisted so the auto-refresh throttle survives the view
     /// being recreated — see autoRefreshSourcesIfNeeded.
@@ -291,9 +297,20 @@ final class AltStoreSourcesViewModel: ObservableObject {
         }
     }
     
+    private func seedBuiltInSourceIfNeeded(_ stored: [String]) -> [String] {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.builtInSourceSeededKey) else { return stored }
+        defaults.set(true, forKey: Self.builtInSourceSeededKey)
+        guard !stored.contains(Self.builtInSourceURLString) else { return stored }
+        var seeded = stored
+        seeded.insert(Self.builtInSourceURLString, at: 0)
+        defaults.set(seeded, forKey: defaultsKey)
+        return seeded
+    }
+    
     private func loadStoredSources() {
         let defaults = UserDefaults.standard
-        let stored = defaults.array(forKey: defaultsKey) as? [String] ?? []
+        let stored = seedBuiltInSourceIfNeeded(defaults.array(forKey: defaultsKey) as? [String] ?? [])
         let urls = stored.compactMap { URL(string: $0) }
         self.sources = urls.map { SourceItem(url: $0, isLoading: false) }
         for index in sources.indices {
