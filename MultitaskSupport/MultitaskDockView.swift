@@ -1396,8 +1396,9 @@ struct AppIconView: View {
     let app: DockAppModel
     @State private var isPressed = false
     @State private var closeTriggered = false
-    /// 待执行的「点自己收坞」：给双击留 0.3 秒窗口（见 onEnded）。
-    @State private var pendingSelfTapCollapse: DispatchWorkItem?
+    /// 上次点当前 App 图标的时间：双击切最大化靠它判定（单击
+    /// 不做任何事，见 handleFrontAppTap）。
+    @State private var lastFrontTapTime: Date?
     @State private var appIcon: UIImage?
     @State private var isLoading = true
     @EnvironmentObject var dockManager: MultitaskDockManager
@@ -1447,8 +1448,8 @@ struct AppIconView: View {
                     // switch: re-presenting its scene replays a
                     // bring-to-front animation and shifts the app's
                     // UI down for a moment (Ann 2026-11-22). It has
-                    // its own handling: single tap collapses, double
-                    // tap toggles maximized/windowed.
+                    // its own handling: single tap does nothing,
+                    // double tap toggles maximized/windowed.
                     if app.appUUID == dockManager.frontAppUUID {
                         handleFrontAppTap()
                         return
@@ -1505,23 +1506,21 @@ struct AppIconView: View {
     /// switch on the first tap, which collapses the dock before
     /// any second tap could land.
     private func handleFrontAppTap() {
-        if let pending = pendingSelfTapCollapse {
-            pending.cancel()
-            pendingSelfTapCollapse = nil
+        // 单击当前 App 的图标什么都不做（Ann 2026-11-23 定）：
+        // 收起悬浮坞已经有点外收起承担，不必让单击再背一个——
+        // 之前它背着的时候，点当前图标要等 0.3 秒的双击判定窗
+        // 口才收起，显得肉。双击保留：切最大化/窗口化，然后
+        // 收起坞。
+        let now = Date()
+        if let last = lastFrontTapTime, now.timeIntervalSince(last) < 0.3 {
+            lastFrontTapTime = nil
             dockManager.toggleMaximized(uuid: app.appUUID)
             if !dockManager.isCollapsed {
                 dockManager.toggleDockCollapse()
             }
             return
         }
-        let work = DispatchWorkItem {
-            pendingSelfTapCollapse = nil
-            if !dockManager.isCollapsed {
-                dockManager.toggleDockCollapse()
-            }
-        }
-        pendingSelfTapCollapse = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        lastFrontTapTime = now
     }
 
     private func loadAppIcon() {
