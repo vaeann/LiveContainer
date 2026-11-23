@@ -813,28 +813,31 @@ class AppInfoProvider {
         
         if isHidden {
             view.layer.removeAllAnimations()
+            view.isHidden = true
             view.transform = .identity
             let origFrame = view.frame
             let pipManager = PiPManager.shared!
             if let decoratedVC = view._viewDelegate(), pipManager.isPiP(withDecoratedVC: decoratedVC) {
                 pipManager.stopPiP()
+            } else {
+                view.transform = CGAffineTransform(scaleX: 0.1, y: 0.1)
+                view.isHidden = false
+                let smaller = min(view.frame.size.width, view.frame.size.height)
+                view.frame.size = CGSize(width: smaller, height: smaller)
+                if let center { view.center = center }
             }
-            // 入场只做淡入（Ann 2026-11-23 定）：原来把窗口压成方块
-            // 再弹簧长回来，最大化时方块贴在屏幕顶部，看着像从状态
-            // 栏飞下来。帧和变换直接复位、只有透明度做动画，整个
-            // 窗口（栏、四角把手都在内）作为一个整体淡入，大窗小窗、
-            // 栏开栏关都是同一条路径。
-            view.frame = origFrame
-            view.alpha = 0
-            view.isHidden = false
             
             self.bringViewToFront(view, in: window)
             UIView.animate(
-                withDuration: 0.2,
+                withDuration: Constants.standardAnimationDuration,
                 delay: 0,
-                options: .curveEaseOut,
+                usingSpringWithDamping: 1.0,
+                initialSpringVelocity: 0,
+                options: .curveEaseInOut,
                 animations: {
                     view.alpha = 1.0
+                    view.transform = .identity
+                    view.frame = origFrame
                 }
             )
         } else {
