@@ -7,7 +7,7 @@
 	<key>MusicHapticsSupported</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>LiveNest</string>
+	<string>LiveContainer</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
