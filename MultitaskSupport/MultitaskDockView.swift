@@ -215,7 +215,12 @@ class AppInfoProvider {
         // Extra padding is derived from dockVerticalPadding to match the SwiftUI layout exactly
         
         // MARK: - Ratios & Factors
-        static let iconToWidthRatio: CGFloat = 0.75
+        // 0.68 (Ann 2026-11-23, recalculated): at the old 0.75 the
+        // icons filled the pill — 11.25 pt of side glass at width 90
+        // read as oversized and cramped. 0.68 leaves a side margin of
+        // ~24% of the icon size, ~1.8x the 8 pt inter-icon spacing:
+        // icons 61.2, margins 14.4 at the default width.
+        static let iconToWidthRatio: CGFloat = 0.68
         static let collapsedButtonToWidthRatio: CGFloat = 0.7
         static let maxHeightRatioOfAvailableArea: CGFloat = 0.85
         
@@ -1370,12 +1375,15 @@ struct CollapsedDockView: View {
             // theme text color, like Weizhu's glyphs on glass.
             Image(systemName: "square.grid.2x2.fill")
                 .foregroundStyle(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.5, weight: .bold))
+                // Sized off the dock width, not adaptiveIconSize:
+                // the orb keeps its exact pre-0.68 glyph size
+                // (0.375 x width) — only the expanded icons shrank.
+                .font(.system(size: dockManager.dockWidth * 0.375, weight: .bold))
                 .opacity(breathing ? 1.0 : 0.38)
                 .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true), value: breathing)
                 .onAppear { breathing = true }
         }
-        .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
+        .frame(width: dockManager.dockWidth * 0.75, height: dockManager.dockWidth * 0.75)
         // No tile of its own (Ann 2026-11-22): the glyph sits
         // directly on the dock's glass, like a system toolbar
         // glyph. The glyph is slightly larger than the tiled
@@ -1392,17 +1400,23 @@ struct HomeButtonView: View {
 
     var body: some View {
         ZStack {
+            // A tile like the app icons' (Ann 2026-11-23, reversing
+            // the 2026-11-22 bare-glyph call): the bare glyph filled
+            // under half its slot, so the visible gaps around it
+            // (26 pt above, ~43 below) broke the column's rhythm —
+            // the bottom read as an empty tray holding a small
+            // glyph. Same corner ratio as IconImageView's clip.
+            RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.2667)
+                .fill(Color.primary.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: dockManager.adaptiveIconSize * 0.2667)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                )
             Image(systemName: "house.fill")
                 .foregroundColor(.primary)
-                .font(.system(size: dockManager.adaptiveIconSize * 0.46, weight: .semibold))
+                .font(.system(size: dockManager.adaptiveIconSize * 0.5, weight: .semibold))
         }
         .frame(width: dockManager.adaptiveIconSize, height: dockManager.adaptiveIconSize)
-        // No app-icon-style tile (Ann 2026-11-22): app icons are
-        // content and keep their tiles; this is a control, so its
-        // glyph sits directly on the dock's glass like the
-        // collapsed button's. The shadow keeps the bare glyph
-        // readable over busy content.
-        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 3)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
     }
 }
