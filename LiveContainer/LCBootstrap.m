@@ -690,6 +690,20 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     
     if(isSideStore) {
+        // 内置 SideStore 专属的翻译插件（dompling 的
+        // SideStoreTranslator.dylib，Ann 2026-11-23 集成）：宿主把
+        // 它部署在全局插件目录的 SideStoreTranslator 子文件夹里，
+        // TweakLoader 不会自动加载子文件夹，其他 App 不受影响；
+        // 这里单独载入，只进 SideStore。必须赶在 TweakLoader 之
+        // 前——它的构造器会 unsetenv 掉 LC_GLOBAL_TWEAKS_FOLDER，
+        // 之后就拿不到这个路径了。
+        const char *globalTweaksFolder = getenv("LC_GLOBAL_TWEAKS_FOLDER");
+        if (globalTweaksFolder) {
+            NSString *translatorPath = [[@(globalTweaksFolder) stringByAppendingPathComponent:@"SideStoreTranslator"] stringByAppendingPathComponent:@"SideStoreTranslator.dylib"];
+            if ([NSFileManager.defaultManager fileExistsAtPath:translatorPath]) {
+                dlopen(translatorPath.UTF8String, RTLD_LAZY|RTLD_GLOBAL);
+            }
+        }
         tweakLoaderLoaded = true;
         dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"].UTF8String, RTLD_LAZY|RTLD_GLOBAL);
     }

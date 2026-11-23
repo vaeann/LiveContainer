@@ -72,5 +72,16 @@ find payloadlc/Payload -type d -name "_CodeSignature" -exec rm -r {} +
 
 ldid -S.github/sidelc/LiveWidgetExtension_adhoc.xml ./Payload/LiveContainer.app/PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension
 
+# SideStore translator tweak (dompling/LC-SS-widget-export, pinned
+# release): shipped base64-encoded like CZFKeepAlive -- a loose dylib
+# in the bundle gets its load commands rewritten by install-time
+# re-signing. LC decodes, deploys and signs it at runtime, and
+# LCBootstrap loads it into the bundled SideStore only. Only the
+# +SideStore IPA gets it (the standalone has no SideStore).
+wget https://github.com/dompling/LC-SS-widget-export/releases/download/sidestore-translator-settings-20261116-163605/SideStoreTranslator.dylib
+echo "fb101c56f68be61afeb63d5591552adc9a1e721a9d8d6490199306b5990f290b  SideStoreTranslator.dylib" | shasum -a 256 -c - || exit 1
+base64 -i SideStoreTranslator.dylib -o ./Payload/LiveContainer.app/SideStoreTranslator.dylib.b64
+rm SideStoreTranslator.dylib
+
 # package
 zip -r "$scheme+SideStore.ipa" "Payload" -x "._*" -x ".DS_Store" -x "__MACOSX"

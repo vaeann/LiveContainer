@@ -37,6 +37,10 @@ import Intents
         CZFHostKeepAlive.shared.install()
         CZFHostKeepAlive.syncGuestModule(enabled: UserDefaults.standard.object(forKey: "LCKeepAliveEnabled") as? Bool ?? true)
 
+        // 内置 SideStore 翻译插件的部署（仅二合一包带 base64 资源，
+        // 独立版自动跳过）。
+        LCBundledSideStoreTranslator.sync()
+
         return true
     }
     
