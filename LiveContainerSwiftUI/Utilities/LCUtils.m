@@ -84,7 +84,17 @@
         // Wire PID callback
         launcherView.pidAvailableHandler = completionHandler;
         launcherView.view.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
-        launcherView.view.center = rootVC.view.center;
+        // 最大化窗口不要对齐屏幕中心（根治新开 App 时窗口栏从顶
+        // 部滑下，Ann 2026-11-23 真机截图定位）：最大化窗口的顶
+        // 边要让出安全区，它的中心本来就比屏幕中心偏下 24.5
+        // 点；无条件对齐屏幕中心会把整窗往上顶到圆点压住状态栏
+        // 下沿，紧接着场景激活的设置同步又把帧放回去，这一放带
+        // 着系统场景切换的动画，就成了肉眼可见的滑下。小窗口在
+        // setup 里已经摆在屏幕中心，这行对它是空操作，只给它
+        // 保留。
+        if (!launcherView.isMaximized) {
+            launcherView.view.center = rootVC.view.center;
+        }
     });
 }
 
