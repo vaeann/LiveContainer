@@ -22050,6 +22050,29 @@
         }
       }
     },
+    "lc.settings.dock.gestureGuide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dock gestures: when collapsed, tap to go to the home screen, double-tap to switch to the next app, long-press to expand. When expanded, tap an icon to switch apps (the current app's icon: tap to collapse, double-tap to toggle maximized), long-press an icon to close that app, long-press the cycle button to close all apps. Drag the dock toward the screen edge to hide it; swipe in from the edge to bring it back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷栏手势：收起时点按回主屏幕，双击切换到下一个 App，长按展开；展开后点按图标切换 App（当前 App 的图标点按收起、双击切换最大化），长按图标关闭该 App，长按循环按钮关闭全部 App；将快捷栏拖向屏幕边缘可隐藏，从屏幕边缘向内滑可唤回。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快捷欄手勢：收起時點按回主畫面，雙擊切換到下一個 App，長按展開；展開後點按圖示切換 App（目前 App 的圖示點按收起、雙擊切換最大化），長按圖示關閉該 App，長按循環按鈕關閉全部 App；將快捷欄拖向螢幕邊緣可隱藏，從螢幕邊緣向內滑可喚回。"
+          }
+        }
+      }
+    },
     "lc.settings.dockWidth" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -24698,19 +24721,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hide Shortcut Bar"
+            "value" : "Hide Window Bar"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隐藏快捷栏"
+            "value" : "隐藏操作栏"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隱藏快捷欄"
+            "value" : "隱藏操作欄"
           }
         }
       }
@@ -24721,19 +24744,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Corner gestures: drag top-left to move the window; tap top-right to maximize/restore, long-press to open the menu; tap bottom-left to minimize, long-press to close; drag bottom-right to resize. The corners are hidden while maximized."
+            "value" : "Corner gestures: drag top-left to move the window; tap top-right to maximize, long-press to open the menu; tap bottom-left to minimize, long-press to close; drag bottom-right to resize. The corners are hidden while maximized."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "四角手势：左上拖动移动窗口；右上点按最大化/还原，长按打开菜单；左下点按最小化，长按关闭；右下拖动缩放窗口。最大化时四角手势不显示。"
+            "value" : "四角手势：左上拖动移动窗口；右上点按最大化，长按打开菜单；左下点按最小化，长按关闭；右下拖动缩放窗口。最大化时四角手势不显示。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "四角手勢：左上拖動移動視窗；右上點按最大化/還原，長按開啟選單；左下點按最小化，長按關閉；右下拖動縮放視窗。最大化時四角手勢不顯示。"
+            "value" : "四角手勢：左上拖動移動視窗；右上點按最大化，長按開啟選單；左下點按最小化，長按關閉；右下拖動縮放視窗。最大化時四角手勢不顯示。"
           }
         }
       }

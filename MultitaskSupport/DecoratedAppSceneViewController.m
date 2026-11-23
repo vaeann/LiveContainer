@@ -341,7 +341,7 @@ static const CGFloat LCResizeHandleSize = 44;
     // 坞里——帧飞到坞的方框、圆角收成图标圆角，快到时才淡出。
     // 完成后帧和圆角都复原、只留隐藏状态，切回前台的入场动画
     // 从它期望的状态接管。坞不在时沿用原来的原地缩小。
-    CGRect target = [[MultitaskDockManager shared] minimizeTargetRect];
+    CGRect target = [[MultitaskDockManager shared] dockHomeRect];
     if (CGRectIsEmpty(target) || !self.view.window) {
         [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
             self.view.alpha = 0;
@@ -646,11 +646,11 @@ static const CGFloat LCResizeHandleSize = 44;
 
 // 四角把手（Ann 2026-11-22 定）：形态照抄右下角现有的缩放把手
 // （ResizeHandleView，44×44、半透明白三角），只是功能不同——
-// 左上移动、右上最大化/还原、左下最小化（右下缩放是原有的，
+// 左上移动、右上最大化、左下最小化（右下缩放是原有的，
 // 不归这里管）。2026-11-23 Ann 补：四角原本缺关闭——左下长按
 // 0.5 秒 = 关闭（中震动，和红点一样不确认）；右上长按 = 呼出
-// 箭头钮的菜单（上下文菜单）。仅在「隐藏快捷栏」开启时生效：
-// 快捷栏在时有它的按钮和拖动，不需要四角。ResizeHandleView 的三角长在右下
+// 箭头钮的菜单（上下文菜单）。仅在「隐藏操作栏」开启时生效：
+// 操作栏在时有它的按钮和拖动，不需要四角。ResizeHandleView 的三角长在右下
 // 角（东南），其余三个角靠旋转/翻转把手视图把三角转过去：
 // 左上 = 旋转 180° 到西北；右上 = 垂直翻转 (1,-1) 到东北；
 // 左下 = 水平翻转 (-1,1) 到西南。（右上/左下的翻转曾经写反，
@@ -658,9 +658,12 @@ static const CGFloat LCResizeHandleSize = 44;
 // 注意：三角不能全透明——试过只藏楔形子视图，四角操作全部
 // 失效（Ann 2026-11-22 真机证伪），已恢复上游的半透明楔形。
 // 右上把手的点击：上下文菜单（长按）刚弹过时，这次抬手是长按
-// 的收尾，不算点击最大化。
+// 的收尾，不算点击最大化。这里只做最大化、不做还原（Ann
+// 2026-11-23 定）：最大化后四角把手全部隐藏，这个把手根本点
+// 不到，还原走展开坞里双击当前 App 图标——切换方法留在这里
+// 只会让人以为能点回来。
 - (void)maximizeHandleTapped {
-    if (self.cornerMenuActive) return;
+    if (self.cornerMenuActive || self.isMaximized) return;
     [self maximizeWindow];
 }
 
@@ -710,12 +713,12 @@ static const CGFloat LCResizeHandleSize = 44;
         move.maximumNumberOfTouches = 1;
         [self.moveHandle addGestureRecognizer:move];
         [self.view addSubview:self.moveHandle];
-        // 右上：最大化/还原（点击）
+        // 右上：最大化（点击）
         self.maximizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
         self.maximizeHandle.transform = CGAffineTransformMakeScale(1, -1);
         self.maximizeHandle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
         [self.maximizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(maximizeHandleTapped)]];
-        // 长按呼出箭头钮的菜单（Ann 2026-11-23 定）：隐藏快捷栏时
+        // 长按呼出箭头钮的菜单（Ann 2026-11-23 定）：隐藏操作栏时
         // 没有箭头钮，菜单改走系统上下文菜单，内容用同一个延迟
         // 元素现建，和箭头钮弹出的完全一致。
         [self.maximizeHandle addInteraction:[[UIContextMenuInteraction alloc] initWithDelegate:self]];

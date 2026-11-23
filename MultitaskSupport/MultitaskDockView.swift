@@ -230,8 +230,6 @@ class AppInfoProvider {
 
         static let standardAnimationDuration: TimeInterval = 0.3
         static let longAnimationDuration: TimeInterval = 0.4
-        static let shortAnimationDuration1: TimeInterval = 0.15
-        static let shortAnimationDuration2: TimeInterval = 0.1
         
         static let standardSpringDamping: CGFloat = 0.8
         static let showHideSpringDamping: CGFloat = 0.7
@@ -239,7 +237,6 @@ class AppInfoProvider {
         static let showHideSpringVelocity: CGFloat = 0.5
         
         static let initialScale: CGFloat = 0.8
-        static let bringToFrontScale: CGFloat = 1.02
     }
     
     // Original dock width from user settings (without auto-adjustment)
@@ -858,16 +855,10 @@ class AppInfoProvider {
                 }
             )
         } else {
+            // 已经在台上的窗口切到前台不做任何缩放（Ann 2026-11-23
+            // 定）：原来有个 1.02 倍的放大脉冲，iOS 切换 App 时没
+            // 有这种缩放，看着别扭。直接置前，和系统一致。
             bringViewToFront(view, in: window)
-            
-            UIView.animate(withDuration: Constants.shortAnimationDuration1, animations: {
-                let scale = Constants.bringToFrontScale
-                view.transform = CGAffineTransform(scaleX: scale, y: scale)
-            }) { _ in
-                UIView.animate(withDuration: Constants.shortAnimationDuration2) {
-                    view.transform = .identity
-                }
-            }
         }
     }
 
@@ -923,13 +914,15 @@ class AppInfoProvider {
         }
     }
     
-    /// Where a minimizing window flies to (Ann 2026-11-23: the exit
-    /// mirrors the iOS-style entrance and shrinks into the dock).
+    /// The dock's home rect in window coordinates: where a
+    /// minimizing window flies to (Ann 2026-11-23: the exit mirrors
+    /// the iOS-style entrance and shrinks into the dock), and where
+    /// a window switched to via the cycle button grows out of.
     /// Collapsed, the dock's frame IS the orb's frame. Expanded, aim
     /// at the square at the capsule's center — where the orb sits
-    /// when collapsed. Zero when the dock isn't up, so the caller
+    /// when collapsed. Zero when the dock isn't up, so minimize
     /// falls back to the old shrink-in-place animation.
-    @objc func minimizeTargetRect() -> CGRect {
+    @objc func dockHomeRect() -> CGRect {
         guard isVisible, let dockView = hostingController?.view, keyWindow != nil else {
             return .zero
         }
@@ -1029,7 +1022,10 @@ class AppInfoProvider {
         }
         let nextIndex = ((frontAppIndex() ?? -1) + 1) % apps.count
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID)
+        // Grow out of the dock itself, like every other switch: the
+        // old no-source entrance squashed the window into a square,
+        // the awkward scaling Ann flagged (2026-11-23).
+        _ = bringMultitaskViewToFront(uuid: apps[nextIndex].appUUID, from: dockHomeRect())
     }
 
     /// Toggle a window between maximized and windowed, through the

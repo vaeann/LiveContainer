@@ -90,6 +90,9 @@ struct LCMultitaskSettingView: View {
                     .tint(.accentColor)
                 }
                 .padding(.vertical, 4)
+                Text("lc.settings.dock.gestureGuide".loc)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
                 Toggle(isOn: $hideCollapsedDock) {
                     Text("lc.settings.hideCollapsedDock".loc)
                 }
