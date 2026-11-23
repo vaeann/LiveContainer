@@ -24698,19 +24698,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Hide Window Bar"
+            "value" : "Hide Shortcut Bar"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隐藏操作栏"
+            "value" : "隐藏快捷栏"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "隱藏操作欄"
+            "value" : "隱藏快捷欄"
           }
         }
       }
