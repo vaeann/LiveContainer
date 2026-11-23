@@ -299,7 +299,13 @@ class AppInfoProvider {
     func dockEndExtra(for width: CGFloat) -> CGFloat {
         let iconSize = calculateIconSize(for: width)
         let needed = width / 2 - (width * width - iconSize * iconSize).squareRoot() / 2
-        return max(0, needed - 4) + 2
+        // The +2 is the original snug fit; the extra +7 is
+        // breathing room (Ann 2026-11-23: with the end icons
+        // grazing the arc — a couple of points of glass at their
+        // corners against ~17 at the tip — the pill's ends read
+        // as pointy; more glass around the end icons makes the
+        // caps read round instead).
+        return max(0, needed - 4) + 9
     }
 
     private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
