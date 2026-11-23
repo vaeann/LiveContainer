@@ -252,19 +252,22 @@ class AppInfoProvider {
         static let showAnimationDuration: TimeInterval = 0.22
         static let hideAnimationDuration: TimeInterval = 0.18
 
-        // Collapse/expand morph (Ann 2026-11-24, jelly of the four
-        // demos she was shown): ONE physical spring — response
-        // 0.6, damping 0.60 — drives the UIKit frame, the SwiftUI
-        // morph progress and the root fades, so the orb stretches
-        // into the capsule as a single motion and overshoots a
-        // touch before settling. Before this, the frame ran a
-        // 0.3 s duration spring, the layout a response-0.3 spring
+        // Collapse/expand morph (Ann 2026-11-24): ONE physical
+        // spring drives the UIKit frame, the SwiftUI morph
+        // progress and the root fades, so the orb stretches into
+        // the capsule as a single motion. She first picked the
+        // jelly tuning (response 0.6, damping 0.60) from the
+        // demos, then found it wobbled too much on device and
+        // asked for the calm unified spring instead — response
+        // 0.55, damping 0.86: essentially no overshoot, just a
+        // fluid settle. Before all this, the frame ran a 0.3 s
+        // duration spring, the layout a response-0.3 spring
         // (different curve, same-looking numbers) and each icon
         // had its own delayed pop-in — three clocks, and the
         // expansion read as disjointed no matter how they were
         // tuned.
-        static let morphSpringResponse: Double = 0.6
-        static let morphSpringDamping: Double = 0.60
+        static let morphSpringResponse: Double = 0.55
+        static let morphSpringDamping: Double = 0.86
     }
     
     // Original dock width from user settings (without auto-adjustment)
