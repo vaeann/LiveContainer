@@ -818,17 +818,22 @@ class AppInfoProvider {
             let origFrame = view.frame
             let origCornerRadius = view.layer.cornerRadius
             let pipManager = PiPManager.shared!
-            // iOS 式入场（Ann 2026-11-23 定）：调用方带了被点图标的
-            // 方框时，窗口就从那个方框长出来——起点的位置和大小与
-            // 图标一致、圆角先取图标圆角，弹簧放大到最终帧的同时
-            // 把圆角收回窗口自己的。没有方框的调用（循环切换、模
-            // 型层）沿用原来的方块入场。
-            var zoomsFromIcon = false
+            // iOS 式入场（Ann 2026-11-23 定）：窗口从一个方框里长
+            // 出来——起点的位置和大小与方框一致、圆角先取图标圆
+            // 角，弹簧放大到最终帧的同时把圆角收回窗口自己的。
+            // 方框的来源按顺序：调用方带的被点图标；没带时退到悬
+            // 浮坞的位置（URL 启动、模型层等没有图标可点的路径
+            // ——正在运行的多任务 App 必然在坞里，从坞长出来位置
+            // 上说得通，也免了原版压方块的别扭缩放）；坞不在场时
+            // 才沿用原来的方块入场。
+            let dockRect = dockHomeRect()
+            let effectiveRect = sourceRect ?? (dockRect == .zero ? nil : dockRect)
+            var zoomsFromRect = false
             if let decoratedVC = view._viewDelegate(), pipManager.isPiP(withDecoratedVC: decoratedVC) {
                 pipManager.stopPiP()
-            } else if let sourceRect, let superview = view.superview {
-                zoomsFromIcon = true
-                let startRect = superview.convert(sourceRect, from: window)
+            } else if let effectiveRect, let superview = view.superview {
+                zoomsFromRect = true
+                let startRect = superview.convert(effectiveRect, from: window)
                 view.frame = startRect
                 view.layer.cornerRadius = startRect.height * 0.22
                 view.alpha = 1.0
@@ -842,9 +847,9 @@ class AppInfoProvider {
             
             self.bringViewToFront(view, in: window)
             UIView.animate(
-                withDuration: zoomsFromIcon ? 0.45 : Constants.standardAnimationDuration,
+                withDuration: zoomsFromRect ? 0.45 : Constants.standardAnimationDuration,
                 delay: 0,
-                usingSpringWithDamping: zoomsFromIcon ? 0.85 : 1.0,
+                usingSpringWithDamping: zoomsFromRect ? 0.85 : 1.0,
                 initialSpringVelocity: 0,
                 options: .curveEaseInOut,
                 animations: {
