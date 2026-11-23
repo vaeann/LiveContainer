@@ -248,7 +248,8 @@ static const CGFloat LCResizeHandleSize = 44;
     [self.view insertSubview:_appSceneVC.view atIndex:0];
     _appSceneVC.view.translatesAutoresizingMaskIntoConstraints = NO;
     
-    [self updateVerticalConstraints];
+    // 初始布局不带动画：见 updateVerticalConstraintsAnimated 的注释。
+    [self updateVerticalConstraintsAnimated:NO];
     [NSLayoutConstraint activateConstraints:@[
         [_appSceneVC.view.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_appSceneVC.view.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor]
@@ -709,8 +710,12 @@ static const CGFloat LCResizeHandleSize = 44;
 }
 
 - (void)updateVerticalConstraints {
+    [self updateVerticalConstraintsAnimated:YES];
+}
+
+- (void)updateVerticalConstraintsAnimated:(BOOL)animated {
     [self.view layoutIfNeeded];
-    [UIView animateWithDuration:0.3 animations:^{
+    void (^changes)(void) = ^{
         BOOL bottomWindowBar = [NSUserDefaults.lcSharedDefaults boolForKey:@"LCMultitaskBottomWindowBar"];
         BOOL hideWindowBar = [self shouldHideWindowBar];
         CGFloat navBarHeight = hideWindowBar ? 0 : LCWindowBarHeight;
@@ -746,7 +751,18 @@ static const CGFloat LCResizeHandleSize = 44;
         [NSLayoutConstraint activateConstraints:self.activatedVerticalConstraints];
 
         [self.view layoutIfNeeded];
-    }];
+    };
+    if (animated) {
+        [UIView animateWithDuration:0.3 animations:changes];
+    } else {
+        // 创建窗口时走这里（Ann 2026-11-23）：带动画的话，最大化
+        // 启动时窗口帧会从屏幕顶 y=0 动画到最终位置，整窗连着快
+        // 捷栏从上面滑下来。初始布局直接到位，不做动画。
+        [UIView performWithoutAnimation:^{
+            changes();
+            [self.view layoutIfNeeded];
+        }];
+    }
     [self updateCornerHandles];
 }
 

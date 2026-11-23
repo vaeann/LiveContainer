@@ -23,6 +23,7 @@ API_AVAILABLE(ios(16.0))
 - (void)minimizeWindowPiP;
 - (void)unminimizeWindowPiP;
 - (void)updateVerticalConstraints;
+- (void)updateVerticalConstraintsAnimated:(BOOL)animated;
 
 // Tap-outside scrim （挡板）: a clear (test build: faint red) view over
 // the guest scene, below the window bar and resize handle. While the
