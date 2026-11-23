@@ -1442,18 +1442,22 @@ struct AppIconView: View {
                     // dock, or the touch turned into a dock drag:
                     // cancelled, like a home-screen icon.
                     guard inside, movedDistance < 12 else { return }
-                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                    impactFeedback.impactOccurred()
                     // Tapping the front app's own icon is not a
                     // switch: re-presenting its scene replays a
                     // bring-to-front animation and shifts the app's
                     // UI down for a moment (Ann 2026-11-22). It has
                     // its own handling: single tap does nothing,
-                    // double tap toggles maximized/windowed.
+                    // double tap toggles maximized/windowed. The
+                    // tap haptic lives with the actions themselves:
+                    // it used to fire here for every tap, so the
+                    // front icon buzzed even when nothing happened
+                    // (and twice on a double tap) — Ann noticed
+                    // (2026-11-23). Only a real action buzzes now.
                     if app.appUUID == dockManager.frontAppUUID {
                         handleFrontAppTap()
                         return
                     }
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: iconRect)
                     // Switching to an app finishes the dock's job:
                     // collapse it (Ann's 保底 collapse — covers the
@@ -1514,6 +1518,7 @@ struct AppIconView: View {
         let now = Date()
         if let last = lastFrontTapTime, now.timeIntervalSince(last) < 0.3 {
             lastFrontTapTime = nil
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             dockManager.toggleMaximized(uuid: app.appUUID)
             if !dockManager.isCollapsed {
                 dockManager.toggleDockCollapse()
