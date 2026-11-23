@@ -251,6 +251,20 @@ class AppInfoProvider {
         static let showHideScale: CGFloat = 0.92
         static let showAnimationDuration: TimeInterval = 0.22
         static let hideAnimationDuration: TimeInterval = 0.18
+
+        // Collapse/expand morph (Ann 2026-11-24, jelly of the four
+        // demos she was shown): ONE physical spring — response
+        // 0.6, damping 0.60 — drives the UIKit frame, the SwiftUI
+        // morph progress and the root fades, so the orb stretches
+        // into the capsule as a single motion and overshoots a
+        // touch before settling. Before this, the frame ran a
+        // 0.3 s duration spring, the layout a response-0.3 spring
+        // (different curve, same-looking numbers) and each icon
+        // had its own delayed pop-in — three clocks, and the
+        // expansion read as disjointed no matter how they were
+        // tuned.
+        static let morphSpringResponse: Double = 0.6
+        static let morphSpringDamping: Double = 0.60
     }
     
     // Original dock width from user settings (without auto-adjustment)
@@ -553,14 +567,33 @@ class AppInfoProvider {
 
     private func applyNewFrame(_ newFrame: CGRect, for hostingController: UIHostingController<AnyView>, animated: Bool) {
         if animated {
-            UIView.animate(
-                withDuration: Constants.standardAnimationDuration,
-                delay: 0,
-                usingSpringWithDamping: Constants.standardSpringDamping,
-                initialSpringVelocity: Constants.standardSpringVelocity,
-                options: .curveEaseOut
-            ) {
-                hostingController.view.frame = newFrame
+            if hostingController.view.frame.size != newFrame.size {
+                // A size change is the collapse/expand morph (or
+                // an icon arriving/leaving): run the frame on
+                // the morph spring — UIKit's duration + damping
+                // ratio is the same physical spring SwiftUI's
+                // response + dampingFraction describes — so the
+                // glass and the content it carries stay in step
+                // (Ann 2026-11-24).
+                UIView.animate(
+                    withDuration: Constants.morphSpringResponse,
+                    delay: 0,
+                    usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
+                    initialSpringVelocity: 0,
+                    options: [.beginFromCurrentState, .curveEaseOut]
+                ) {
+                    hostingController.view.frame = newFrame
+                }
+            } else {
+                UIView.animate(
+                    withDuration: Constants.standardAnimationDuration,
+                    delay: 0,
+                    usingSpringWithDamping: Constants.standardSpringDamping,
+                    initialSpringVelocity: Constants.standardSpringVelocity,
+                    options: .curveEaseOut
+                ) {
+                    hostingController.view.frame = newFrame
+                }
             }
         } else {
             hostingController.view.frame = newFrame
@@ -1093,6 +1126,29 @@ public struct MultitaskDockSwiftView: View {
     @State private var collapsedLongPressTriggered = false
     @AppStorage("LCHideCollapsedDock", store: LCUtils.appGroupUserDefault) var hideCollapsedDock: Bool = false
     @State private var showCloseAllConfirm = false
+
+    /// Morph progress for the collapse/expand animation: 0 is
+    /// the orb, 1 the full capsule. A single spring-animated
+    /// value drives the icons' travel, the end padding and the
+    /// glyph fade, so the morph is one motion (Ann 2026-11-24).
+    /// isCollapsed stays the logical state (frame size, hit
+    /// testing); this is its animated shadow.
+    @State private var morphProgress: CGFloat = 0
+
+    private var morphSpring: Animation {
+        .spring(response: MultitaskDockManager.Constants.morphSpringResponse, dampingFraction: MultitaskDockManager.Constants.morphSpringDamping)
+    }
+
+    /// Offset that pulls an expanded element back onto the
+    /// stack's center (the orb's seat) at morphProgress 0; as
+    /// the spring runs, every element rides it out to its own
+    /// slot — past it, briefly, when the jelly spring
+    /// overshoots.
+    private func morphOffset(for index: Int, total: Int) -> CGFloat {
+        let center = Double(total - 1) / 2
+        let slot = (Double(index) - center) * Double(dockManager.adaptiveIconSize + 8)
+        return CGFloat(-slot) * (1 - morphProgress)
+    }
     
     // Calculate dynamic padding based on user settings
     private var dynamicPadding: CGFloat {
@@ -1101,116 +1157,107 @@ public struct MultitaskDockSwiftView: View {
         return max(basePadding, basePadding + extraPadding)
     }
 
-    /// How one expanded-dock element (icon, home button) comes
-    /// and goes when the dock expands or collapses: in with a
-    /// fade and a slight grow, out with a plain fade. Together
-    /// with the capsule clip on the dock body this turns the old
-    /// pop-in swap into a reveal (Ann 2026-11-23: the expand
-    /// animation felt disjointed — icons appeared instantly at
-    /// their final spots and poked outside the pill while its
-    /// frame was still growing).
-    private var dockElementTransition: AnyTransition {
-        .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.85)),
-            removal: .opacity)
-    }
-
-    /// Stagger delay for one expanded-dock element. The pill
-    /// grows from its center (the orb's seat), so elements
-    /// cascade outward from the middle of the stack: the delay
-    /// grows with the distance from the center element. Only
-    /// applied while expanding (see the call sites).
-    private func staggerDelay(for index: Int, total: Int) -> Double {
-        let center = Double(total - 1) / 2
-        return abs(Double(index) - center) * 0.04
-    }
     
     public var body: some View {
         GeometryReader { g in
-            VStack(spacing: 8) {
-                if dockManager.isCollapsed {
-                    // Two gestures on the floating button (Ann
-                    // 2026-11-23, plan A — the old mapping was
-                    // top-heavy: the lightest gesture did the
-                    // heaviest thing): single tap expands — the
-                    // most-used, zero-risk action, and instant now
-                    // that no double tap has to be waited out; long
-                    // press jumps back to the previous app — the
-                    // one quick switch worth doing blind, because
-                    // where "back" lands is predictable (it briefly
-                    // went home instead, until the expanded dock
-                    // got its own home button the same evening).
-                    // Double tap (blind cycling) is gone: switching
-                    // happens in the expanded dock, where the
-                    // target is visible. The long press's flag
-                    // keeps its release from also firing the tap.
-                    CollapsedDockView()
-                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
+            // One stack, always in the tree (Ann 2026-11-24):
+            // the morph is the icons travelling from the orb's
+            // seat out to their slots on a single spring (see
+            // morphProgress / morphOffset), with the glyph
+            // fading on the same value — no content swap, no
+            // per-element transitions, no stagger delays left.
+            ZStack {
+                VStack(spacing: 8) {
+                    ForEach(Array(dockManager.apps.enumerated()), id: \.element.id) { pair in
+                        AppIconView(app: pair.element)
+                            .offset(y: morphOffset(for: pair.offset, total: dockManager.apps.count + 1))
+                    }
+
+                    // Home button (Ann 2026-11-23, replacing
+                    // the cycle button — with every icon
+                    // visible, blind flipping was dead weight):
+                    // tap goes home (minimize every window and
+                    // collapse the dock); long-press asks to
+                    // close every app instead (with a
+                    // confirmation, like Weizhu's close-all).
+                    HomeButtonView()
                         .onTapGesture {
-                            if collapsedLongPressTriggered {
-                                collapsedLongPressTriggered = false
+                            // A long-press already fired; the
+                            // release must not also go home.
+                            if homeLongPressTriggered {
+                                homeLongPressTriggered = false
                                 return
                             }
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            dockManager.toggleDockCollapse()
+                            dockManager.minimizeAllWindows()
+                            if !dockManager.isCollapsed {
+                                dockManager.toggleDockCollapse()
+                            }
                         }
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
-                                    collapsedLongPressTriggered = true
-                                    if dockManager.switchToPreviousApp() {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    }
+                                    homeLongPressTriggered = true
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    showCloseAllConfirm = true
                                 }
                         )
-                } else {
-                    VStack(spacing: 8) {
-                        ForEach(Array(dockManager.apps.enumerated()), id: \.element.id) { pair in
-                            AppIconView(app: pair.element)
-                                .transition(dockElementTransition)
-                                .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping).delay(dockManager.isCollapsed ? 0 : staggerDelay(for: pair.offset, total: dockManager.apps.count + 1)), value: dockManager.isCollapsed)
-                        }
+                        .offset(y: morphOffset(for: dockManager.apps.count, total: dockManager.apps.count + 1))
+                }
+                .opacity(Double(min(1, morphProgress * 2.2)))
+                .allowsHitTesting(!dockManager.isCollapsed)
 
-                        // Home button (Ann 2026-11-23, replacing
-                        // the cycle button — with every icon
-                        // visible, blind flipping was dead weight):
-                        // tap goes home (minimize every window and
-                        // collapse the dock); long-press asks to
-                        // close every app instead (with a
-                        // confirmation, like Weizhu's close-all).
-                        HomeButtonView()
-                            .onTapGesture {
-                                // A long-press already fired; the
-                                // release must not also go home.
-                                if homeLongPressTriggered {
-                                    homeLongPressTriggered = false
-                                    return
-                                }
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                dockManager.minimizeAllWindows()
-                                if !dockManager.isCollapsed {
-                                    dockManager.toggleDockCollapse()
+                // Two gestures on the floating button (Ann
+                // 2026-11-23, plan A — the old mapping was
+                // top-heavy: the lightest gesture did the
+                // heaviest thing): single tap expands — the
+                // most-used, zero-risk action, and instant now
+                // that no double tap has to be waited out; long
+                // press jumps back to the previous app — the
+                // one quick switch worth doing blind, because
+                // where "back" lands is predictable (it briefly
+                // went home instead, until the expanded dock
+                // got its own home button the same evening).
+                // Double tap (blind cycling) is gone: switching
+                // happens in the expanded dock, where the
+                // target is visible. The long press's flag
+                // keeps its release from also firing the tap.
+                CollapsedDockView()
+                    .opacity(Double(max(0, 1 - morphProgress * 2.5)))
+                    .allowsHitTesting(dockManager.isCollapsed)
+                    .onTapGesture {
+                        if collapsedLongPressTriggered {
+                            collapsedLongPressTriggered = false
+                            return
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        dockManager.toggleDockCollapse()
+                    }
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 0.5)
+                            .onEnded { _ in
+                                collapsedLongPressTriggered = true
+                                if dockManager.switchToPreviousApp() {
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 }
                             }
-                            .simultaneousGesture(
-                                LongPressGesture(minimumDuration: 0.5)
-                                    .onEnded { _ in
-                                        homeLongPressTriggered = true
-                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                        showCloseAllConfirm = true
-                                    }
-                            )
-                            .transition(dockElementTransition)
-                            .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping).delay(dockManager.isCollapsed ? 0 : staggerDelay(for: dockManager.apps.count, total: dockManager.apps.count + 1)), value: dockManager.isCollapsed)
-
-                    }
+                    )
+            }
+            .onChange(of: dockManager.isCollapsed) { collapsed in
+                withAnimation(morphSpring) {
+                    morphProgress = collapsed ? 0 : 1
                 }
+            }
+            .onAppear {
+                morphProgress = dockManager.isCollapsed ? 0 : 1
             }
             .padding(.horizontal, dynamicPadding)
             // Expanded, the pill's curved ends need extra room at
             // the top and bottom so the end icons stay inside the
             // glass (see dockEndExtra); collapsed stays a circle.
-            .padding(.vertical, dockManager.isCollapsed ? dynamicPadding : dynamicPadding + dockManager.dockEndExtra(for: dockManager.dockWidth))
+            // The morph progress interpolates it, so the ends
+            // grow out with the same spring as everything else.
+            .padding(.vertical, dynamicPadding + dockManager.dockEndExtra(for: dockManager.dockWidth) * morphProgress)
             .alert("lc.multitask.closeAllTitle".loc, isPresented: $showCloseAllConfirm) {
                 Button("lc.common.no".loc, role: .cancel) {}
                 Button("lc.multitask.closeAllConfirm".loc, role: .destructive) {
@@ -1248,11 +1295,11 @@ public struct MultitaskDockSwiftView: View {
             .opacity(dockManager.isDockHidden ? (hideCollapsedDock && dockManager.isCollapsed ? 0.01 : 0.4) : (dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0))
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockHidden)
-            // The padding rides the same spring as the rest of
-            // the collapse change — it used to ease on its own
-            // 0.35 s curve, a third clock next to the UIKit frame
-            // spring and the layout spring (Ann 2026-11-23).
-            .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.isCollapsed)
+            // The remaining isCollapsed-keyed values (the root
+            // opacity above) ride the morph spring like
+            // everything else in the collapse change — they used
+            // to run on two other curves besides (Ann 2026-11-24).
+            .animation(morphSpring, value: dockManager.isCollapsed)
             .offset(dragOffset)
             .position(x: g.size.width / 2, y: g.size.height / 2)
         }
@@ -1351,7 +1398,7 @@ public struct MultitaskDockSwiftView: View {
                 }
             }
         )
-        .animation(.spring(response: MultitaskDockManager.Constants.standardAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.isCollapsed)
+        .animation(morphSpring, value: dockManager.isCollapsed)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.dockWidth)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.settingsChanged)
     }
