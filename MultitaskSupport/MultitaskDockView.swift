@@ -199,7 +199,6 @@ class AppInfoProvider {
         static let minAdaptiveDockWidth: CGFloat = 50.0
         static let minAdaptiveIconSize: CGFloat = 10.0
         static let maxIconSize: CGFloat = 100.0
-        static let minCollapsedHeight: CGFloat = 60.0
         static let minCollapsedButtonSize: CGFloat = 44.0
         static let maxCollapsedButtonSize: CGFloat = 80.0
         static let initialDockShowHeight: CGFloat = 120.0
@@ -321,8 +320,12 @@ class AppInfoProvider {
     }
 
     private func collapsedDockHeight(for width: CGFloat) -> CGFloat {
-        let buttonSize = calculateButtonSize(for: width)
-        return Constants.dockVerticalPadding + buttonSize
+        // 正圆（Ann 2026-11-23 定）：收起帧高直接等于宽，胶囊
+        // 在正方形帧里就是正圆，圆弧半径与展开坞的端弧同为
+        // 宽/2。旧公式（留白 30 + 按钮尺寸）是收起态还有按钮
+        // 瓷砖时代的遗留；现在收起态只有字形（0.75×宽）加小
+        // 留白，远小于宽，不会挤。
+        return width
     }
     
 
@@ -478,8 +481,9 @@ class AppInfoProvider {
 
     private func calculateTargetDockHeight(forWidth width: CGFloat) -> CGFloat {
         if isCollapsed {
-            let collapsedHeight = collapsedDockHeight(for: width)
-            return max(Constants.minCollapsedHeight, collapsedHeight)
+            // No height floor here: one would break the perfect
+            // circle at narrow widths (see collapsedDockHeight).
+            return collapsedDockHeight(for: width)
         } else {
             let currentIconSize = calculateIconSize(for: width)
             return expandedDockHeight(for: width, iconSize: currentIconSize)
