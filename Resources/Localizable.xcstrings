@@ -22056,19 +22056,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Floating dock gestures: when collapsed, tap to go to the home screen, double-tap to switch to the next app, long-press to expand. When expanded, tap an icon to switch apps (the current app's icon: tap to collapse, double-tap to toggle maximized), long-press an icon to close that app, long-press the cycle button to close all apps. Drag the floating dock toward the screen edge to hide it; swipe in from the edge to bring it back."
+            "value" : "Floating dock gestures: when collapsed, tap to expand, long-press to go to the home screen. When expanded, tap an icon to switch apps (the current app's icon: tap to collapse, double-tap to toggle maximized), long-press an icon to close that app, long-press the cycle button to close all apps. Drag the floating dock toward the screen edge to hide it; swipe in from the edge to bring it back."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "悬浮坞手势：收起时点按回主屏幕，双击切换到下一个 App，长按展开；展开后点按图标切换 App（当前 App 的图标点按收起、双击切换最大化），长按图标关闭该 App，长按循环按钮关闭全部 App；将悬浮坞拖向屏幕边缘可隐藏，从屏幕边缘向内滑可唤回。"
+            "value" : "悬浮坞手势：收起时点按展开，长按回主屏幕；展开后点按图标切换 App（当前 App 的图标点按收起、双击切换最大化），长按图标关闭该 App，长按循环按钮关闭全部 App；将悬浮坞拖向屏幕边缘可隐藏，从屏幕边缘向内滑可唤回。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "懸浮塢手勢：收起時點按回主畫面，雙擊切換到下一個 App，長按展開；展開後點按圖示切換 App（目前 App 的圖示點按收起、雙擊切換最大化），長按圖示關閉該 App，長按循環按鈕關閉全部 App；將懸浮塢拖向螢幕邊緣可隱藏，從螢幕邊緣向內滑可喚回。"
+            "value" : "懸浮塢手勢：收起時點按展開，長按回主畫面；展開後點按圖示切換 App（目前 App 的圖示點按收起、雙擊切換最大化），長按圖示關閉該 App，長按循環按鈕關閉全部 App；將懸浮塢拖向螢幕邊緣可隱藏，從螢幕邊緣向內滑可喚回。"
           }
         }
       }

@@ -1080,42 +1080,34 @@ public struct MultitaskDockSwiftView: View {
         GeometryReader { g in
             VStack(spacing: 8) {
                 if dockManager.isCollapsed {
-                    // Three gestures on the floating button: single tap
-                    // goes home (minimize all windows), double tap
-                    // cycles to the next app — the expanded dock's
-                    // cycle button, feedback included — and long press
-                    // expands. The taps form one composed gesture, as
-                    // in the app grid: the double tap takes priority
-                    // and the single tap fires only when it fails, so
-                    // the single tap lands ~0.3s late — acceptable for
-                    // going home. The long press runs alongside; its
-                    // flag keeps the release from also firing a tap.
+                    // Two gestures on the floating button (Ann
+                    // 2026-11-23, plan A — the old mapping was
+                    // top-heavy: the lightest gesture did the
+                    // heaviest thing): single tap expands — the
+                    // most-used, zero-risk action, and instant now
+                    // that no double tap has to be waited out; long
+                    // press goes home (minimize all windows) — the
+                    // heavy gesture for the heavy action, matching
+                    // the expanded dock, where long presses close
+                    // apps. Double tap (blind cycling) is gone:
+                    // switching happens in the expanded dock, where
+                    // the target is visible. The long press's flag
+                    // keeps its release from also firing the tap.
                     CollapsedDockView()
-                        .gesture(
-                            TapGesture(count: 2)
-                                .onEnded {
-                                    if collapsedLongPressTriggered {
-                                        collapsedLongPressTriggered = false
-                                        return
-                                    }
-                                    dockManager.cycleToNextApp()
-                                }
-                                .exclusively(before: TapGesture(count: 1)
-                                    .onEnded {
-                                        if collapsedLongPressTriggered {
-                                            collapsedLongPressTriggered = false
-                                            return
-                                        }
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        dockManager.minimizeAllWindows()
-                                    })
-                        )
+                        .onTapGesture {
+                            if collapsedLongPressTriggered {
+                                collapsedLongPressTriggered = false
+                                return
+                            }
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            dockManager.toggleDockCollapse()
+                        }
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
                                     collapsedLongPressTriggered = true
                                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    dockManager.toggleDockCollapse()
+                                    dockManager.minimizeAllWindows()
                                 }
                         )
                 } else {
