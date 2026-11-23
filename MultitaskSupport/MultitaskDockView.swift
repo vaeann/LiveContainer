@@ -240,11 +240,17 @@ class AppInfoProvider {
         static let longAnimationDuration: TimeInterval = 0.4
         
         static let standardSpringDamping: CGFloat = 0.8
-        static let showHideSpringDamping: CGFloat = 0.7
         static let standardSpringVelocity: CGFloat = 0.3
-        static let showHideSpringVelocity: CGFloat = 0.5
-        
-        static let initialScale: CGFloat = 0.8
+
+        // Show/hide (Ann 2026-11-23): a calm materialize, not a
+        // performance — the old entrance grew from 0.8 on a 0.7-
+        // damping spring and overshot, which read as a flash every
+        // time the first app of a session launched. Both directions
+        // now use the same small scale, plain ease curves, and the
+        // exit is a touch faster than the entrance.
+        static let showHideScale: CGFloat = 0.92
+        static let showAnimationDuration: TimeInterval = 0.22
+        static let hideAnimationDuration: TimeInterval = 0.18
     }
     
     // Original dock width from user settings (without auto-adjustment)
@@ -616,14 +622,11 @@ class AppInfoProvider {
 
             
             hostingController.view.alpha = 0
-            let initialScale = Constants.initialScale
-            hostingController.view.transform = CGAffineTransform(scaleX: initialScale, y: initialScale)
-            
+            hostingController.view.transform = CGAffineTransform(scaleX: Constants.showHideScale, y: Constants.showHideScale)
+
             UIView.animate(
-                withDuration: Constants.standardAnimationDuration,
+                withDuration: Constants.showAnimationDuration,
                 delay: 0,
-                usingSpringWithDamping: Constants.showHideSpringDamping,
-                initialSpringVelocity: Constants.showHideSpringVelocity,
                 options: .curveEaseOut
             ) {
                 hostingController.view.alpha = 1
@@ -636,22 +639,18 @@ class AppInfoProvider {
         guard isVisible, let hostingController = hostingController else { return }
 
         DispatchQueue.main.async {
+            // Fade out in place (Ann 2026-11-23): the old exit also
+            // shrank to 0.8 and slid the dock off-screen mid-fade —
+            // motion nobody could see, plus a frame jump to undo on
+            // the next show. At alpha 0 the view takes no touches,
+            // and showDock re-frames before fading back in anyway.
             UIView.animate(
-                withDuration: Constants.standardAnimationDuration,
+                withDuration: Constants.hideAnimationDuration,
                 delay: 0,
-                usingSpringWithDamping: Constants.showHideSpringDamping,
-                initialSpringVelocity: Constants.showHideSpringVelocity,
-                options: .curveEaseOut
+                options: .curveEaseIn
             ) {
                 hostingController.view.alpha = 0
-                let finalScale = Constants.initialScale
-                hostingController.view.transform = CGAffineTransform(scaleX: finalScale, y: finalScale)
-                // Move off-screen to hide, but keep in view hierarchy
-                let screenBounds = self.keyWindow!.bounds
-                let currentDockWidth = self.dockWidth
-                let targetX = hostingController.view.frame.midX > screenBounds.width / 2 ? screenBounds.width : -currentDockWidth
-                let targetY = hostingController.view.frame.origin.y // Keep current Y
-                hostingController.view.frame.origin = CGPoint(x: targetX, y: targetY)
+                hostingController.view.transform = CGAffineTransform(scaleX: Constants.showHideScale, y: Constants.showHideScale)
             } completion: { _ in
                 self.isVisible = false
                 // The next session starts collapsed again (see showDock).
