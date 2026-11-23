@@ -25,6 +25,7 @@ static const CGFloat LCResizeHandleSize = 44;
 @property(nonatomic) UIButton *menuButton;
 @property(nonatomic) bool isAppTerminationRequested;
 @property(nonatomic) BOOL cornerMenuActive;
+@property(nonatomic) BOOL isMinimizing;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
 @end
@@ -334,13 +335,44 @@ static const CGFloat LCResizeHandleSize = 44;
 }
 
 - (void)minimizeWindow {
-    if (self.view.hidden) return;
-    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+    if (self.view.hidden || self.isMinimizing) return;
+    self.isMinimizing = YES;
+    // iOS 式退场（Ann 2026-11-23 定，和入场对称）：窗口缩回悬浮
+    // 坞里——帧飞到坞的方框、圆角收成图标圆角，快到时才淡出。
+    // 完成后帧和圆角都复原、只留隐藏状态，切回前台的入场动画
+    // 从它期望的状态接管。坞不在时沿用原来的原地缩小。
+    CGRect target = [[MultitaskDockManager shared] minimizeTargetRect];
+    if (CGRectIsEmpty(target) || !self.view.window) {
+        [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+            self.view.alpha = 0;
+            self.view.transform = CGAffineTransformMakeScale(0.1, 0.1);
+        } completion:^(BOOL finished) {
+            self.isMinimizing = NO;
+            if (!finished) return;
+            self.view.hidden = YES;
+            self.view.transform = CGAffineTransformIdentity;
+            [self.view.superview sendSubviewToBack:self.view];
+            [[MultitaskDockManager shared] updateStatusBarFix];
+        }];
+        return;
+    }
+    CGRect origFrame = self.view.frame;
+    CGFloat origCornerRadius = self.view.layer.cornerRadius;
+    CGRect targetInSuperview = [self.view.superview convertRect:target fromView:self.view.window];
+    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        self.view.frame = targetInSuperview;
+        self.view.layer.cornerRadius = targetInSuperview.size.height * 0.22;
+    } completion:nil];
+    [UIView animateWithDuration:0.12 delay:0.18 options:UIViewAnimationOptionCurveEaseIn animations:^{
         self.view.alpha = 0;
-        self.view.transform = CGAffineTransformMakeScale(0.1, 0.1);
     } completion:^(BOOL finished) {
-        if (!finished) return;
+        // 无条件复原：这段可能是在切回前台的 removeAllAnimations
+        // 里被同步回调的（finished=NO），入场动画紧接着就要读
+        // view.frame，必须先把帧恢复成完整的窗口帧。
+        self.isMinimizing = NO;
         self.view.hidden = YES;
+        self.view.frame = origFrame;
+        self.view.layer.cornerRadius = origCornerRadius;
         self.view.transform = CGAffineTransformIdentity;
         [self.view.superview sendSubviewToBack:self.view];
         [[MultitaskDockManager shared] updateStatusBarFix];

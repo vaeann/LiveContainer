@@ -923,6 +923,24 @@ class AppInfoProvider {
         }
     }
     
+    /// Where a minimizing window flies to (Ann 2026-11-23: the exit
+    /// mirrors the iOS-style entrance and shrinks into the dock).
+    /// Collapsed, the dock's frame IS the orb's frame. Expanded, aim
+    /// at the square at the capsule's center — where the orb sits
+    /// when collapsed. Zero when the dock isn't up, so the caller
+    /// falls back to the old shrink-in-place animation.
+    @objc func minimizeTargetRect() -> CGRect {
+        guard isVisible, let dockView = hostingController?.view, keyWindow != nil else {
+            return .zero
+        }
+        let frame = dockView.frame
+        if isCollapsed {
+            return frame
+        }
+        let side = min(frame.width, frame.height)
+        return CGRect(x: frame.midX - side / 2, y: frame.midY - side / 2, width: side, height: side)
+    }
+    
     @objc public func minimizeAllWindows(except: DecoratedAppSceneViewController? = nil) {
         noteDockInteraction()
         DispatchQueue.main.async {
