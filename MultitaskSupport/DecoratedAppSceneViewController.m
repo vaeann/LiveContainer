@@ -26,7 +26,6 @@ static const CGFloat LCResizeHandleSize = 44;
 @property(nonatomic) bool isAppTerminationRequested;
 @property(nonatomic) BOOL cornerMenuActive;
 @property(nonatomic) BOOL isMinimizing;
-@property(nonatomic) BOOL didPlaceInitialFrame;
 - (UIButton *)trafficLightButtonWithColor:(UIColor *)color action:(SEL)action;
 - (NSArray<UIMenuElement *> *)windowMenuElements;
 @end
@@ -35,14 +34,6 @@ static const CGFloat LCResizeHandleSize = 44;
 - (instancetype)initWindowName:(NSString*)windowName bundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUID rootVC:(UIViewController*)rootVC {
     self = [super initWithNibName:nil bundle:nil];
     self.view = [[UIStackView alloc] initWithFrame:self.view.frame];
-    // 新窗口先藏起来（Ann 2026-11-23 定）：创建到场景激活之间帧
-    // 要过好几手（初始全屏帧、激活时的设置同步、小窗口分支自带
-    // 的 0.3 秒动画），其中一手把整窗从屏幕顶 y=0 挪到最终位置，
-    // 带着窗口栏从上面滑下来——上次只堵了 setup 那一手，没堵
-    // 干净。藏到激活的初始设置过完再露面，帧怎么折腾都看不见，
-    // 窗口直接出现在最终位置。激活和初始化回调里都会解除隐藏，
-    // 启动失败弹错误框也不会被挡住。
-    self.view.hidden = YES;
     [MultitaskDockManager.shared.windowHostingView addSubview:self.view];
     [rootVC addChildViewController:self];
     
@@ -482,9 +473,6 @@ static const CGFloat LCResizeHandleSize = 44;
 
 - (void)appSceneVC:(AppSceneViewController*)vc didInitializeWithError:(NSError *)error {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // 兜底解除创建时的隐藏：万一激活回调没走到这里（比如启
-        // 动失败），窗口和错误弹窗也不能被藏着。
-        self.view.hidden = NO;
         if(error) {
             [vc appTerminationCleanUp];
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"lc.common.error".loc message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
@@ -506,8 +494,6 @@ static const CGFloat LCResizeHandleSize = 44;
 - (void)appSceneVCWillActivateScene:(AppSceneViewController *)vc {
     // Set up initial settings such as frame, safe area, etc
     [self appSceneVC:vc didUpdateFromSettings:vc.presenter.scene.settings.mutableCopy transitionContext:nil lifecycleActionType:0];
-    // 初始帧已落位，解除创建时的隐藏（见 init 里的注释）。
-    self.view.hidden = NO;
 }
 
 - (void)appSceneVC:(AppSceneViewController*)vc didUpdateFromSettings:(UIMutableApplicationSceneSettings *)baseSettings transitionContext:(id)newContext lifecycleActionType:(uint32_t)actionType {
@@ -872,15 +858,6 @@ static const CGFloat LCResizeHandleSize = 44;
     CGFloat oobOffset = MAX(30, frame.size.width - 30);
     frame.origin.x = MAX(maxFrame.origin.x - oobOffset, MIN(CGRectGetMaxX(maxFrame) - frame.size.width + oobOffset, center.x - frame.size.width / 2));
     frame.origin.y = MAX(maxFrame.origin.y, MIN(center.y - frame.size.height / 2, CGRectGetMaxY(maxFrame) - frame.size.height));
-    if (!self.didPlaceInitialFrame) {
-        // 第一次落位不带动画（Ann 2026-11-23 定）：这条 0.3 秒
-        // 动画在新窗口激活时也会跑，把刚建好的窗口从初始帧滑到
-        // 目标帧——就是新开 App 时窗口栏从顶部滑下来的来源之一。
-        // 之后的调用（旋转、设置变化）保持原来的动画。
-        self.didPlaceInitialFrame = YES;
-        self.view.frame = frame;
-        return;
-    }
     [UIView animateWithDuration:0.3 animations:^{
         self.view.frame = frame;
     }];
