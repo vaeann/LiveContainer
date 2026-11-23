@@ -24715,6 +24715,29 @@
         }
       }
     },
+    "lc.settings.hideWindowBar.gestureGuide" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corner gestures: drag top-left to move the window; tap top-right to maximize/restore, long-press to open the menu; tap bottom-left to minimize, long-press to close; drag bottom-right to resize. The corners are hidden while maximized."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "四角手势：左上拖动移动窗口；右上点按最大化/还原，长按打开菜单；左下点按最小化，长按关闭；右下拖动缩放窗口。最大化时四角手势不显示。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "四角手勢：左上拖動移動視窗；右上點按最大化/還原，長按開啟選單；左下點按最小化，長按關閉；右下拖動縮放視窗。最大化時四角手勢不顯示。"
+          }
+        }
+      }
+    },
     "lc.settings.moveDanglingFolderComplete %lld %lld" : {
       "extractionState" : "manual",
       "localizations" : {

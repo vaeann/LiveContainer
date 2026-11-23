@@ -48,6 +48,11 @@ struct LCMultitaskSettingView: View {
                     Toggle(isOn: $hideWindowBar) {
                         Text("lc.settings.hideWindowBar".loc)
                     }
+                    if hideWindowBar {
+                        Text("lc.settings.hideWindowBar.gestureGuide".loc)
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
                     Toggle(isOn: $autoEndPiP) {
                         Text("lc.settings.autoEndPiP".loc)
                     }
