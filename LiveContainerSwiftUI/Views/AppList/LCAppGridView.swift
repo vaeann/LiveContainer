@@ -314,8 +314,18 @@ private struct LCAppGridCell: View {
                         actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
                     })
         )
+        // Explicit preview: without one, iOS lifts a snapshot of
+        // the whole cell on a white plate — the white box that
+        // flashed on long-press — and the corner badges, which
+        // live in overlays reaching outside the icon's frame,
+        // showed through under the lifted copy (Ann 2026-11-24).
+        // Lifting just the icon, like the home screen, avoids
+        // both: no white plate, no badges in the lifted copy.
         .contextMenu {
             contextMenuItems
+        } preview: {
+            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
+                .frame(width: iconSize, height: iconSize)
         }
         // The running close badge lives in an overlay, outside the
         // gesture-carrying cell — the same structure as the list, whose
