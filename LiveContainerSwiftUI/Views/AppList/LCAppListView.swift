@@ -1633,10 +1633,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             do {
                 try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record.id)
             } catch {
-                if downloadHelper.currentJobCancelled {
-                    // Cancelled from its source row (Ann
-                    // 2026-11-25): a cancel is not a pause — the
-                    // package leaves the library entirely.
+                if downloadHelper.currentJobCancelled || downloadHelper.cancelled {
+                    // Cancelled by the user (Ann 2026-11-25) —
+                    // from the source row's menu or the capsule's
+                    // cancel-all alike: a cancel is not a pause,
+                    // so the package leaves the library entirely.
                     store.remove(record)
                 } else {
                     // Keep the interrupted download listed so it
@@ -1645,12 +1646,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
                 throw error
             }
-            if downloadHelper.currentJobCancelled {
+            if downloadHelper.currentJobCancelled || downloadHelper.cancelled {
                 store.remove(record)
-                return
-            }
-            if downloadHelper.cancelled {
-                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 return
             }
             store.markCompleted(record)
