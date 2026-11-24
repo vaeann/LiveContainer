@@ -228,8 +228,23 @@ private struct LCAppGridCell: View {
     var body: some View {
             VStack(spacing: 6) {
                 ZStack(alignment: .topTrailing) {
-                    IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                        .frame(width: iconSize, height: iconSize)
+                    // Visual layer: the icon plus the status ribbon
+                    // across its bottom — Ann's design (2026-11-24):
+                    // a band like a pocket flap holding every status
+                    // glyph except the close badge, centered, in
+                    // banner order (shared, JIT, 32, lock), showing
+                    // whichever apply. Clipped to the icon's own
+                    // rounded shape so the ribbon's bottom corners
+                    // follow the icon's.
+                    ZStack(alignment: .bottom) {
+                        IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
+                            .frame(width: iconSize, height: iconSize)
+                        if hasRibbonBadges {
+                            statusRibbon
+                        }
+                    }
+                    .frame(width: iconSize, height: iconSize)
+                    .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
 
                     // UIKit touch tracking for the press feedback — the
                     // same mechanism as the banner's touchesBegan/Ended,
@@ -265,10 +280,11 @@ private struct LCAppGridCell: View {
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
                 // The long-press menu hangs on the icon itself, not
                 // the whole cell, and the lift shows the icon WITH
-                // its corner badges (see liftPreview below): the
-                // badges stay fixed on the icon through the lift
-                // instead of showing through from their own layer,
-                // and there is no white plate (Ann 2026-11-24).
+                // its ribbon and close badge (see liftPreview
+                // below): they stay fixed on the icon through the
+                // lift instead of showing through from their own
+                // layer, and there is no white plate (Ann
+                // 2026-11-24).
                 .contextMenu {
                     contextMenuItems
                 } preview: {
@@ -281,30 +297,6 @@ private struct LCAppGridCell: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, minHeight: 34, alignment: .top)
 
-                if hasBadges {
-                    HStack(spacing: 3) {
-                        if app.uiIsShared {
-                            badge(systemName: "arrowshape.turn.up.left.fill", color: .orange)
-                        }
-                        if app.uiIsJITNeeded && !app.uiIs32bit {
-                            badge(systemName: "bolt.fill", color: .purple)
-                        }
-                        if app.uiIs32bit {
-                            Text("32")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(.blue))
-                        }
-                        // The lock is not here any more: it sits
-                        // on the icon's bottom-left corner instead
-                        // (see the overlay below) — in this row it
-                        // rendered as a stray capsule under the
-                        // name and made lock-only cells taller
-                        // than their neighbours (Ann 2026-11-24).
-                    }
-                }
             }
             .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
@@ -325,7 +317,6 @@ private struct LCAppGridCell: View {
                         actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
                     })
         )
-        // Explicit preview: without one, iOS lifts a snapshot of
         // The running close badge lives in an overlay, outside the
         // gesture-carrying cell — the same structure as the list, whose
         // badge overlays the banner and works. Inside the cell it
@@ -353,48 +344,30 @@ private struct LCAppGridCell: View {
                 .opacity(isPressed ? 0.7 : 1)
             }
         }
-        // The lock badge mirrors the close badge on the opposite
-        // corner: same overlay structure, same quarter-diameter
-        // rule — its center sits a quarter of its diameter inside
-        // the icon's bottom-left corner (Ann 2026-11-24 asked for
-        // it on the icon, bottom-left, after the under-name
-        // capsule misbehaved in the grid). Purely visual: it
-        // takes no touches, so the icon's tap handling is
-        // untouched.
-        .overlay(alignment: .top) {
-            if app.uiIsLocked && !app.uiIsHidden {
-                ZStack(alignment: .bottomLeading) {
-                    Color.clear
-                        .allowsHitTesting(false)
-                    lockBadge
-                        .offset(x: -lockBadgeSize * 0.25, y: lockBadgeSize * 0.25)
-                }
-                .frame(width: iconSize, height: iconSize)
-                .opacity(isPressed ? 0.7 : 1)
-            }
-        }
     }
 
-    // What the long-press lift shows: the icon with its corner
-    // badges drawn at their real positions, on a frame padded by
-    // the close badge's quarter-diameter overhang so nothing
-    // clips. The preview is centered on the icon, so its badges
-    // land on the live overlay badges beneath and the two read
-    // as one — the badges stay fixed on the icon through the
-    // whole lift (Ann 2026-11-24).
+    // What the long-press lift shows: the icon with its ribbon
+    // and the close badge drawn at its real position, on a frame
+    // padded by the badge's quarter-diameter overhang so nothing
+    // clips. The preview is centered on the icon, so its close
+    // badge lands on the live overlay badge beneath and the two
+    // read as one — everything stays fixed on the icon through
+    // the whole lift (Ann 2026-11-24).
     private var liftPreview: some View {
         ZStack {
-            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                .frame(width: iconSize, height: iconSize)
+            ZStack(alignment: .bottom) {
+                IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
+                    .frame(width: iconSize, height: iconSize)
+                if hasRibbonBadges {
+                    statusRibbon
+                }
+            }
+            .frame(width: iconSize, height: iconSize)
+            .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
             if actions.isRunning(app) {
                 closeBadgePicture
                     .offset(x: iconSize / 2 - badgeSize * 0.25,
                             y: -(iconSize / 2 - badgeSize * 0.25))
-            }
-            if app.uiIsLocked && !app.uiIsHidden {
-                lockBadge
-                    .offset(x: -(iconSize / 2 - lockBadgeSize * 0.25),
-                            y: iconSize / 2 - lockBadgeSize * 0.25)
             }
         }
         .frame(width: iconSize + badgeSize * 0.5,
@@ -415,35 +388,59 @@ private struct LCAppGridCell: View {
         .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
-    private var hasBadges: Bool {
+    // Whether the status ribbon shows at all: any of the four
+    // status marks applies.
+    private var hasRibbonBadges: Bool {
         app.uiIsShared
             || (app.uiIsJITNeeded && !app.uiIs32bit)
             || app.uiIs32bit
+            || (app.uiIsLocked && !app.uiIsHidden)
     }
 
-    // Lock-badge diameter, scaled with the icon like the close
-    // badge but a step smaller — it is a status mark, not a
-    // button.
-    private var lockBadgeSize: CGFloat {
-        min(max(iconSize * 0.32, 15), 26)
+    private var ribbonHeight: CGFloat { iconSize * 0.28 }
+    private var ribbonGlyphSize: CGFloat { iconSize * 0.16 }
+
+    // The status ribbon: a liquid-glass band across the icon's
+    // bottom (dark translucent band where glass is unavailable),
+    // holding the status glyphs centered in banner order. The
+    // glass carries a slight dark tint so the white glyphs stay
+    // readable over bright icons. "32" replaces the bolt for
+    // 32-bit apps — the two never show together, the same rule
+    // as the list.
+    private var statusRibbon: some View {
+        HStack(spacing: iconSize * 0.07) {
+            if app.uiIsShared {
+                ribbonSymbol("arrowshape.turn.up.left.fill")
+            }
+            if app.uiIsJITNeeded && !app.uiIs32bit {
+                ribbonSymbol("bolt.fill")
+            }
+            if app.uiIs32bit {
+                Text("32")
+                    .font(.system(size: ribbonGlyphSize * 0.92, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            if app.uiIsLocked && !app.uiIsHidden {
+                ribbonSymbol("lock.fill")
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: ribbonHeight)
+        .background {
+            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                Color.clear
+                    .glassEffect(.regular.tint(.black.opacity(0.3)), in: Rectangle())
+            } else {
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+            }
+        }
     }
 
-    private var lockBadge: some View {
-        Image(systemName: "lock.fill")
-            .font(.system(size: lockBadgeSize * 0.52, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: lockBadgeSize, height: lockBadgeSize)
-            .background(Circle().fill(.orange))
-            .allowsHitTesting(false)
-    }
-
-    private func badge(systemName: String, color: Color) -> some View {
+    private func ribbonSymbol(_ systemName: String) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 8, weight: .bold))
+            .font(.system(size: ribbonGlyphSize, weight: .bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(color))
     }
 
     @ViewBuilder
