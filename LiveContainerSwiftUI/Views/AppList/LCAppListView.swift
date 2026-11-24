@@ -1633,12 +1633,23 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             do {
                 try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record.id)
             } catch {
-                // Keep the interrupted download listed so it can
-                // be resumed from the downloads page.
-                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
+                if downloadHelper.currentJobCancelled {
+                    // Cancelled from its source row (Ann
+                    // 2026-11-25): a cancel is not a pause — the
+                    // package leaves the library entirely.
+                    store.remove(record)
+                } else {
+                    // Keep the interrupted download listed so it
+                    // can be resumed from the downloads page.
+                    store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
+                }
                 throw error
             }
-            if downloadHelper.cancelled || downloadHelper.currentJobCancelled {
+            if downloadHelper.currentJobCancelled {
+                store.remove(record)
+                return
+            }
+            if downloadHelper.cancelled {
                 store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 return
             }
