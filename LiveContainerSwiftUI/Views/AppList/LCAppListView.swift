@@ -986,7 +986,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         } catch is InstallUserAbort {
             // Aborted at a prompt: nothing was installed, so no
             // source-file removal and no record finalizing either.
+            // A copy made for THIS import is removed again (Ann
+            // 2026-11-25: aborting must not leave the package in
+            // the downloads library); a package that already lived
+            // in the library stays, of course.
             lastInstallAborted = true
+            if !inStore, let record {
+                store.remove(record)
+            }
             self.installprogressVisible = false
         } catch {
             errorInfo = error.localizedDescription
@@ -1573,6 +1580,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
             } catch is InstallUserAbort {
                 lastInstallAborted = true
+                // Same rule as the file-job path (Ann 2026-11-25):
+                // an import copy made for an install the user then
+                // aborted is removed from the library again.
+                if let importRecord {
+                    importStore.remove(importRecord)
+                }
             } catch {
                 errorInfo = error.localizedDescription
                 errorShow = true
