@@ -52,18 +52,13 @@ struct LCSourceAppDetailView: View {
                 .padding(.vertical, 4)
 
                 HStack(spacing: 12) {
-                    Button {
-                        action()
-                    } label: {
-                        Text(buttonState.title)
-                            .bold()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 36)
-                    }
-                    .buttonStyle(BasicButtonStyle())
-                    .background(Capsule().fill(Color("FontColor")))
-                    .foregroundColor(.white)
-                    .clipShape(Capsule())
+                    LCSourceInstallButton(
+                        app: app,
+                        buttonState: buttonState,
+                        tint: Color("FontColor"),
+                        wide: true,
+                        action: action
+                    )
 
                     Button {
                         copyAction()
