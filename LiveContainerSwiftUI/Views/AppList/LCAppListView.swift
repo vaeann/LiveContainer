@@ -763,6 +763,30 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     }
 
     func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil, from iconRect: CGRect? = nil) {
+        // Per-app lock gate first (Ann 2026-11-25): it must also
+        // cover the already-running shortcut below — a locked app
+        // that left the front was re-locked when it left, so
+        // bringing it back verifies like a fresh launch.
+        if app.appInfo.isLocked && !sharedModel.isAppAccessGranted(app.appInfo) {
+            Task {
+                do {
+                    if !(try await LCUtils.authenticateUserPerApp()) {
+                        return
+                    }
+                } catch {
+                    errorInfo = error.localizedDescription
+                    errorShow = true
+                    return
+                }
+                sharedModel.grantAppAccess(app.appInfo)
+                proceedWithGridLaunch(app, multitask: multitask, from: iconRect)
+            }
+            return
+        }
+        proceedWithGridLaunch(app, multitask: multitask, from: iconRect)
+    }
+
+    private func proceedWithGridLaunch(_ app: LCAppModel, multitask: Bool?, from iconRect: CGRect?) {
         // Already running: bring it to the front, exactly like the banner's run button.
         if multitask == nil, #available(iOS 16.0, *),
            let folderName = app.uiSelectedContainer?.folderName,
@@ -780,18 +804,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         Task {
-            if app.appInfo.isLocked && !sharedModel.isHiddenAppUnlocked {
-                do {
-                    if !(try await LCUtils.authenticateUser()) {
-                        return
-                    }
-                } catch {
-                    errorInfo = error.localizedDescription
-                    errorShow = true
-                    return
-                }
-            }
-
             do {
                 try await app.runApp(multitask: multitask)
             } catch {
@@ -923,9 +935,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 return
             }
             
-            if appToLaunch.appInfo.isLocked && !sharedModel.isHiddenAppUnlocked {
+            if appToLaunch.appInfo.isLocked && !sharedModel.isAppAccessGranted(appToLaunch.appInfo) {
                 do {
-                    if !(try await LCUtils.authenticateUser()) {
+                    if !(try await LCUtils.authenticateUserPerApp()) {
                         return
                     }
                 } catch {
@@ -933,8 +945,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     errorShow = true
                     return
                 }
+                sharedModel.grantAppAccess(appToLaunch.appInfo)
             }
-            
+
             do {
                 try await appToLaunch.runApp(urlStr: urlToOpen.url!.absoluteString)
             } catch {
@@ -1710,7 +1723,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             return
         }
         var appFound : LCAppModel? = nil
-        var isFoundAppLocked = false
         // Callers pass two different keys under this one parameter:
         // the URL handler passes the bundle FOLDER name (which is
         // what relativeBundlePath holds), while the install
@@ -1720,9 +1732,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         for app in sharedModel.apps {
             if app.appInfo.relativeBundlePath == bundleId || app.appInfo.bundleIdentifier() == bundleId {
                 appFound = app
-                if app.appInfo.isLocked {
-                    isFoundAppLocked = true
-                }
                 break
             }
         }
@@ -1730,7 +1739,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             for app in sharedModel.hiddenApps {
                 if app.appInfo.relativeBundlePath == bundleId || app.appInfo.bundleIdentifier() == bundleId {
                     appFound = app
-                    isFoundAppLocked = true
                     break
                 }
             }
@@ -1740,10 +1748,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             appFound = LCAppModel(appInfo: BuiltInSideStoreAppInfo.shared)
         }
         
-        if isFoundAppLocked && !sharedModel.isHiddenAppUnlocked {
+        if let appFound, appFound.appInfo.isLocked && !sharedModel.isAppAccessGranted(appFound.appInfo) {
             do {
-                let result = try await LCUtils.authenticateUser()
-                if !result {
+                if !(try await LCUtils.authenticateUserPerApp()) {
                     return
                 }
             } catch {
@@ -1751,6 +1758,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 errorShow = true
                 return
             }
+            sharedModel.grantAppAccess(appFound.appInfo)
         }
         
         guard let appFound else {

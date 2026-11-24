@@ -55,6 +55,58 @@ struct LCPath {
 class SharedModel: ObservableObject {
     @Published var selectedTab: LCTabIdentifier = .apps
     @Published var deepLink: URL?
+
+    /// Per-app lock grants (Ann 2026-11-25): the relative bundle
+    /// paths of locked apps that have passed verification for
+    /// their current visit. Deliberately separate from
+    /// isHiddenAppUnlocked below — that flag only reveals the
+    /// hidden-apps section and is untouched by this. A grant is
+    /// revoked the moment its app leaves the front (the dock
+    /// manager reports departures), and every grant is revoked
+    /// when LC comes back from more than 10s in the background.
+    @Published var unlockedAppPaths: Set<String> = []
+
+    func isAppAccessGranted(_ appInfo: LCAppInfo) -> Bool {
+        guard appInfo.isLocked else { return true }
+        guard let path = appInfo.relativeBundlePath else { return false }
+        return unlockedAppPaths.contains(path)
+    }
+
+    func grantAppAccess(_ appInfo: LCAppInfo) {
+        if let path = appInfo.relativeBundlePath {
+            unlockedAppPaths.insert(path)
+        }
+    }
+
+    func revokeAppAccess(_ appInfo: LCAppInfo) {
+        if let path = appInfo.relativeBundlePath {
+            unlockedAppPaths.remove(path)
+        }
+    }
+
+    func revokeAllAppAccess() {
+        unlockedAppPaths.removeAll()
+    }
+
+    private var backgroundedAt: Date?
+    private var backgroundObservers: [NSObjectProtocol] = []
+
+    /// Watches LC's own backgrounding for the 10s rule. Keyed on
+    /// didEnterBackground (not resign-active), so Face ID prompts
+    /// and other transient interruptions never trip it.
+    private func startWatchingBackgroundExpiry() {
+        let center = NotificationCenter.default
+        backgroundObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.backgroundedAt = Date()
+        })
+        backgroundObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, let since = self.backgroundedAt else { return }
+            self.backgroundedAt = nil
+            guard Date().timeIntervalSince(since) > 10, !self.unlockedAppPaths.isEmpty else { return }
+            self.revokeAllAppAccess()
+            center.post(name: NSNotification.AppAccessSessionExpired, object: nil)
+        })
+    }
     
     @Published var isHiddenAppUnlocked = false
     @Published var developerMode = false
@@ -99,6 +151,7 @@ class SharedModel: ObservableObject {
     
     init() {
         updateMultiLCStatus()
+        startWatchingBackgroundExpiry()
     }
 }
 
@@ -314,6 +367,11 @@ extension NSNotification {
     static let OpenInstalledAppNotification = Notification.Name.init("OpenInstalledAppNotification")
     static let MultitaskRunningAppsChanged = Notification.Name.init("MultitaskRunningAppsChanged")
     static let MultitaskCloseWindowRequested = Notification.Name.init("MultitaskCloseWindowRequested")
+    /// LC spent more than 10s in the background and every per-app
+    /// lock grant has been revoked (Ann 2026-11-25). The dock
+    /// manager (if it exists) listens so it can re-verify a locked
+    /// app that is still sitting in front.
+    static let AppAccessSessionExpired = Notification.Name.init("AppAccessSessionExpired")
 }
 
 public enum LCTabIdentifier: Hashable {

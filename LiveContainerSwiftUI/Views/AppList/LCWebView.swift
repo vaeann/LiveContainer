@@ -293,10 +293,9 @@ struct LCWebView: View {
             return
         }
         
-        if appToLaunch.appInfo.isLocked && !sharedModel.isHiddenAppUnlocked {
-            
+        if appToLaunch.appInfo.isLocked && !sharedModel.isAppAccessGranted(appToLaunch.appInfo) {
             do {
-                if !(try await LCUtils.authenticateUser()) {
+                if !(try await LCUtils.authenticateUserPerApp()) {
                     return
                 }
             } catch {
@@ -304,6 +303,7 @@ struct LCWebView: View {
                 errorShow = true
                 return
             }
+            sharedModel.grantAppAccess(appToLaunch.appInfo)
         }
         
         runAppAlertMsg = "lc.webView.pageLaunch %@".localizeWithFormat(appToLaunch.appInfo.displayName()!)
@@ -338,9 +338,9 @@ struct LCWebView: View {
             return
         }
         
-        if appToLaunch.appInfo.isLocked && !sharedModel.isHiddenAppUnlocked {
+        if appToLaunch.appInfo.isLocked && !sharedModel.isAppAccessGranted(appToLaunch.appInfo) {
             do {
-                if !(try await LCUtils.authenticateUser()) {
+                if !(try await LCUtils.authenticateUserPerApp()) {
                     return
                 }
             } catch {
@@ -348,6 +348,7 @@ struct LCWebView: View {
                 errorShow = true
                 return
             }
+            sharedModel.grantAppAccess(appToLaunch.appInfo)
         }
         
         runAppAlertMsg = "lc.webView.pageCanBeOpenIn %@".localizeWithFormat(appToLaunch.appInfo.displayName()!)

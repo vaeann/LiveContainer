@@ -394,6 +394,48 @@ class AppInfoProvider {
             name: UIDevice.orientationDidChangeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appAccessSessionExpired),
+            name: NSNotification.AppAccessSessionExpired,
+            object: nil
+        )
+    }
+
+    /// Per-app lock gate for dock-driven switches (Ann
+    /// 2026-11-25): true when the app may come to the front —
+    /// not locked, already granted for this visit, or verified
+    /// just now. A refused or failed verification leaves
+    /// everything exactly as it was.
+    func ensureDockAppAccess(_ app: DockAppModel) async -> Bool {
+        guard let info = app.appInfo, info.isLocked else { return true }
+        let model = DataManager.shared.model
+        if model.isAppAccessGranted(info) { return true }
+        do {
+            if try await LCUtils.authenticateUserPerApp() {
+                model.grantAppAccess(info)
+                return true
+            }
+        } catch { }
+        return false
+    }
+
+    /// LC came back from >10s in the background and SharedModel
+    /// has already revoked every grant. If a locked app is still
+    /// sitting in front, verify right away; a refusal sends it
+    /// back to the LC home screen instead of leaving its content
+    /// on display unverified.
+    @objc private func appAccessSessionExpired() {
+        guard let uuid = frontAppUUID,
+              let app = apps.first(where: { $0.appUUID == uuid }),
+              let info = app.appInfo, info.isLocked else { return }
+        Task { @MainActor in
+            if await ensureDockAppAccess(app) {
+                // Verified: the visit continues.
+            } else {
+                minimizeAllWindows()
+            }
+        }
     }
     
     deinit {
@@ -1079,6 +1121,12 @@ class AppInfoProvider {
     
     @objc public func minimizeAllWindows(except: DecoratedAppSceneViewController? = nil) {
         noteDockInteraction()
+        // Going home ends every app's visit: all per-app lock
+        // grants are revoked (Ann 2026-11-25). The front-change
+        // ledger in updateStatusBarFix would catch the departures
+        // as the windows minimize; doing it here makes the home
+        // action itself the guarantee.
+        DataManager.shared.model.revokeAllAppAccess()
         DispatchQueue.main.async {
             self.apps.forEach { app in
                 if let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController,
@@ -1151,6 +1199,16 @@ class AppInfoProvider {
             // press can also resume it from the home screen.
             if let old = frontAppUUID {
                 previousAppUUID = old
+                // Leaving an app re-locks it (Ann 2026-11-25):
+                // its per-app verification grant ends here, so
+                // coming back — by dock, list or orb — verifies
+                // again. This front-change ledger is the one
+                // place every departure passes through (switch,
+                // minimize, close, home).
+                if let departed = apps.first(where: { $0.appUUID == old }),
+                   let info = departed.appInfo, info.isLocked {
+                    DataManager.shared.model.revokeAppAccess(info)
+                }
             }
             frontAppUUID = frontUUID
         }
@@ -1348,6 +1406,22 @@ public struct MultitaskDockSwiftView: View {
                         LongPressGesture(minimumDuration: 0.5)
                             .onEnded { _ in
                                 collapsedLongPressTriggered = true
+                                // Per-app lock gate (Ann 2026-11-25):
+                                // the previous app re-locked when it
+                                // left the front, so jumping back to a
+                                // locked one verifies first.
+                                if let prev = dockManager.previousAppUUID,
+                                   let prevApp = dockManager.apps.first(where: { $0.appUUID == prev }),
+                                   let info = prevApp.appInfo, info.isLocked,
+                                   !DataManager.shared.model.isAppAccessGranted(info) {
+                                    Task { @MainActor in
+                                        if await dockManager.ensureDockAppAccess(prevApp),
+                                           dockManager.switchToPreviousApp() {
+                                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                        }
+                                    }
+                                    return
+                                }
                                 if dockManager.switchToPreviousApp() {
                                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 }
@@ -1696,16 +1770,33 @@ struct AppIconView: View {
                         handleFrontAppTap()
                         return
                     }
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: iconRect)
-                    // Switching to an app finishes the dock's job:
-                    // collapse it (Ann's 保底 collapse — covers the
-                    // case where tap-outside never fires). The cycle
-                    // button deliberately stays expanded for repeated
-                    // flipping; a direct icon tap does not.
-                    if brought && !dockManager.isCollapsed {
-                        dockManager.toggleDockCollapse()
+                    func proceed() {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        let brought = dockManager.bringMultitaskViewToFront(uuid: app.appUUID, from: iconRect)
+                        // Switching to an app finishes the dock's job:
+                        // collapse it (Ann's 保底 collapse — covers the
+                        // case where tap-outside never fires). The cycle
+                        // button deliberately stays expanded for repeated
+                        // flipping; a direct icon tap does not.
+                        if brought && !dockManager.isCollapsed {
+                            dockManager.toggleDockCollapse()
+                        }
                     }
+                    // Per-app lock gate (Ann 2026-11-25): a locked
+                    // app that left the front was re-locked when it
+                    // left, so switching back verifies first.
+                    // Unlocked (or still-granted) apps keep the
+                    // exact synchronous path.
+                    if let info = app.appInfo, info.isLocked,
+                       !DataManager.shared.model.isAppAccessGranted(info) {
+                        Task { @MainActor in
+                            if await dockManager.ensureDockAppAccess(app) {
+                                proceed()
+                            }
+                        }
+                        return
+                    }
+                    proceed()
                 },
                 onCancelled: {
                     isPressed = false

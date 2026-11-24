@@ -129,6 +129,30 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     }
 
     @objc private func runButtonTapped() {
+        // Per-app lock gate first (Ann 2026-11-25), ahead of the
+        // already-running shortcut: a locked app that left the
+        // front was re-locked when it left.
+        let appInfo = configuration.model.appInfo
+        if appInfo.isLocked && !DataManager.shared.model.isAppAccessGranted(appInfo) {
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    if !(try await LCUtils.authenticateUserPerApp()) {
+                        return
+                    }
+                } catch {
+                    showError(error.localizedDescription)
+                    return
+                }
+                DataManager.shared.model.grantAppAccess(appInfo)
+                proceedWithRunButton()
+            }
+            return
+        }
+        proceedWithRunButton()
+    }
+
+    private func proceedWithRunButton() {
         if #available(iOS 16.0, *),
            let currentDataFolder = configuration.model.uiSelectedContainer?.folderName,
            MultitaskManager.isUsing(container: currentDataFolder) {
@@ -150,15 +174,16 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
     }
 
     private func runApp(multitask: Bool? = nil) async {
-        if configuration.model.appInfo.isLocked && !DataManager.shared.model.isHiddenAppUnlocked {
+        if configuration.model.appInfo.isLocked && !DataManager.shared.model.isAppAccessGranted(configuration.model.appInfo) {
             do {
-                if !(try await LCUtils.authenticateUser()) {
+                if !(try await LCUtils.authenticateUserPerApp()) {
                     return
                 }
             } catch {
                 showError(error.localizedDescription)
                 return
             }
+            DataManager.shared.model.grantAppAccess(configuration.model.appInfo)
         }
 
         do {
