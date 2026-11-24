@@ -51,7 +51,7 @@ struct LCTabView: View {
                 }
                 .tag(LCTabIdentifier.settings)
         }
-        .downloadCapsule(helper: downloadHelper)
+        .downloadCapsule(helper: downloadHelper, sharedModel: sharedModel)
         .environmentObject(downloadHelper)
         .alert("lc.common.error".loc, isPresented: $errorShow){
             Button("lc.common.ok".loc, action: {

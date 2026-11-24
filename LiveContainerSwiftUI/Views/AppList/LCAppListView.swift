@@ -575,6 +575,36 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // itself through DownloadHelper's cancelled flag.
             installQueue.removeAll()
             downloadHelper.queuedInstallCount = 0
+            downloadHelper.clearAllSourceInstallStates()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallCancelJobNotification)) { obj in
+            // One app's download cancelled from its source row
+            // (Ann 2026-11-25): a waiting job just leaves the
+            // queue; the running one is stopped through the
+            // helper's per-job cancel, which leaves the rest of
+            // the queue alone.
+            guard let bundleID = obj.object as? String else { return }
+            if let idx = installQueue.firstIndex(where: { job in
+                if case .url(_, _, _, _, let bid, _) = job { return bid == bundleID }
+                return false
+            }) {
+                installQueue.remove(at: idx)
+                downloadHelper.queuedInstallCount = installQueue.count
+                downloadHelper.clearSourceInstallState(bundleID)
+            } else if downloadHelper.activeSourceBundleID == bundleID {
+                downloadHelper.cancelCurrentJob()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallPrioritizeJobNotification)) { obj in
+            // Move one waiting job to the front of the queue
+            // (Ann 2026-11-25, App Store's Prioritize Download).
+            guard let bundleID = obj.object as? String,
+                  let idx = installQueue.firstIndex(where: { job in
+                      if case .url(_, _, _, _, let bid, _) = job { return bid == bundleID }
+                      return false
+                  }), idx > 0 else { return }
+            let job = installQueue.remove(at: idx)
+            installQueue.insert(job, at: 0)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.ShowInstallSummaryNotification)) { _ in
             // Tapped on the batch-with-failures success card.
@@ -1254,6 +1284,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         installQueue.append(job)
         downloadHelper.queuedInstallCount = installQueue.count
+        // Source rows show a queued ring for this app right away
+        // (Ann 2026-11-25).
+        if case .url(_, _, _, _, let bundleID, _) = job, let bundleID {
+            downloadHelper.setSourceInstallState(bundleID, .queued)
+        }
         Task { await processInstallQueue() }
     }
 
@@ -1310,13 +1345,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             if jobAborted {
                 sessionAbortedJobs += 1
             }
+            // Same accounting for a job cancelled from its source
+            // row (Ann 2026-11-25) — except the session carries on
+            // with the rest of the queue.
+            let jobCancelled = downloadHelper.consumeCurrentJobCancelled()
+            if jobCancelled {
+                sessionAbortedJobs += 1
+            }
             if downloadHelper.cancelled {
                 // The user stopped this job (and drained the rest
                 // of the queue): it counts as neither success nor
                 // failure, and no success card is shown for the
                 // session — failures already recorded still are.
                 sessionWasCancelled = true
-            } else if !jobFailed && !jobAborted {
+            } else if !jobFailed && !jobAborted && !jobCancelled {
                 switch job {
                 case .url(_, _, _, let autoReplace, let bundleID, let version):
                     // The card's Open button must name the app that
@@ -1329,6 +1371,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 case .file:
                     sessionSuccesses.append((name: job.displayName, isUpdate: false, version: nil, bundleID: nil, isLocalFile: true))
                 }
+            }
+            // The job's source row goes back to its plain button
+            // (or to Open, once the refreshed app list lands).
+            if case .url(_, _, _, _, let bundleID, _) = job, let bundleID {
+                downloadHelper.clearSourceInstallState(bundleID)
             }
             currentInstallJobKey = nil
         }
@@ -1563,6 +1610,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
             downloadHelper.downloadName = downloadName ?? installUrl.lastPathComponent
             downloadHelper.downloadIconURL = downloadIconURL
+            // The source row's ring takes over from here: it reads
+            // the helper's progress for this bundle ID (Ann
+            // 2026-11-25).
+            if let bundleID {
+                downloadHelper.activeSourceBundleID = bundleID
+                downloadHelper.setSourceInstallState(bundleID, .downloading)
+            }
             do {
                 try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record.id)
             } catch {
@@ -1571,12 +1625,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 throw error
             }
-            if downloadHelper.cancelled {
+            if downloadHelper.cancelled || downloadHelper.currentJobCancelled {
                 store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 return
             }
             store.markCompleted(record)
             downloadHelper.isInstallingPhase = true
+            if let bundleID {
+                downloadHelper.setSourceInstallState(bundleID, .installing)
+            }
             try await installIpaFile(destinationURL)
             finalizeDownloadRecord(record)
         } catch is InstallUserAbort {

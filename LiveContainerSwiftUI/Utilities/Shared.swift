@@ -305,6 +305,11 @@ extension NSNotification {
     static let InstallLocalFileNotification = Notification.Name.init("InstallLocalFileNotification")
     static let InstallAppQueueNotification = Notification.Name.init("InstallAppQueueNotification")
     static let InstallCancelAllNotification = Notification.Name.init("InstallCancelAllNotification")
+    /// Per-app queue controls from a source row's menu (Ann
+    /// 2026-11-25, App Store parity): the object is the bundle ID
+    /// of the job to cancel / move to the front of the queue.
+    static let InstallCancelJobNotification = Notification.Name.init("InstallCancelJobNotification")
+    static let InstallPrioritizeJobNotification = Notification.Name.init("InstallPrioritizeJobNotification")
     static let ShowInstallSummaryNotification = Notification.Name.init("ShowInstallSummaryNotification")
     static let OpenInstalledAppNotification = Notification.Name.init("OpenInstalledAppNotification")
     static let MultitaskRunningAppsChanged = Notification.Name.init("MultitaskRunningAppsChanged")

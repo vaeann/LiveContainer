@@ -7,6 +7,18 @@
 
 import SwiftUI
 
+/// Per-app install phase shown on a source row (Ann 2026-11-25):
+/// tapping GET no longer jumps to the apps tab — the row's button
+/// turns into an App Store-style progress ring driven by this
+/// state, published per bundle ID by the install pipeline. The
+/// paused sub-state is not a phase: it is isPaused below, and it
+/// can only apply to the one active download.
+enum LCSourceInstallPhase: Equatable {
+    case queued
+    case downloading
+    case installing
+}
+
 public final class DownloadHelper : NSObject, ObservableObject {
     @Published var downloadProgress : Float = 0.0
     @Published var downloadedSize : Int64 = 0
@@ -40,6 +52,21 @@ public final class DownloadHelper : NSObject, ObservableObject {
     /// few seconds unless the card is persistent (batch with
     /// failures — tapping it opens the failure summary).
     @Published var installCompletion : InstallCompletion? = nil
+    /// Source-row install states by bundle ID (Ann 2026-11-25):
+    /// set when a URL job is queued, advanced by the install
+    /// flow, cleared when the job ends. Rows with an entry show
+    /// the progress ring instead of the GET capsule.
+    @Published var sourceInstallStates: [String: LCSourceInstallPhase] = [:]
+    /// Bundle ID of the job whose download currently owns the
+    /// single transfer slot (progress/pause readouts belong to
+    /// it); nil while a library-page resume owns the slot.
+    var activeSourceBundleID: String? = nil
+    /// Set by cancelCurrentJob(): the running job — and only it —
+    /// was cancelled from its source row. The queue processor
+    /// consumes the flag and counts the job as aborted, then
+    /// carries on with the rest of the queue (unlike `cancelled`,
+    /// which drains everything).
+    private(set) var currentJobCancelled = false
     private var downloadTask: URLSessionDownloadTask?
     private var continuation: UnsafeContinuation<(), Never>?
     private var activeError: Error? = nil
@@ -129,6 +156,7 @@ public final class DownloadHelper : NSObject, ObservableObject {
         activeURL = url
         pauseRequested = false
         pausedResumeData = nil
+        currentJobCancelled = false
 
         await MainActor.run {
             cancelled = false
@@ -222,10 +250,61 @@ public final class DownloadHelper : NSObject, ObservableObject {
         downloadTask?.resume()
     }
 
+    // MARK: - Source-row install states (Ann 2026-11-25)
+
+    func setSourceInstallState(_ bundleID: String, _ phase: LCSourceInstallPhase) {
+        sourceInstallStates[bundleID] = phase
+    }
+
+    func clearSourceInstallState(_ bundleID: String) {
+        sourceInstallStates[bundleID] = nil
+        if activeSourceBundleID == bundleID {
+            activeSourceBundleID = nil
+        }
+    }
+
+    func clearAllSourceInstallStates() {
+        sourceInstallStates = [:]
+        activeSourceBundleID = nil
+    }
+
+    /// Cancels ONLY the job whose download is running (or paused)
+    /// — the rest of the queue is untouched. Mirrors cancel()'s
+    /// two shapes: a live task is cancelled producing resume data
+    /// (the interrupted package stays resumable in the library),
+    /// and a paused download's parked waiter is resumed directly.
+    /// The install flow sees currentJobCancelled where it checks
+    /// the cancelled flag and stops this job without an error.
+    func cancelCurrentJob() {
+        guard isDownloading || continuation != nil else { return }
+        currentJobCancelled = true
+        isPaused = false
+        pauseRequested = false
+        if let downloadTask {
+            downloadTask.cancel(byProducingResumeData: { [weak self] data in
+                if let data {
+                    self?.lastResumeData = data
+                }
+            })
+        } else if let continuation {
+            continuation.resume()
+            self.continuation = nil
+        }
+        isDownloading = false
+    }
+
+    /// Reads and resets the per-job cancel flag (queue processor,
+    /// once per finished job).
+    func consumeCurrentJobCancelled() -> Bool {
+        defer { currentJobCancelled = false }
+        return currentJobCancelled
+    }
+
     func cancel() {
         cancelled = true
         isPaused = false
         pauseRequested = false
+        clearAllSourceInstallStates()
         if let downloadTask {
             // Producing resume data lets the downloads page offer
             // to continue this download later; the completion
@@ -325,6 +404,9 @@ extension DownloadHelper: URLSessionDownloadDelegate {
             if cancelled {
                 // User cancel is not an error for the waiter;
                 // the install flow sees the cancelled flag.
+            } else if currentJobCancelled {
+                // Same for a per-job cancel from a source row:
+                // not an error; the flow sees the flag.
             } else if activeError == nil {
                 activeError = error
             }
@@ -666,6 +748,7 @@ struct CompletionCapsule: View {
 
 public struct DownloadCapsuleModifier: ViewModifier {
     @ObservedObject var helper : DownloadHelper
+    @ObservedObject var sharedModel: SharedModel
     @EnvironmentObject var sceneDelegate: SceneDelegate
     @State var show = false
 
@@ -685,10 +768,16 @@ public struct DownloadCapsuleModifier: ViewModifier {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .onAppear {
+                refreshShow()
+            }
             .onChange(of: helper.isDownloading) { _ in
                 refreshShow()
             }
             .onChange(of: helper.isInstallSessionActive) { _ in
+                refreshShow()
+            }
+            .onChange(of: sharedModel.selectedTab) { _ in
                 refreshShow()
             }
             .onChange(of: helper.installCompletion) { completion in
@@ -713,9 +802,18 @@ public struct DownloadCapsuleModifier: ViewModifier {
     // The capsule lives for the whole install session — downloads
     // and the install phases in between — and then hands its
     // place to the success card when the session report sets one.
+    // While the sources tab is on screen the PROGRESS form stays
+    // hidden (Ann 2026-11-25): each row's button is the progress
+    // ring there, so the capsule would only duplicate it and
+    // cover the list. Leaving the tab hands progress back to the
+    // capsule. Result cards (success / batch failures) show on
+    // every tab — they are outcomes, not progress.
     private func refreshShow() {
+        let resultCard = helper.installCompletion != nil && !helper.isInstallSessionActive
+        let progress = (helper.isDownloading || helper.isInstallSessionActive)
+            && sharedModel.selectedTab != .sources
         withAnimation(.easeInOut(duration: 0.25)) {
-            show = helper.isDownloading || helper.isInstallSessionActive || helper.installCompletion != nil
+            show = resultCard || progress
         }
     }
 
@@ -727,8 +825,8 @@ public struct DownloadCapsuleModifier: ViewModifier {
 }
 
 extension View {
-    public func downloadCapsule(helper: DownloadHelper) -> some View {
-        self.modifier(DownloadCapsuleModifier(helper: helper))
+    public func downloadCapsule(helper: DownloadHelper, sharedModel: SharedModel) -> some View {
+        self.modifier(DownloadCapsuleModifier(helper: helper, sharedModel: sharedModel))
     }
 
     /// The shared material-card look of the progress capsule and
