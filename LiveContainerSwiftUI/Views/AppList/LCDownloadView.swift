@@ -825,7 +825,10 @@ public struct DownloadCapsuleModifier: ViewModifier {
 }
 
 extension View {
-    public func downloadCapsule(helper: DownloadHelper, sharedModel: SharedModel) -> some View {
+    // Internal, not public: SharedModel is an internal type, so
+    // a public signature cannot name it (build error caught
+    // 2026-11-25). The only caller is in this module anyway.
+    func downloadCapsule(helper: DownloadHelper, sharedModel: SharedModel) -> some View {
         self.modifier(DownloadCapsuleModifier(helper: helper, sharedModel: sharedModel))
     }
 
