@@ -82,6 +82,12 @@ public final class DownloadHelper : ObservableObject {
         continuation = nil
         downloadTask?.cancel()
         isDownloading = false
+        // Cancelling a download also cancels every install still
+        // waiting in the serial install queue (Ann 2026-11-24: the
+        // capsule's x means stop everything, not just this one).
+        // The app list observes this and drains its pending jobs;
+        // the running job aborts itself via the cancelled flag.
+        NotificationCenter.default.post(name: NSNotification.InstallCancelAllNotification, object: nil)
     }
 }
 

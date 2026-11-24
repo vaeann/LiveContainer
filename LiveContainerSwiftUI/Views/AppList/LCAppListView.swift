@@ -63,6 +63,29 @@ struct LCRunningCloseBadge: View {
     }
 }
 
+/// One unit of install work for the serial install pipeline.
+/// Every install entry point (source install, update-all, manual
+/// URL, itms-services plist, picked IPA file) enqueues a job here
+/// instead of installing directly, and a single processor drains
+/// the queue one job at a time — so a request that arrives while
+/// another install is running waits its turn instead of being
+/// silently dropped by the old busy gate (Ann 2026-11-24).
+enum InstallJob {
+    case url(urlStr: String, name: String?, iconURL: URL?, autoReplace: Bool)
+    case file(URL)
+
+    /// Identity used to drop duplicate requests (e.g. update-all
+    /// tapped twice): the same URL or file is never queued twice.
+    var dedupeKey: String {
+        switch self {
+        case .url(let urlStr, _, _, _):
+            return "url:\(urlStr)"
+        case .file(let fileUrl):
+            return "file:\(fileUrl.path)"
+        }
+    }
+}
+
 struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var didAppear = false
     // ipa choosing stuff
@@ -76,7 +99,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var installObserver : NSKeyValueObservation?
 
     // serial install queue (used by the sources page's "update all")
-    @State var installQueue: [(url: URL, name: String?, iconURL: URL?)] = []
+    @State var installQueue: [InstallJob] = []
+    @State var currentInstallJobKey: String? = nil
     @State var isInstallQueueRunning = false
     // when true, the next install silently replaces the same-bundle app
     // instead of asking which bundle to replace
@@ -357,7 +381,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             Text(errorInfo)
         }
         .betterFileImporter(isPresented: $choosingIPA, types: [.ipa, .tipa], multiple: false, callback: { fileUrls in
-            Task { await startInstallApp(fileUrls[0]) }
+            enqueueInstall(.file(fileUrls[0]))
         }, onDismiss: {
             choosingIPA = false
         })
@@ -496,21 +520,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let installUrl = obj2["url"] as? URL {
                 let autoReplace = obj2["autoReplace"] as? Bool ?? false
-                Task {
-                    autoReplaceNextInstall = autoReplace
-                    await installFromUrl(urlStr: installUrl.absoluteString, downloadName: obj2["name"] as? String, downloadIconURL: obj2["iconURL"] as? URL)
-                    autoReplaceNextInstall = false
-                }
+                enqueueInstall(.url(urlStr: installUrl.absoluteString, name: obj2["name"] as? String, iconURL: obj2["iconURL"] as? URL, autoReplace: autoReplace))
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppQueueNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let items = obj2["items"] as? [[String: Any]] {
-                installQueue.append(contentsOf: items.compactMap { item in
-                    guard let url = item["url"] as? URL else { return nil }
-                    return (url: url, name: item["name"] as? String, iconURL: item["iconURL"] as? URL)
-                })
-                Task { await processInstallQueue() }
+                for item in items {
+                    guard let url = item["url"] as? URL else { continue }
+                    enqueueInstall(.url(urlStr: url.absoluteString, name: item["name"] as? String, iconURL: item["iconURL"] as? URL, autoReplace: true))
+                }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallCancelAllNotification)) { _ in
+            // The user cancelled from the download capsule: drop
+            // everything still waiting. The running job aborts
+            // itself through DownloadHelper's cancelled flag.
+            installQueue.removeAll()
         }
         .searchable(text: $searchContext.query)
 
@@ -845,7 +870,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
 
     
-    func startInstallApp(_ fileUrl:URL) async {
+    /// Runs one local-file install job. Only ever called by the
+    /// serial queue processor — entry points enqueue instead.
+    func performInstallApp(_ fileUrl:URL) async {
         do {
             self.installprogressVisible = true
             try await installIpaFile(fileUrl)
@@ -1048,29 +1075,49 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             await installFromPlist(urlStr: installUrlStr)
             return
         }
-        await installFromUrl(urlStr: installUrlStr)
+        enqueueInstall(.url(urlStr: installUrlStr, name: nil, iconURL: nil, autoReplace: false))
     }
     
     /// Drain the serial install queue one app at a time. installFromUrl
     /// drops requests while another install runs, so queued installs must
     /// await each other; every queued install auto-replaces its old version.
+    /// Adds one job to the serial install pipeline and kicks the
+    /// processor. Duplicates of the running or an already-waiting
+    /// job are ignored, so no request is ever lost or doubled.
+    func enqueueInstall(_ job: InstallJob) {
+        let key = job.dedupeKey
+        guard currentInstallJobKey != key,
+              !installQueue.contains(where: { $0.dedupeKey == key }) else {
+            return
+        }
+        installQueue.append(job)
+        Task { await processInstallQueue() }
+    }
+
+    /// The single install processor: drains the queue strictly
+    /// one job at a time. This is the only place the perform*
+    /// install functions are called from, which is what makes the
+    /// pipeline serial.
     func processInstallQueue() async {
         guard !isInstallQueueRunning else { return }
         isInstallQueueRunning = true
         defer { isInstallQueueRunning = false }
         while !installQueue.isEmpty {
-            let item = installQueue.removeFirst()
-            autoReplaceNextInstall = true
-            await installFromUrl(urlStr: item.url.absoluteString, downloadName: item.name, downloadIconURL: item.iconURL)
-            autoReplaceNextInstall = false
+            let job = installQueue.removeFirst()
+            currentInstallJobKey = job.dedupeKey
+            switch job {
+            case .url(let urlStr, let name, let iconURL, let autoReplace):
+                autoReplaceNextInstall = autoReplace
+                await performInstallFromUrl(urlStr: urlStr, downloadName: name, downloadIconURL: iconURL)
+                autoReplaceNextInstall = false
+            case .file(let fileUrl):
+                await performInstallApp(fileUrl)
+            }
+            currentInstallJobKey = nil
         }
     }
 
     func installFromPlist(urlStr: String) async {
-        if self.installprogressVisible {
-            return
-        }
-        
         if sharedModel.multiLCStatus == 2 {
             errorInfo = "lc.appList.manageInPrimaryTip".loc
             errorShow = true
@@ -1124,20 +1171,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 return
             }
             
-            await installFromUrl(urlStr: ipaUrlStr)
-            
+            enqueueInstall(.url(urlStr: ipaUrlStr, name: nil, iconURL: nil, autoReplace: false))
+
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
         }
     }
     
-    func installFromUrl(urlStr: String, downloadName: String? = nil, downloadIconURL: URL? = nil) async {
-        // ignore any install request if we are installing another app
-        if self.installprogressVisible {
-            return
-        }
-        
+    /// Downloads (when remote) and installs one URL job. Only
+    /// ever called by the serial queue processor, so installs can
+    /// never overlap — the old "drop the request while busy" gate
+    /// is gone because the queue now provides the serialization.
+    func performInstallFromUrl(urlStr: String, downloadName: String? = nil, downloadIconURL: URL? = nil) async {
+
         if sharedModel.multiLCStatus == 2 {
             errorInfo = "lc.appList.manageInPrimaryTip".loc
             errorShow = true
@@ -1465,7 +1512,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     func handleURL(url : URL) {
         if url.isFileURL {
-            Task { await installFromUrl(urlStr: url.absoluteString) }
+            enqueueInstall(.url(urlStr: url.absoluteString, name: nil, iconURL: nil, autoReplace: false))
             return
         }
         
@@ -1523,7 +1570,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     }
                 }
                 if let installUrl {
-                    Task { await installFromUrl(urlStr: installUrl) }
+                    enqueueInstall(.url(urlStr: installUrl, name: nil, iconURL: nil, autoReplace: false))
                 }
             }
         }
