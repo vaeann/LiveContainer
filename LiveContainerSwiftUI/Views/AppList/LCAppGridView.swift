@@ -275,46 +275,21 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         badgeButton.isHidden = !showBadge
     }
 
-    private func makeRibbonBackground() -> UIView {
-        if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled, !ribbonGlassSuspended {
+    private func rebuildRibbon() {
+        ribbonBackground?.removeFromSuperview()
+        ribbonBackground = nil
+        if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
             let effect = UIGlassEffect(style: .regular)
             effect.tintColor = UIColor.black.withAlphaComponent(0.3)
             let glass = UIVisualEffectView(effect: effect)
-            return glass
+            ribbonView.insertSubview(glass, at: 0)
+            ribbonBackground = glass
+        } else {
+            let band = UIView()
+            band.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+            ribbonView.insertSubview(band, at: 0)
+            ribbonBackground = band
         }
-        let band = UIView()
-        band.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        return band
-    }
-
-    private func installRibbonBackground() {
-        ribbonBackground?.removeFromSuperview()
-        let background = makeRibbonBackground()
-        ribbonView.insertSubview(background, at: 0)
-        ribbonBackground = background
-        setNeedsLayout()
-    }
-
-    /// While the context menu is up, the lifted picture is a
-    /// snapshot, and a snapshot cannot capture the ribbon's live
-    /// glass — its backdrop blur is composited live, so the band
-    /// renders flattened in the snapshot and alive again in the
-    /// real icon, and the swap back when the menu closes flashes
-    /// (Ann 2026-11-25: the flash is only on close, around the
-    /// icon's middle). Suspending the glass for the menu's whole
-    /// life makes the lifted picture and the real picture the
-    /// same picture.
-    private var ribbonGlassSuspended = false
-
-    private func setRibbonGlassSuspended(_ suspended: Bool) {
-        guard ribbonGlassSuspended != suspended else { return }
-        ribbonGlassSuspended = suspended
-        guard ribbonSpec.visible else { return }
-        installRibbonBackground()
-    }
-
-    private func rebuildRibbon() {
-        installRibbonBackground()
         for subview in ribbonStack.arrangedSubviews {
             ribbonStack.removeArrangedSubview(subview)
             subview.removeFromSuperview()
@@ -425,10 +400,6 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         // (or mid-launch) when the hold began.
         inMenu = true
         applyDim()
-        // Before the snapshot is taken: the ribbon's glass goes
-        // flat so the snapshot and the real icon agree (see
-        // setRibbonGlassSuspended).
-        setRibbonGlassSuspended(true)
         return targetedPreview()
     }
 
@@ -442,15 +413,6 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
                                 animator: UIContextMenuInteractionAnimating?) {
         inMenu = false
         applyDim()
-        // The glass comes back only once the returned snapshot
-        // is fully gone, so the swap itself stays invisible.
-        if let animator {
-            animator.addCompletion { [weak self] in
-                self?.setRibbonGlassSuspended(false)
-            }
-        } else {
-            setRibbonGlassSuspended(false)
-        }
     }
 
     private func targetedPreview() -> UITargetedPreview {
