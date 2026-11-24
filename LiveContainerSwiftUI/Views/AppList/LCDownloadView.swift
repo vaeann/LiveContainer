@@ -439,6 +439,36 @@ extension DownloadHelper: URLSessionDownloadDelegate {
     }
 }
 
+/// Confirmation shown before EVERY cancel-download action
+/// (Ann 2026-11-25): a source row's per-job cancel and the
+/// capsule's cancel-all alike ask first — a cancel deletes the
+/// package now, so it must never be one stray tap. Presented
+/// from the topmost view controller so it works from any tab,
+/// like the install replace prompt; the async hop lets a
+/// context menu finish dismissing before the alert appears.
+func lcConfirmCancelDownload(_ action: @escaping () -> Void) {
+    DispatchQueue.main.async {
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        var presenter = keyWindow?.rootViewController
+        while let presented = presenter?.presentedViewController {
+            presenter = presented
+        }
+        guard let presenter else { return }
+        let alert = UIAlertController(
+            title: "lc.download.cancelConfirm.title".loc,
+            message: nil,
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "lc.common.no".loc, style: .cancel))
+        alert.addAction(UIAlertAction(title: "lc.common.yes".loc, style: .destructive) { _ in
+            action()
+        })
+        presenter.present(alert, animated: true)
+    }
+}
+
 // Floating download progress capsule (Ann 2026-11-24, plan A):
 // replaces the old full-screen DownloadAlert, whose dim layer
 // swallowed every touch and froze the whole app for the length of
@@ -556,7 +586,9 @@ struct DownloadCapsule : View {
     }
 
     func cancelDownload() {
-        helper.cancel()
+        lcConfirmCancelDownload {
+            helper.cancel()
+        }
     }
 
     func togglePause() {

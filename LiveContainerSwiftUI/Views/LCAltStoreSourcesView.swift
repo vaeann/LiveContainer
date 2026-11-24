@@ -1575,7 +1575,10 @@ private struct LCSourceAppBanner: View {
                 }
                 if phase == .queued || phase == .downloading {
                     Button(role: .destructive) {
-                        NotificationCenter.default.post(name: NSNotification.InstallCancelJobNotification, object: app.bundleIdentifier)
+                        let bundleID = app.bundleIdentifier
+                        lcConfirmCancelDownload {
+                            NotificationCenter.default.post(name: NSNotification.InstallCancelJobNotification, object: bundleID)
+                        }
                     } label: {
                         Label("lc.sources.action.cancelDownload".loc, systemImage: "xmark.circle")
                     }
