@@ -294,7 +294,7 @@ extension DownloadHelper: URLSessionDownloadDelegate {
         // before the pause landed — fall through and complete
         // normally; cancelled means the close button overtook
         // the pause — also normal processing.)
-        if pauseRequested, !cancelled, error != nil {
+        if pauseRequested, !cancelled, let error {
             if let resumeData = (error as NSError).userInfo["NSURLSessionDownloadTaskResumeData"] as? Data {
                 pausedResumeData = resumeData
                 lastResumeData = resumeData
