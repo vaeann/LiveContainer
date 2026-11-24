@@ -117,7 +117,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     // failure while the queue is still running.
     @State var sessionTotalJobs = 0
     @State var sessionFailures: [(jobKey: String, name: String, error: String)] = []
-    @State var sessionSuccesses: [(name: String, isUpdate: Bool, version: String?, bundleID: String?)] = []
+    @State var sessionSuccesses: [(name: String, isUpdate: Bool, version: String?, bundleID: String?, isLocalFile: Bool)] = []
     @State var sessionWasCancelled = false
     @State var batchSummaryShow = false
     @State var batchSummaryText = ""
@@ -1202,9 +1202,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             } else if !jobFailed {
                 switch job {
                 case .url(_, _, _, let autoReplace, let bundleID, let version):
-                    sessionSuccesses.append((name: job.displayName, isUpdate: autoReplace, version: version, bundleID: bundleID))
+                    sessionSuccesses.append((name: job.displayName, isUpdate: autoReplace, version: version, bundleID: bundleID, isLocalFile: false))
                 case .file:
-                    sessionSuccesses.append((name: job.displayName, isUpdate: false, version: nil, bundleID: nil))
+                    sessionSuccesses.append((name: job.displayName, isUpdate: false, version: nil, bundleID: nil, isLocalFile: true))
                 }
             }
             currentInstallJobKey = nil
@@ -1234,7 +1234,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 errorInfo = failure.error
                 errorShow = true
             } else if !cancelled, let success = successes.first {
-                downloadHelper.installCompletion = .single(name: success.name, isUpdate: success.isUpdate, version: success.version, bundleID: success.bundleID)
+                downloadHelper.installCompletion = success.isLocalFile
+                    ? .localFile(name: success.name)
+                    : .single(name: success.name, isUpdate: success.isUpdate, version: success.version, bundleID: success.bundleID)
             }
             return
         }

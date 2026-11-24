@@ -16010,6 +16010,29 @@
         }
       }
     },
+    "lc.download.installCompleteTitle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install Complete"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安装完成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "安裝完成"
+          }
+        }
+      }
+    },
     "lc.download.updated %@" : {
       "extractionState" : "manual",
       "localizations" : {

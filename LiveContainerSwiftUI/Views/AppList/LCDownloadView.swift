@@ -254,6 +254,16 @@ struct InstallCompletion: Equatable {
             bundleID: bundleID)
     }
 
+    /// A picked IPA file was not downloaded from anywhere, so it
+    /// gets its own title (Ann 2026-11-24) over the same green
+    /// check and "installed" line.
+    static func localFile(name: String) -> InstallCompletion {
+        return InstallCompletion(
+            kind: .installed,
+            title: "lc.download.installCompleteTitle".loc,
+            subtitle: "lc.download.installed %@".localizeWithFormat(name))
+    }
+
     static func batch(done: Int, failed: Int, updates: Int, installs: Int) -> InstallCompletion {
         // Only name the kinds that actually happened: a plain
         // update-all session is all updates, a queue of fresh
