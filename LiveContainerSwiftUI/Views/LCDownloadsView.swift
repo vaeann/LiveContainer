@@ -70,41 +70,54 @@ struct LCDownloadsView: View {
 
     @ViewBuilder
     private func row(for record: LCDownloadedPackage) -> some View {
-        Button {
+        // Not a row-wide Button: the row carries its own explicit
+        // install / resume button on the right (Ann 2026-11-24),
+        // and a Button inside a Button label would not receive
+        // its taps. The row body keeps the same tap action via a
+        // tap gesture; the trailing button consumes its own taps.
+        HStack(spacing: 12) {
+            iconView(for: record)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(record.appName)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(detailText(for: record))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !record.isComplete && record.totalBytes > 0 {
+                    ProgressView(value: Double(record.downloadedBytes), total: Double(record.totalBytes))
+                        .progressViewStyle(.linear)
+                }
+            }
+            Spacer()
+            if record.isComplete {
+                Button("lc.downloads.install".loc) {
+                    NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+            } else {
+                Button("lc.downloads.resume".loc) {
+                    downloadHelper.resumeDownload(record: record)
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
             if record.isComplete {
                 NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
             } else {
                 downloadHelper.resumeDownload(record: record)
             }
-        } label: {
-            HStack(spacing: 12) {
-                iconView(for: record)
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(record.appName)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(detailText(for: record))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if !record.isComplete && record.totalBytes > 0 {
-                        ProgressView(value: Double(record.downloadedBytes), total: Double(record.totalBytes))
-                            .progressViewStyle(.linear)
-                    }
-                }
-                Spacer()
-                if !record.isComplete {
-                    Text("lc.downloads.resume".loc)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button("lc.downloads.delete".loc, role: .destructive) {
                 store.remove(record)
