@@ -250,6 +250,29 @@ final class LCDownloadStore: ObservableObject {
         }
     }
 
+    /// Id-based entry points for the download engine, which
+    /// tracks records by id across relaunches.
+    func markCompleted(id: String) {
+        guard let current = packages.first(where: { $0.id == id }) else { return }
+        markCompleted(current)
+    }
+
+    func markPartial(id: String, downloadedBytes: Int64, totalBytes: Int64, resumeData: Data?) {
+        guard let current = packages.first(where: { $0.id == id }) else { return }
+        markPartial(current, downloadedBytes: downloadedBytes, totalBytes: totalBytes, resumeData: resumeData)
+    }
+
+    /// Progress-only refresh for a running download (no other
+    /// field changes, savedAt untouched).
+    func updateProgress(id: String, downloadedBytes: Int64, totalBytes: Int64) {
+        mutate(id) { updated in
+            updated.downloadedBytes = downloadedBytes
+            if totalBytes > 0 {
+                updated.totalBytes = totalBytes
+            }
+        }
+    }
+
     /// Marks a download interrupted, keeping whatever progress
     /// and resume data the system produced so the downloads page
     /// can offer to continue it.

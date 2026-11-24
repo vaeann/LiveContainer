@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-public final class DownloadHelper : ObservableObject {
+public final class DownloadHelper : NSObject, ObservableObject {
     @Published var downloadProgress : Float = 0.0
     @Published var downloadedSize : Int64 = 0
     @Published var totalSize : Int64 = 0
@@ -36,68 +36,146 @@ public final class DownloadHelper : ObservableObject {
     @Published var installCompletion : InstallCompletion? = nil
     private var downloadTask: URLSessionDownloadTask?
     private var continuation: UnsafeContinuation<(), Never>?
-    
-    func download(url: URL, to: URL) async throws {
-        var ansError: Error? = nil
+    private var activeError: Error? = nil
+    /// Downloads-library record the active task belongs to, and
+    /// the file the finished download must land at. Set for both
+    /// install-flow downloads and library-page resumes.
+    private var activeRecordID: String? = nil
+    private var activeDestination: URL? = nil
+    /// Resume data of the most recent interrupted download,
+    /// captured from the completion error; the install flow
+    /// stores it on the record when it marks it partial.
+    private(set) var lastResumeData: Data? = nil
+    private var lastProgressPersist = Date.distantPast
+
+    /// One background session with a FIXED identifier (Ann
+    /// 2026-11-24, resumable downloads): the old code created a
+    /// throwaway session with a random UUID per download, so a
+    /// download whose app exited could never be reattached. With
+    /// a stable identifier the system keeps the transfer going
+    /// while LiveContainer is gone and delivers the outcome to
+    /// this delegate when the session is recreated at launch.
+    static let backgroundSessionIdentifier = "com.livecontainer.download"
+    /// Completion handler handed over by the app delegate for
+    /// background-session events; called and cleared once the
+    /// session has delivered everything after a relaunch.
+    static var backgroundEventsCompletionHandler: (() -> Void)? = nil
+
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
+        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
+    }()
+
+    override init() {
+        super.init()
+        reattachToRunningTask()
+    }
+
+    /// If a download from a previous launch is still running in
+    /// the background session (LiveContainer was killed or
+    /// restarted mid-download), adopt it: its record stays
+    /// "downloading" and the completion lands in the library.
+    private func reattachToRunningTask() {
+        session.getAllTasks { [weak self] tasks in
+            guard let self else { return }
+            guard self.downloadTask == nil,
+                  let task = tasks.compactMap({ $0 as? URLSessionDownloadTask }).first else { return }
+            self.downloadTask = task
+            self.isDownloading = true
+            self.cancelled = false
+            self.downloadedSize = task.countOfBytesReceived
+            self.totalSize = task.countOfBytesExpectedToReceive
+            if self.totalSize > 0 {
+                self.downloadProgress = Float(self.downloadedSize) / Float(self.totalSize)
+            }
+            if let urlStr = task.originalRequest?.url?.absoluteString,
+               let record = LCDownloadStore.shared.packages.first(where: { !$0.isComplete && $0.sourceURL == urlStr }) {
+                self.activeRecordID = record.id
+                self.activeDestination = LCDownloadStore.shared.fileURL(for: record)
+                self.downloadName = record.appName
+                self.downloadIconURL = record.iconURL.flatMap { URL(string: $0) }
+            }
+        }
+    }
+
+    func download(url: URL, to: URL, recordID: String? = nil) async throws {
+        // A task adopted at launch may still be running; stop it
+        // (its record stays partial and resumable) before the new
+        // download takes over the single active slot.
+        if let stale = downloadTask {
+            stale.cancel()
+            downloadTask = nil
+            activeRecordID = nil
+            activeDestination = nil
+        }
+        activeError = nil
+        lastResumeData = nil
+        activeRecordID = recordID
+        activeDestination = to
 
         await MainActor.run {
             cancelled = false
-            
+
             downloadProgress = 0.0
             downloadedSize = 0
             totalSize = 0
-            
+
             isDownloading = true
         }
-        
+
         await withUnsafeContinuation { c in
             continuation = c
-            
-            let bgConfig = URLSessionConfiguration.background(withIdentifier: "com.livecontainer.download.\(UUID().uuidString)")
-            let session = URLSession(configuration: bgConfig, delegate: DownloadDelegate(progressCallback: { progress, downloaded, total in
-                Task{ await MainActor.run {
-                    self.downloadProgress = progress
-                    self.downloadedSize = downloaded
-                    self.totalSize = total
-                }}
-            }, completeCallback: {tempFileURL, error in
-                Task{ await MainActor.run {
-                    self.isDownloading = false
-                }}
-                if let error {
-                    print(error)
-                    ansError = error
-                }
-                if let tempFileURL {
-                    do {
-                        let fm = FileManager.default
-                        print(to)
-                        try fm.moveItem(at: tempFileURL, to: to)
-                    } catch {
-                        ansError = error
-                    }
-                }
-                if self.continuation != nil {
-                    c.resume()
-                }
-
-            }), delegateQueue: .main)
-
             downloadTask = session.downloadTask(with: url)
             downloadTask?.resume()
         }
-        if let ansError {
-            throw ansError
+        if let activeError {
+            throw activeError
         }
     }
-    
-    func cancel() {
-        if let continuation {
-            continuation.resume()
+
+    /// Continues an interrupted library download (from the
+    /// downloads page): resume data when the system provided
+    /// some, otherwise a fresh request for the same URL. Nobody
+    /// waits on a continuation here — completion only registers
+    /// the package in the library, nothing installs on its own.
+    func resumeDownload(record: LCDownloadedPackage) {
+        guard downloadTask == nil else { return }
+        let store = LCDownloadStore.shared
+        activeError = nil
+        lastResumeData = nil
+        activeRecordID = record.id
+        activeDestination = store.fileURL(for: record)
+        cancelled = false
+        downloadName = record.appName
+        downloadIconURL = record.iconURL.flatMap { URL(string: $0) }
+        downloadedSize = record.downloadedBytes
+        totalSize = record.totalBytes
+        downloadProgress = record.totalBytes > 0 ? Float(record.downloadedBytes) / Float(record.totalBytes) : 0
+        isDownloading = true
+        if record.hasResumeData,
+           let data = try? Data(contentsOf: store.resumeDataURL(for: record)) {
+            downloadTask = session.downloadTask(withResumeData: data)
+        } else if let sourceURL = record.sourceURL, let url = URL(string: sourceURL) {
+            downloadTask = session.downloadTask(with: url)
         }
+        downloadTask?.resume()
+    }
+
+    func cancel() {
         cancelled = true
-        continuation = nil
-        downloadTask?.cancel()
+        if let downloadTask {
+            // Producing resume data lets the downloads page offer
+            // to continue this download later; the completion
+            // callback below captures it and unblocks the waiter.
+            downloadTask.cancel(byProducingResumeData: { [weak self] data in
+                if let data {
+                    self?.lastResumeData = data
+                }
+            })
+        } else if let continuation {
+            continuation.resume()
+            self.continuation = nil
+        }
         isDownloading = false
         // Cancelling a download also cancels every install still
         // waiting in the serial install queue (Ann 2026-11-24: the
@@ -105,6 +183,89 @@ public final class DownloadHelper : ObservableObject {
         // The app list observes this and drains its pending jobs;
         // the running job aborts itself via the cancelled flag.
         NotificationCenter.default.post(name: NSNotification.InstallCancelAllNotification, object: nil)
+    }
+}
+
+extension DownloadHelper: URLSessionDownloadDelegate {
+    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard downloadTask == self.downloadTask else { return }
+        downloadedSize = totalBytesWritten
+        totalSize = totalBytesExpectedToWrite
+        downloadProgress = totalBytesExpectedToWrite > 0 ? Float(totalBytesWritten) / Float(totalBytesExpectedToWrite) : 0
+        // Keep the library record's progress roughly current so
+        // an interrupted download shows real numbers (throttled:
+        // the index file is rewritten on every persist).
+        if let activeRecordID, Date().timeIntervalSince(lastProgressPersist) > 1 {
+            lastProgressPersist = Date()
+            LCDownloadStore.shared.updateProgress(id: activeRecordID, downloadedBytes: totalBytesWritten, totalBytes: totalBytesExpectedToWrite)
+        }
+    }
+
+    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard downloadTask == self.downloadTask, let destination = activeDestination else { return }
+        // HTTP errors are failures even though a body arrived.
+        if let httpResponse = downloadTask.response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            activeError = NSError(domain: "", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP Error: \(httpResponse.statusCode)"])
+            return
+        }
+        // The temp file is deleted when this callback returns —
+        // move it into the library synchronously.
+        do {
+            let fm = FileManager.default
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.moveItem(at: location, to: destination)
+        } catch {
+            activeError = error
+        }
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let finishedTask = task as? URLSessionDownloadTask, finishedTask == downloadTask else { return }
+        isDownloading = false
+        downloadTask = nil
+        let recordID = activeRecordID
+        activeRecordID = nil
+        activeDestination = nil
+
+        if let error {
+            let nsError = error as NSError
+            if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeDataKey] as? Data {
+                lastResumeData = resumeData
+            }
+            if cancelled {
+                // User cancel is not an error for the waiter;
+                // the install flow sees the cancelled flag.
+            } else if activeError == nil {
+                activeError = error
+            }
+            // Nobody waiting (page resume / reattached task):
+            // record the interruption right here.
+            if continuation == nil, let recordID {
+                LCDownloadStore.shared.markPartial(id: recordID, downloadedBytes: downloadedSize, totalBytes: totalSize, resumeData: lastResumeData)
+            }
+        } else if activeError == nil {
+            // Finished cleanly with nobody waiting: register it.
+            if continuation == nil, let recordID {
+                LCDownloadStore.shared.markCompleted(id: recordID)
+            }
+        } else if continuation == nil, let recordID {
+            // e.g. an HTTP error body "downloaded" fine.
+            LCDownloadStore.shared.markPartial(id: recordID, downloadedBytes: downloadedSize, totalBytes: totalSize, resumeData: nil)
+        }
+
+        if let continuation {
+            continuation.resume()
+            self.continuation = nil
+        }
+    }
+
+    public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        if let handler = Self.backgroundEventsCompletionHandler {
+            Self.backgroundEventsCompletionHandler = nil
+            handler()
+        }
     }
 }
 
@@ -453,47 +614,6 @@ public struct DownloadCapsuleModifier: ViewModifier {
     // capsule floats just above the tab bar on any device.
     private var capsuleBottomOffset: CGFloat {
         49 + (sceneDelegate.window?.safeAreaInsets.bottom ?? 0) + 10
-    }
-}
-
-class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
-    let progressCallback: (Float, Int64, Int64) -> Void
-    let completeCallback: (URL?, Error?) -> Void
-
-    init(progressCallback: @escaping (Float, Int64, Int64) -> Void,
-         completeCallback: @escaping (URL?, Error?) -> Void) {
-        self.progressCallback = progressCallback
-        self.completeCallback = completeCallback
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        let progress = Float(totalBytesWritten) / Float(totalBytesExpectedToWrite)
-        progressCallback(progress, totalBytesWritten, totalBytesExpectedToWrite)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        if let httpResponse = downloadTask.response as? HTTPURLResponse {
-            let statusCode = httpResponse.statusCode
-
-            // Check if the status code is in the 2xx range
-            if (200...299).contains(statusCode) {
-                completeCallback(location, nil)
-            } else {
-                completeCallback(location, NSError(domain: "", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP Error: \(statusCode)"]))
-            }
-        } else {
-            completeCallback(location, NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"]))
-        }
-        
-
-    }
-    
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error {
-            completeCallback(nil, error)
-        } else {
-
-        }
     }
 }
 

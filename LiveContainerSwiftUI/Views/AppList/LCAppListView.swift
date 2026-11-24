@@ -1482,15 +1482,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             downloadHelper.downloadName = downloadName ?? installUrl.lastPathComponent
             downloadHelper.downloadIconURL = downloadIconURL
             do {
-                try await downloadHelper.download(url: installUrl, to: destinationURL)
+                try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record.id)
             } catch {
                 // Keep the interrupted download listed so it can
                 // be resumed from the downloads page.
-                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: nil)
+                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 throw error
             }
             if downloadHelper.cancelled {
-                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: nil)
+                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
                 return
             }
             store.markCompleted(record)

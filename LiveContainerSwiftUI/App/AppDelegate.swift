@@ -44,6 +44,19 @@ import Intents
         return true
     }
     
+    /// Background download events (resumable downloads, Ann
+    /// 2026-11-24): when iOS relaunches the app to deliver a
+    /// finished background download, hand the completion handler
+    /// to DownloadHelper — it calls it once its session has
+    /// delivered every pending event.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        if identifier == DownloadHelper.backgroundSessionIdentifier {
+            DownloadHelper.backgroundEventsCompletionHandler = completionHandler
+        } else {
+            completionHandler()
+        }
+    }
+
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
         configuration.delegateClass = SceneDelegate.self
