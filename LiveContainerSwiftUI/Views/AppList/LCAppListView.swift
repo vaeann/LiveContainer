@@ -84,6 +84,16 @@ enum InstallJob {
             return "file:\(fileUrl.path)"
         }
     }
+
+    /// Human-readable name for progress and the batch summary.
+    var displayName: String {
+        switch self {
+        case .url(let urlStr, let name, _, _):
+            return name ?? URL(string: urlStr)?.lastPathComponent ?? urlStr
+        case .file(let fileUrl):
+            return fileUrl.lastPathComponent
+        }
+    }
 }
 
 struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
@@ -95,12 +105,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     // ipa installing stuff
     @State var installprogressVisible = false
-    @State var installProgressPercentage : Float = 0.0
+    // (install progress percentage lives on DownloadHelper now —
+    // see LCDownloadView.swift)
     @State var installObserver : NSKeyValueObservation?
 
     // serial install queue (used by the sources page's "update all")
     @State var installQueue: [InstallJob] = []
     @State var currentInstallJobKey: String? = nil
+    // Per-session tallies for the end-of-batch summary: errors a
+    // job raises are collected instead of popping one alert per
+    // failure while the queue is still running.
+    @State var sessionTotalJobs = 0
+    @State var sessionFailures: [(jobKey: String, name: String, error: String)] = []
+    @State var batchSummaryShow = false
+    @State var batchSummaryText = ""
     @State var isInstallQueueRunning = false
     // when true, the next install silently replaces the same-bundle app
     // instead of asking which bundle to replace
@@ -274,7 +292,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
 
             }
-            .navigationBarProgressBar(show:$installprogressVisible, progress: $installProgressPercentage)
+            .navigationBarProgressBar(show:$installprogressVisible, progress: $downloadHelper.installProgressPercentage)
             .coordinateSpace(name: "scroll")
             .onAppear {
                 if !didAppear {
@@ -371,7 +389,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .alert("lc.common.error".loc, isPresented: $errorShow){
+        .alert("lc.common.error".loc, isPresented: Binding(
+            // While the install queue is running, error alerts are
+            // held back and collected by the processor — one alert
+            // per failed download in a batch was a popup storm.
+            // They surface once when the session ends (see
+            // reportSessionResults).
+            get: { errorShow && !isInstallQueueRunning },
+            set: { errorShow = $0 }
+        )){
             Button("lc.common.ok".loc, action: {
             })
             Button("lc.common.copy".loc, action: {
@@ -379,6 +405,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             })
         } message: {
             Text(errorInfo)
+        }
+        .alert("lc.install.batchSummary.title".loc, isPresented: $batchSummaryShow) {
+            Button("lc.common.ok".loc, action: {
+            })
+            Button("lc.common.copy".loc, action: {
+                UIPasteboard.general.string = batchSummaryText
+            })
+        } message: {
+            Text(batchSummaryText)
         }
         .betterFileImporter(isPresented: $choosingIPA, types: [.ipa, .tipa], multiple: false, callback: { fileUrls in
             enqueueInstall(.file(fileUrls[0]))
@@ -536,6 +571,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // everything still waiting. The running job aborts
             // itself through DownloadHelper's cancelled flag.
             installQueue.removeAll()
+            downloadHelper.queuedInstallCount = 0
         }
         .searchable(text: $searchContext.query)
 
@@ -873,6 +909,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     /// Runs one local-file install job. Only ever called by the
     /// serial queue processor — entry points enqueue instead.
     func performInstallApp(_ fileUrl:URL) async {
+        // A local file job is all install phase: stamp the capsule.
+        downloadHelper.downloadName = fileUrl.lastPathComponent
+        downloadHelper.downloadIconURL = nil
+        downloadHelper.isInstallingPhase = true
         do {
             self.installprogressVisible = true
             try await installIpaFile(fileUrl)
@@ -892,10 +932,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         let fm = FileManager()
         
         let installProgress = Progress.discreteProgress(totalUnitCount: 100)
-        self.installProgressPercentage = 0.0
+        self.downloadHelper.installProgressPercentage = 0.0
         self.installObserver = installProgress.observe(\.fractionCompleted) { p, v in
             DispatchQueue.main.async {
-                self.installProgressPercentage = Float(p.fractionCompleted)
+                self.downloadHelper.installProgressPercentage = Float(p.fractionCompleted)
             }
         }
         let decompressProgress = Progress.discreteProgress(totalUnitCount: 100)
@@ -1091,20 +1131,39 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             return
         }
         installQueue.append(job)
+        downloadHelper.queuedInstallCount = installQueue.count
         Task { await processInstallQueue() }
     }
 
     /// The single install processor: drains the queue strictly
     /// one job at a time. This is the only place the perform*
     /// install functions are called from, which is what makes the
-    /// pipeline serial.
+    /// pipeline serial. It also drives the capsule's session state
+    /// on the download helper and collects per-job errors for the
+    /// end-of-session report instead of letting each one pop an
+    /// alert mid-batch.
     func processInstallQueue() async {
         guard !isInstallQueueRunning else { return }
         isInstallQueueRunning = true
-        defer { isInstallQueueRunning = false }
+        sessionTotalJobs = 0
+        sessionFailures = []
+        downloadHelper.isInstallSessionActive = true
+        defer {
+            isInstallQueueRunning = false
+            downloadHelper.isInstallSessionActive = false
+            downloadHelper.isInstallingPhase = false
+            downloadHelper.queuedInstallCount = 0
+            reportSessionResults()
+        }
         while !installQueue.isEmpty {
             let job = installQueue.removeFirst()
             currentInstallJobKey = job.dedupeKey
+            sessionTotalJobs += 1
+            downloadHelper.queuedInstallCount = installQueue.count
+            downloadHelper.isInstallingPhase = false
+            // An error already pending when the job starts is not
+            // this job's — leave it for the normal alert path.
+            let errorWasPending = errorShow
             switch job {
             case .url(let urlStr, let name, let iconURL, let autoReplace):
                 autoReplaceNextInstall = autoReplace
@@ -1113,8 +1172,33 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             case .file(let fileUrl):
                 await performInstallApp(fileUrl)
             }
+            if errorShow && !errorWasPending {
+                sessionFailures.append((jobKey: job.dedupeKey, name: job.displayName, error: errorInfo))
+                errorShow = false
+            }
             currentInstallJobKey = nil
         }
+    }
+
+    /// Presents what a finished session collected: a single job
+    /// keeps the classic error alert; a batch gets one summary
+    /// (success/failure counts plus each failure's name and
+    /// message) instead of an alert per failure.
+    func reportSessionResults() {
+        guard !sessionFailures.isEmpty else { return }
+        if sessionTotalJobs <= 1 {
+            errorInfo = sessionFailures[0].error
+            errorShow = true
+        } else {
+            let failedJobs = Set(sessionFailures.map { $0.jobKey }).count
+            var text = "lc.install.batchSummary.result %lld %lld".localizeWithFormat(sessionTotalJobs - failedJobs, failedJobs)
+            for failure in sessionFailures {
+                text += "\n\(failure.name)：\(failure.error)"
+            }
+            batchSummaryText = text
+            batchSummaryShow = true
+        }
+        sessionFailures = []
     }
 
     func installFromPlist(urlStr: String) async {
@@ -1249,6 +1333,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
             
             do {
+                downloadHelper.isInstallingPhase = true
                 try await installIpaFile(installUrl)
             } catch {
                 errorInfo = error.localizedDescription
@@ -1285,6 +1370,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             if downloadHelper.cancelled {
                 return
             }
+            downloadHelper.isInstallingPhase = true
             try await installIpaFile(destinationURL)
             try fileManager.removeItem(at: destinationURL)
         } catch {

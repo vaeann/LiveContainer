@@ -17,6 +17,17 @@ public final class DownloadHelper : ObservableObject {
     /// download; set by the install flow right before it starts.
     @Published var downloadName : String? = nil
     @Published var downloadIconURL : URL? = nil
+    /// Serial-install session state, driven by the app list's
+    /// queue processor so the capsule can stay on screen for the
+    /// whole session instead of vanishing between the download
+    /// and install phases of every job (Ann 2026-11-24).
+    @Published var isInstallSessionActive = false
+    @Published var isInstallingPhase = false
+    @Published var queuedInstallCount = 0
+    /// Real decompress/sign progress of the install phase (moved
+    /// here from the app list's view state so both the navigation
+    /// bar bar and the capsule read the same value).
+    @Published var installProgressPercentage : Float = 0.0
     private var downloadTask: URLSessionDownloadTask?
     private var continuation: UnsafeContinuation<(), Never>?
     
@@ -124,32 +135,47 @@ struct DownloadCapsule : View {
                         .fontWeight(.semibold)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    Text(sizeText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if helper.isDownloading {
+                        Text(sizeText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if helper.totalSize > 0 {
-                    ProgressView(value: clampedProgress, total: 1)
-                    Text("\("lc.download.downloading".loc) \(Int(clampedProgress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if helper.isDownloading {
+                    if helper.totalSize > 0 {
+                        ProgressView(value: clampedProgress, total: 1)
+                        Text("\("lc.download.downloading".loc) \(Int(clampedProgress * 100))%\(remainingSuffix)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                        Text("lc.download.downloading".loc + remainingSuffix)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                    Text("lc.download.downloading".loc)
+                    // Install phase of the current job: the capsule
+                    // stays up with the real decompress/sign
+                    // progress instead of disappearing until the
+                    // next download starts.
+                    ProgressView(value: min(max(helper.installProgressPercentage, 0), 1), total: 1)
+                    Text("lc.download.installing".loc + remainingSuffix)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Button(action: cancelDownload) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color(UIColor.tertiarySystemFill)))
+            if helper.isDownloading || helper.queuedInstallCount > 0 {
+                Button(action: cancelDownload) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color(UIColor.tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(12)
         .background {
@@ -165,6 +191,13 @@ struct DownloadCapsule : View {
 
     private var clampedProgress: Float {
         min(max(helper.downloadProgress, 0), 1)
+    }
+
+    /// " · 还剩 N 个" while more jobs are waiting behind this one.
+    private var remainingSuffix: String {
+        helper.queuedInstallCount > 0
+            ? " · " + "lc.download.queuedRemaining %lld".localizeWithFormat(helper.queuedInstallCount)
+            : ""
     }
 
     private var sizeText: String {
@@ -201,11 +234,21 @@ public struct DownloadCapsuleModifier: ViewModifier {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .onChange(of: helper.isDownloading) { newVal in
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    show = newVal
-                }
+            .onChange(of: helper.isDownloading) { _ in
+                refreshShow()
             }
+            .onChange(of: helper.isInstallSessionActive) { _ in
+                refreshShow()
+            }
+    }
+
+    // The capsule lives for the whole install session — downloads
+    // and the install phases in between — and only leaves when
+    // the queue has fully drained.
+    private func refreshShow() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            show = helper.isDownloading || helper.isInstallSessionActive
+        }
     }
 
     // Tab bar height (49) + bottom safe area + a small gap, so the
