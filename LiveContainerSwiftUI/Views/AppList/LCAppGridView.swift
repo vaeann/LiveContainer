@@ -273,6 +273,40 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: badgeSize * 0.5, weight: .bold)),
                              for: .normal)
         badgeButton.isHidden = !showBadge
+        snapContentToPixelGrid()
+    }
+
+    /// The grid's columns and the cell's badge-overhang offset
+    /// put this host at fractional window positions, where the
+    /// compositor resamples the live icon and it renders a touch
+    /// soft. The context menu's snapshot, by contrast, is drawn
+    /// in the view's own pixel space — perfectly sharp. When the
+    /// menu closes and the sharp snapshot swaps back to the soft
+    /// live icon, the icon's detailed middle flashes for a frame
+    /// (Ann 2026-11-25: only on close, also on ribbon-less
+    /// icons, which rules out the ribbon's glass). Snapping the
+    /// content (icon + badge together) onto the window's pixel
+    /// grid makes the live rendering as sharp as the snapshot,
+    /// so the swap has nothing to show. The shift is under a
+    /// pixel — invisible as a position change — and every layout
+    /// pass re-derives it from the actual window position, so it
+    /// is correct wherever the grid has scrolled to.
+    private func snapContentToPixelGrid() {
+        guard let window else { return }
+        let scale = window.screen.scale
+        let iconOrigin = iconContainer.convert(iconContainer.bounds.origin, to: window)
+        let dx = (iconOrigin.x * scale).rounded() / scale - iconOrigin.x
+        let dy = (iconOrigin.y * scale).rounded() / scale - iconOrigin.y
+        guard dx != 0 || dy != 0 else { return }
+        iconContainer.frame.origin.x += dx
+        iconContainer.frame.origin.y += dy
+        badgeButton.frame.origin.x += dx
+        badgeButton.frame.origin.y += dy
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        setNeedsLayout()
     }
 
     private func rebuildRibbon() {
@@ -400,6 +434,11 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         // (or mid-launch) when the hold began.
         inMenu = true
         applyDim()
+        // Re-snap at the position the icon actually rests at now
+        // (scrolling since the last layout pass does not re-run
+        // it), so the snapshot the system is about to take and
+        // the live icon it later swaps back to agree exactly.
+        layoutIfNeeded()
         return targetedPreview()
     }
 
