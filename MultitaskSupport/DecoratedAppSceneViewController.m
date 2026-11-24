@@ -713,10 +713,20 @@ static const CGFloat LCResizeHandleSize = 44;
         move.maximumNumberOfTouches = 1;
         [self.moveHandle addGestureRecognizer:move];
         [self.view addSubview:self.moveHandle];
-        // 右上：最大化（点击）
-        self.maximizeHandle = [[ResizeHandleView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
-        self.maximizeHandle.transform = CGAffineTransformMakeScale(1, -1);
+        // 右上：最大化（点击）+ 长按菜单。这里分两层：把手本体
+        // 带垂直翻转（三角转到东北角），而 UIContextMenuInteraction
+        // 弹出时会接管宿主视图的 transform 做抬起动画——翻转和
+        // 它压在同一个视图上，长按时三角被扯得翻回去还变形
+        // （Ann 2026-11-24 真机发现）。所以外层用一个不带任何
+        // 变换的普通容器承载点击和上下文菜单，翻转把手只作子
+        // 视图负责长相并关掉交互，触摸全部走容器。
+        self.maximizeHandle = [[UIView alloc] initWithFrame:CGRectMake(bounds.size.width - size, 0, size, size)];
         self.maximizeHandle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleBottomMargin;
+        ResizeHandleView *maximizeWedge = [[ResizeHandleView alloc] initWithFrame:self.maximizeHandle.bounds];
+        maximizeWedge.transform = CGAffineTransformMakeScale(1, -1);
+        maximizeWedge.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        maximizeWedge.userInteractionEnabled = NO;
+        [self.maximizeHandle addSubview:maximizeWedge];
         [self.maximizeHandle addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(maximizeHandleTapped)]];
         // 长按呼出箭头钮的菜单（Ann 2026-11-23 定）：隐藏操作栏时
         // 没有箭头钮，菜单改走系统上下文菜单，内容用同一个延迟
