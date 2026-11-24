@@ -1520,24 +1520,26 @@ public struct MultitaskDockSwiftView: View {
 struct CollapsedDockView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
     @AppStorage("LCBreathingLightColor", store: LCUtils.appGroupUserDefault) var breathingLightColorRaw: String = LCBreathingLightColor.standard.rawValue
-    @State private var breathing = false
 
     var body: some View {
         ZStack {
-            // Breathing with Weizhu's exact pulse parameters
-            // (FMApplyOrbLineAnimation): opacity only, 0.38 -> 1,
-            // 1.15s ease-in-out, autoreversing. Animating a single
-            // property is what makes it feel smooth; the glyph is the
-            // theme text color, like Weizhu's glyphs on glass.
-            Image(systemName: "square.grid.2x2.fill")
-                .foregroundStyle((LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).color)
-                // Sized off the dock width, not adaptiveIconSize:
-                // the orb keeps its exact pre-0.68 glyph size
-                // (0.375 x width) — only the expanded icons shrank.
-                .font(.system(size: dockManager.dockWidth * 0.375, weight: .bold))
-                .opacity(breathing ? 1.0 : 0.38)
-                .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true), value: breathing)
-                .onAppear { breathing = true }
+            // Breathing as a true sine wave (Ann 2026-11-25): the
+            // old pulse (Weizhu's parameters — 1.15s ease-in-out
+            // legs, autoreversing) had a catch where each leg
+            // joined the next, and at 2.3s a cycle it pulsed more
+            // like a beacon than a breath. A sinusoid has no legs
+            // and no joins, and a 4s cycle is a resting breathing
+            // rate (~15/min). Opacity range unchanged: 0.38 <-> 1.
+            TimelineView(.animation) { context in
+                let wave = 0.5 - 0.5 * cos(context.date.timeIntervalSinceReferenceDate * 2 * .pi / LCBreathingLightColor.cycleSeconds)
+                Image(systemName: "square.grid.2x2.fill")
+                    .foregroundStyle((LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).color)
+                    // Sized off the dock width, not adaptiveIconSize:
+                    // the orb keeps its exact pre-0.68 glyph size
+                    // (0.375 x width) — only the expanded icons shrank.
+                    .font(.system(size: dockManager.dockWidth * 0.375, weight: .bold))
+                    .opacity(0.38 + 0.62 * wave)
+            }
         }
         .frame(width: dockManager.dockWidth * 0.75, height: dockManager.dockWidth * 0.75)
         // No tile of its own (Ann 2026-11-22): the glyph sits
@@ -1895,6 +1897,11 @@ struct LoadingIconView: View {
 /// background. Stored by raw value under LCBreathingLightColor
 /// in the app-group defaults.
 enum LCBreathingLightColor: String, CaseIterable {
+    /// One full breath (dim -> bright -> dim), in seconds —
+    /// shared by every surface the color tints, so the orb and
+    /// the hidden-dock handle always breathe at the same rate.
+    static let cycleSeconds: Double = 4.0
+
     case standard, red, orange, green, blue, purple, pink
 
     static var current: LCBreathingLightColor {
@@ -2005,10 +2012,12 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     }
 
     /// The grip is a breathing light too (Ann 2026-11-25): the
-    /// shared breathing-light color, pulsing with the orb's own
-    /// rhythm (opacity 0.38 <-> 1, 1.15s ease-in-out). Re-read
-    /// every time the handle appears, so a color picked in
-    /// Settings applies the next time the dock hides.
+    /// shared breathing-light color, breathing with the orb's
+    /// own sine wave (opacity 0.38 <-> 1 over a 4s cycle — a
+    /// keyframe-sampled sinusoid, so like the orb it has no
+    /// legs and no joins; Ann 2026-11-25). Re-read every time
+    /// the handle appears, so a color picked in Settings
+    /// applies the next time the dock hides.
     private func applyGripStyle() {
         if let color = LCBreathingLightColor.current.uiColor {
             gripView.backgroundColor = color
@@ -2016,13 +2025,14 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         }
         gripView.layer.removeAnimation(forKey: "breathing")
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 0.38
-        pulse.toValue = 1.0
-        pulse.duration = 1.15
-        pulse.autoreverses = true
+        let steps = 60
+        let pulse = CAKeyframeAnimation(keyPath: "opacity")
+        pulse.values = (0...steps).map { i in
+            0.38 + 0.62 * (0.5 - 0.5 * cos(Double(i) / Double(steps) * 2 * .pi))
+        }
+        pulse.duration = LCBreathingLightColor.cycleSeconds
         pulse.repeatCount = .infinity
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        pulse.calculationMode = .linear
         gripView.layer.add(pulse, forKey: "breathing")
     }
 
