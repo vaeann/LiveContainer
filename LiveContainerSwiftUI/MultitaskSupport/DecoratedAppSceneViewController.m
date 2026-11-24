@@ -350,6 +350,10 @@ static const CGFloat LCResizeHandleSize = 44;
             self.isMinimizing = NO;
             if (!finished) return;
             self.view.hidden = YES;
+            // A window that leaves the stage drops its tap-outside
+            // scrim with it — a hidden window must never carry one
+            // back in when it returns (Ann 2026-11-24).
+            [self setTapOutsideScrimVisible:NO];
             self.view.transform = CGAffineTransformIdentity;
             [self.view.superview sendSubviewToBack:self.view];
             [[MultitaskDockManager shared] updateStatusBarFix];
@@ -371,6 +375,7 @@ static const CGFloat LCResizeHandleSize = 44;
         // view.frame，必须先把帧恢复成完整的窗口帧。
         self.isMinimizing = NO;
         self.view.hidden = YES;
+        [self setTapOutsideScrimVisible:NO];
         self.view.frame = origFrame;
         self.view.layer.cornerRadius = origCornerRadius;
         self.view.transform = CGAffineTransformIdentity;
@@ -384,6 +389,7 @@ static const CGFloat LCResizeHandleSize = 44;
         self.view.alpha = 0;
     } completion:^(BOOL finished) {
         self.view.hidden = YES;
+        [self setTapOutsideScrimVisible:NO];
     }];
 }
 

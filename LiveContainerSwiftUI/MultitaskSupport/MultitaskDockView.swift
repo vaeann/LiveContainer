@@ -470,9 +470,24 @@ class AppInfoProvider {
     private func syncTapOutsideScrim() {
         let shouldShow = isVisible && !isCollapsed && !isDockHidden
         for app in apps {
-            guard let view = app.view, !view.isHidden, view.alpha >= 0.1,
+            guard let view = app.view,
                   let vc = view._viewDelegate() as? DecoratedAppSceneViewController else { continue }
-            vc.setTapOutsideScrimVisible(shouldShow)
+            // Turning scrims OFF must reach every window, visible
+            // or not: a window minimized while its scrim was on
+            // used to be skipped by the visibility check, kept the
+            // scrim, and brought it back when reopened — the first
+            // tap on it then toggled the dock (the orb "expanded
+            // by itself") instead of reaching the app (Ann
+            // 2026-11-24, reproduced on device: two apps open,
+            // back to LC home, reopen one). Turning them ON still
+            // only concerns visible windows; a window that appears
+            // later re-syncs as it comes to the front (see
+            // bringMultitaskViewToFront).
+            if !shouldShow {
+                vc.setTapOutsideScrimVisible(false)
+            } else if !view.isHidden, view.alpha >= 0.1 {
+                vc.setTapOutsideScrimVisible(true)
+            }
         }
         // The per-window scrims only cover the window areas; the
         // rest of the screen (LC's home interface around and
@@ -838,6 +853,13 @@ class AppInfoProvider {
             if let targetView = findMultitaskView(in: window, withUUID: uuid) {
                 passURLSchemeToView(targetView)
                 animateViewAppearance(targetView, from: sourceRect, in: window)
+                // Every reopen path funnels through here (home
+                // grid, banner, dock icon, previous-app jump):
+                // re-derive the window's scrim from the dock's
+                // current state at the moment it appears, so a
+                // scrim left over from an earlier expanded phase
+                // can never ride back in with it (Ann 2026-11-24).
+                syncTapOutsideScrim()
                 updateStatusBarFix()
                 return true
             }
