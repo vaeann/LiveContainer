@@ -1259,7 +1259,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             } else if !jobFailed {
                 switch job {
                 case .url(_, _, _, let autoReplace, let bundleID, let version):
-                    sessionSuccesses.append((name: job.displayName, isUpdate: autoReplace, version: version, bundleID: bundleID, isLocalFile: false))
+                    // The card's Open button must name the app that
+                    // was ACTUALLY installed (parsed from the IPA by
+                    // installIpaFile), not the source's declared
+                    // bundle ID — the two differ for tweaked IPAs
+                    // whose real ID was changed, and the declared
+                    // one then opens nothing (Ann 2026-11-24).
+                    sessionSuccesses.append((name: job.displayName, isUpdate: autoReplace, version: lastInstalledVersion ?? version, bundleID: lastInstalledBundleID ?? bundleID, isLocalFile: false))
                 case .file:
                     sessionSuccesses.append((name: job.displayName, isUpdate: false, version: nil, bundleID: nil, isLocalFile: true))
                 }
@@ -1559,8 +1565,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         var appFound : LCAppModel? = nil
         var isFoundAppLocked = false
+        // Callers pass two different keys under this one parameter:
+        // the URL handler passes the bundle FOLDER name (which is
+        // what relativeBundlePath holds), while the install
+        // success card's Open button passes the app's real bundle
+        // ID. Match either, or the card's button can never find
+        // its app (Ann 2026-11-24: Open → "app not found").
         for app in sharedModel.apps {
-            if app.appInfo.relativeBundlePath == bundleId {
+            if app.appInfo.relativeBundlePath == bundleId || app.appInfo.bundleIdentifier() == bundleId {
                 appFound = app
                 if app.appInfo.isLocked {
                     isFoundAppLocked = true
@@ -1570,7 +1582,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
         if appFound == nil && !LCUtils.appGroupUserDefault.bool(forKey: "LCStrictHiding") {
             for app in sharedModel.hiddenApps {
-                if app.appInfo.relativeBundlePath == bundleId {
+                if app.appInfo.relativeBundlePath == bundleId || app.appInfo.bundleIdentifier() == bundleId {
                     appFound = app
                     isFoundAppLocked = true
                     break
