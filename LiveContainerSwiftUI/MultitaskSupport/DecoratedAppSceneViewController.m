@@ -5,7 +5,7 @@
 #import "UIKitPrivate+MultitaskSupport.h"
 #import "PiPManager.h"
 #import "VirtualWindowsHostView.h"
-#import "../LiveContainer/Localization.h"
+#import "../../LiveContainer/Localization.h"
 #import "utils.h"
 
 // 操作栏高度（Ann 2026-11-22 定）：36，比上游的 44 矮一截、
