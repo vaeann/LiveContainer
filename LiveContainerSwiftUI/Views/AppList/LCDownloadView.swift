@@ -13,6 +13,12 @@ public final class DownloadHelper : NSObject, ObservableObject {
     @Published var totalSize : Int64 = 0
     @Published var isDownloading = false
     @Published var cancelled = false
+    /// Pause state of the active download (Ann 2026-11-24: the
+    /// capsule gets a pause button next to its close button, and
+    /// the button turns into a resume button while paused).
+    /// isDownloading stays true while paused — the download
+    /// session is still in progress, just not transferring.
+    @Published var isPaused = false
     /// What the floating progress capsule shows for the current
     /// download; set by the install flow right before it starts.
     @Published var downloadName : String? = nil
@@ -47,6 +53,14 @@ public final class DownloadHelper : NSObject, ObservableObject {
     /// stores it on the record when it marks it partial.
     private(set) var lastResumeData: Data? = nil
     private var lastProgressPersist = Date.distantPast
+    /// Pause bookkeeping: pauseRequested marks the completion
+    /// that the pause's cancel produces (so it is not mistaken
+    /// for a finish or an error), pausedResumeData restarts the
+    /// transfer where it stopped, and activeURL restarts it from
+    /// scratch when the server gave no resume data.
+    private var pauseRequested = false
+    private var pausedResumeData: Data? = nil
+    private var activeURL: URL? = nil
 
     /// One background session with a FIXED identifier (Ann
     /// 2026-11-24, resumable downloads): the old code created a
@@ -112,9 +126,13 @@ public final class DownloadHelper : NSObject, ObservableObject {
         lastResumeData = nil
         activeRecordID = recordID
         activeDestination = to
+        activeURL = url
+        pauseRequested = false
+        pausedResumeData = nil
 
         await MainActor.run {
             cancelled = false
+            isPaused = false
 
             downloadProgress = 0.0
             downloadedSize = 0
@@ -139,12 +157,18 @@ public final class DownloadHelper : NSObject, ObservableObject {
     /// waits on a continuation here — completion only registers
     /// the package in the library, nothing installs on its own.
     func resumeDownload(record: LCDownloadedPackage) {
-        guard downloadTask == nil else { return }
+        // The single active slot is also occupied while a queue
+        // download is merely paused (its waiter is still pending).
+        guard downloadTask == nil, continuation == nil else { return }
         let store = LCDownloadStore.shared
         activeError = nil
         lastResumeData = nil
         activeRecordID = record.id
         activeDestination = store.fileURL(for: record)
+        activeURL = record.sourceURL.flatMap { URL(string: $0) }
+        pauseRequested = false
+        pausedResumeData = nil
+        isPaused = false
         cancelled = false
         downloadName = record.appName
         downloadIconURL = record.iconURL.flatMap { URL(string: $0) }
@@ -161,8 +185,47 @@ public final class DownloadHelper : NSObject, ObservableObject {
         downloadTask?.resume()
     }
 
+    /// Pauses the active download: the task is cancelled in the
+    /// resume-data-producing way, but unlike cancel() the waiter
+    /// is NOT unblocked and the session stays alive — the
+    /// completion handler recognizes the pause (pauseRequested),
+    /// parks the resume data, and resumePausedDownload() later
+    /// recreates the task from it. The library record is marked
+    /// partial right away, so even if the app exits while paused
+    /// the downloads page can continue the transfer.
+    func pauseDownload() {
+        guard isDownloading, !isPaused, let downloadTask else { return }
+        pauseRequested = true
+        isPaused = true
+        downloadTask.cancel(byProducingResumeData: { [weak self] data in
+            if let data {
+                self?.pausedResumeData = data
+                self?.lastResumeData = data
+            }
+        })
+    }
+
+    /// Restarts a paused download from its resume data, or from
+    /// the original URL when the server provided none (a plain
+    /// restart in that case). The pending waiter from download()
+    /// simply sees the new task's completion.
+    func resumePausedDownload() {
+        guard isPaused else { return }
+        isPaused = false
+        pauseRequested = false
+        if let pausedResumeData {
+            downloadTask = session.downloadTask(withResumeData: pausedResumeData)
+        } else if let activeURL {
+            downloadTask = session.downloadTask(with: activeURL)
+        }
+        pausedResumeData = nil
+        downloadTask?.resume()
+    }
+
     func cancel() {
         cancelled = true
+        isPaused = false
+        pauseRequested = false
         if let downloadTask {
             // Producing resume data lets the downloads page offer
             // to continue this download later; the completion
@@ -223,11 +286,34 @@ extension DownloadHelper: URLSessionDownloadDelegate {
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let finishedTask = task as? URLSessionDownloadTask, finishedTask == downloadTask else { return }
+        // The completion a pause produces: park the transfer
+        // instead of finishing the download. The waiter stays
+        // pending, the record is marked partial with the resume
+        // data, and resumePausedDownload() recreates the task.
+        // (error == nil means the download had already finished
+        // before the pause landed — fall through and complete
+        // normally; cancelled means the close button overtook
+        // the pause — also normal processing.)
+        if pauseRequested, !cancelled, error != nil {
+            if let resumeData = (error as NSError).userInfo["NSURLSessionDownloadTaskResumeData"] as? Data {
+                pausedResumeData = resumeData
+                lastResumeData = resumeData
+            }
+            downloadTask = nil
+            if let activeRecordID {
+                LCDownloadStore.shared.markPartial(id: activeRecordID, downloadedBytes: downloadedSize, totalBytes: totalSize, resumeData: lastResumeData)
+            }
+            return
+        }
+        pauseRequested = false
+        pausedResumeData = nil
+        isPaused = false
         isDownloading = false
         downloadTask = nil
         let recordID = activeRecordID
         activeRecordID = nil
         activeDestination = nil
+        activeURL = nil
 
         if let error {
             let nsError = error as NSError
@@ -313,13 +399,13 @@ struct DownloadCapsule : View {
                 if helper.isDownloading {
                     if helper.totalSize > 0 {
                         ProgressView(value: clampedProgress, total: 1)
-                        Text("\("lc.download.downloading".loc) \(Int(clampedProgress * 100))%\(remainingSuffix)")
+                        Text("\(helper.isPaused ? "lc.download.paused".loc : "lc.download.downloading".loc) \(Int(clampedProgress * 100))%\(remainingSuffix)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
                         ProgressView()
                             .progressViewStyle(.linear)
-                        Text("lc.download.downloading".loc + remainingSuffix)
+                        Text((helper.isPaused ? "lc.download.paused".loc : "lc.download.downloading".loc) + remainingSuffix)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -335,6 +421,19 @@ struct DownloadCapsule : View {
                 }
             }
 
+            if helper.isDownloading {
+                // Pause / resume (Ann 2026-11-24): pauses the
+                // transfer where it stands; while paused the
+                // button becomes the start button.
+                Button(action: togglePause) {
+                    Image(systemName: helper.isPaused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color(UIColor.tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
+            }
             if helper.isDownloading || helper.queuedInstallCount > 0 {
                 Button(action: cancelDownload) {
                     Image(systemName: "xmark")
@@ -376,6 +475,14 @@ struct DownloadCapsule : View {
 
     func cancelDownload() {
         helper.cancel()
+    }
+
+    func togglePause() {
+        if helper.isPaused {
+            helper.resumePausedDownload()
+        } else {
+            helper.pauseDownload()
+        }
     }
 }
 
