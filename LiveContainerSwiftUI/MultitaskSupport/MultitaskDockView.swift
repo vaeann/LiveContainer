@@ -793,25 +793,61 @@ class AppInfoProvider {
         hostingController.view.frame = newFrame
     }
 
+    /// The drag offset actually shown while dragging (Ann
+    /// 2026-11-25): movement AWAY from the screen's center — the
+    /// direction that would hide the dock — follows the finger at
+    /// only a third of the distance, so the dock feels stuck to
+    /// its edge and an accidental outward drift during a vertical
+    /// reposition barely moves it. Every other direction (inward,
+    /// vertical, and the inward pull that recalls a hidden dock)
+    /// follows 1:1.
+    func resistedDragTranslation(_ translation: CGSize) -> CGSize {
+        guard let originalFrame = hostingController?.view.frame,
+              let screenWidth = keyWindow?.bounds.width else { return translation }
+        let isOnRightSide = originalFrame.origin.x > screenWidth / 2
+        let outward = isOnRightSide ? translation.width : -translation.width
+        guard outward > 0 else { return translation }
+        let resisted = outward / 3
+        return CGSize(width: isOnRightSide ? resisted : -resisted, height: translation.height)
+    }
+
     // Check if gesture is for cross-screen movement (left to right or vice versa)
-    func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize) -> Bool {
+    func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize, predictedTranslation: CGSize) -> Bool {
         let screenWidth = keyWindow!.bounds.width
         let isOnRightSide = originalFrame.origin.x > screenWidth / 2
-        let isSwipingAway = (isOnRightSide && translation.width > 0) || (!isOnRightSide && translation.width < 0)
+        // A horizontal value's outward component: positive = away
+        // from the screen's center, off the dock's own edge.
+        func outward(_ dx: CGFloat) -> CGFloat { isOnRightSide ? dx : -dx }
 
-        if isSwipingAway {
-            guard !self.isDockHidden else { return false }
-            self.hideDockToSide()
-            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-            impactFeedback.impactOccurred()
-            return true
-        } else {
-            guard self.isDockHidden else { return false }
+        if isDockHidden {
+            // Recall stays effortless (Ann 2026-11-25): any
+            // inward-leaning release brings the dock back.
+            guard outward(translation.width) < 0 else { return false }
             self.showDockFromHidden()
             let impactFeedback = UIImpactFeedbackGenerator(style: .light)
             impactFeedback.impactOccurred()
             return true
         }
+
+        // Deliberate hide (Ann 2026-11-25, replacing the old
+        // sign-only test under which any outward drift hid the
+        // dock): the release counts as a hide only when the shove
+        // is unmistakable — the drag is mainly horizontal AND
+        // either the dock's center was pushed past the screen
+        // edge, or the flick's predicted landing flies at least a
+        // full dock width outward. Repositioning (mostly vertical,
+        // or a slow outward creep that never gets the center out)
+        // falls through and the dock settles back onto its edge.
+        guard abs(translation.width) > abs(translation.height) else { return false }
+        let pushedMidX = originalFrame.midX + translation.width
+        let centerPushedOut = isOnRightSide ? pushedMidX > screenWidth : pushedMidX < 0
+        let flickedOut = outward(predictedTranslation.width) >= dockWidth
+            && abs(predictedTranslation.width) > abs(predictedTranslation.height)
+        guard centerPushedOut || flickedOut else { return false }
+        self.hideDockToSide()
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        return true
     }
 
     // Check if gesture is for cross-screen movement (left to right or vice versa)
@@ -1363,7 +1399,7 @@ public struct MultitaskDockSwiftView: View {
             .onChanged { value in
                 dockManager.noteDockInteraction()
                 self.isMoving = true
-                self.dragOffset = value.translation
+                self.dragOffset = dockManager.resistedDragTranslation(value.translation)
             }
             .onEnded { value in
                 self.isMoving = true
@@ -1405,7 +1441,7 @@ public struct MultitaskDockSwiftView: View {
                     return
                 }
                 
-                if dockManager.handleSwipeToHideOrShowGesture(for: hcFrame, translation: value.translation) {
+                if dockManager.handleSwipeToHideOrShowGesture(for: hcFrame, translation: value.translation, predictedTranslation: value.predictedEndTranslation) {
                     withAnimation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping)) {
                         self.dragOffset = .zero
                     }
