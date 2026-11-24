@@ -132,9 +132,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     // instead of asking which bundle to replace
     @State var autoReplaceNextInstall = false
 
-    @State var installOptions: [AppReplaceOption]
-    @StateObject var installReplaceAlert = AlertHelper<AppReplaceOption>()
-    
     @State var webViewOpened = false
     @State var webViewURL : URL = URL(string: "about:blank")!
     @StateObject private var webViewUrlInput = InputHelper()
@@ -208,10 +205,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 app.appInfo.bundleIdentifier()!.localizedCaseInsensitiveContains(searchContext.debouncedQuery)
             }
         }
-    }
-    
-    init() {
-        _installOptions = State(initialValue: [])
     }
     
     var body: some View {
@@ -427,23 +420,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }, onDismiss: {
             choosingIPA = false
         })
-        .alert("lc.appList.installation".loc, isPresented: $installReplaceAlert.show) {
-            ForEach(installOptions, id: \.self) { installOption in
-                Button(role: installOption.isReplace ? .destructive : nil, action: {
-                    installReplaceAlert.close(result: installOption)
-                }, label: {
-                    Text(installOption.isReplace ? installOption.nameOfFolderToInstall : "lc.appList.installAsNew".loc)
-                })
-            
-            }
-            Button(role: .cancel, action: {
-                installReplaceAlert.close(result: nil)
-            }, label: {
-                Text("lc.appList.abortInstallation".loc)
-            })
-        } message: {
-            Text("lc.appList.installReplaceTip".loc)
-        }
         .alert("lc.webView.runApp".loc, isPresented: $runWhenMultitaskAlert.show) {
             Button(role: .destructive) {
                 runWhenMultitaskAlert.close(result: true)
@@ -992,6 +968,56 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         extract(path, destination, progress)
     }
     
+    /// Asks which bundle to replace when an install lands on an
+    /// existing app. Presented as a UIKit alert from the key
+    /// window's topmost view controller (Ann 2026-11-24): the old
+    /// SwiftUI alert was attached to this view — the apps tab —
+    /// so installing from anywhere else (the downloads page, say)
+    /// could only show it after switching to this tab. Same
+    /// wording and choices as that alert. Returns nil when the
+    /// user aborts the installation.
+    private func chooseReplaceOption(options: [AppReplaceOption]) async -> AppReplaceOption? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = UIAlertController(
+                    title: "lc.appList.installation".loc,
+                    message: "lc.appList.installReplaceTip".loc,
+                    preferredStyle: .alert)
+                for option in options {
+                    alert.addAction(UIAlertAction(
+                        title: option.isReplace ? option.nameOfFolderToInstall : "lc.appList.installAsNew".loc,
+                        style: option.isReplace ? .destructive : .default
+                    ) { _ in
+                        continuation.resume(returning: option)
+                    })
+                }
+                alert.addAction(UIAlertAction(
+                    title: "lc.appList.abortInstallation".loc,
+                    style: .cancel
+                ) { _ in
+                    continuation.resume(returning: nil)
+                })
+                guard let presenter = Self.topMostViewController() else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                presenter.present(alert, animated: true)
+            }
+        }
+    }
+
+    private static func topMostViewController() -> UIViewController? {
+        let keyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        var controller = keyWindow?.rootViewController
+        while let presented = controller?.presentedViewController {
+            controller = presented
+        }
+        return controller
+    }
+
     func installIpaFile(_ url:URL) async throws {
         let fm = FileManager()
         lastInstalledBundleID = nil
@@ -1081,13 +1107,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         } else if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
             appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
             
-            self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
-            
+            var replaceOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
+
             for app in sameBundleIdApp {
-                self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
+                replaceOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
             }
 
-            guard let installOptionChosen = await installReplaceAlert.open() else {
+            guard let installOptionChosen = await chooseReplaceOption(options: replaceOptions) else {
                 // user cancelled
                 self.installprogressVisible = false
                 try fm.removeItem(at: payloadPath)
