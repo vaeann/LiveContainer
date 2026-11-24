@@ -71,14 +71,14 @@ struct LCRunningCloseBadge: View {
 /// another install is running waits its turn instead of being
 /// silently dropped by the old busy gate (Ann 2026-11-24).
 enum InstallJob {
-    case url(urlStr: String, name: String?, iconURL: URL?, autoReplace: Bool)
+    case url(urlStr: String, name: String?, iconURL: URL?, autoReplace: Bool, bundleID: String?, version: String?)
     case file(URL)
 
     /// Identity used to drop duplicate requests (e.g. update-all
     /// tapped twice): the same URL or file is never queued twice.
     var dedupeKey: String {
         switch self {
-        case .url(let urlStr, _, _, _):
+        case .url(let urlStr, _, _, _, _, _):
             return "url:\(urlStr)"
         case .file(let fileUrl):
             return "file:\(fileUrl.path)"
@@ -88,7 +88,7 @@ enum InstallJob {
     /// Human-readable name for progress and the batch summary.
     var displayName: String {
         switch self {
-        case .url(let urlStr, let name, _, _):
+        case .url(let urlStr, let name, _, _, _, _):
             return name ?? URL(string: urlStr)?.lastPathComponent ?? urlStr
         case .file(let fileUrl):
             return fileUrl.lastPathComponent
@@ -117,6 +117,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     // failure while the queue is still running.
     @State var sessionTotalJobs = 0
     @State var sessionFailures: [(jobKey: String, name: String, error: String)] = []
+    @State var sessionSuccesses: [(name: String, isUpdate: Bool, version: String?, bundleID: String?)] = []
+    @State var sessionWasCancelled = false
     @State var batchSummaryShow = false
     @State var batchSummaryText = ""
     @State var isInstallQueueRunning = false
@@ -555,14 +557,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let installUrl = obj2["url"] as? URL {
                 let autoReplace = obj2["autoReplace"] as? Bool ?? false
-                enqueueInstall(.url(urlStr: installUrl.absoluteString, name: obj2["name"] as? String, iconURL: obj2["iconURL"] as? URL, autoReplace: autoReplace))
+                enqueueInstall(.url(urlStr: installUrl.absoluteString, name: obj2["name"] as? String, iconURL: obj2["iconURL"] as? URL, autoReplace: autoReplace, bundleID: obj2["bundleID"] as? String, version: obj2["version"] as? String))
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppQueueNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let items = obj2["items"] as? [[String: Any]] {
                 for item in items {
                     guard let url = item["url"] as? URL else { continue }
-                    enqueueInstall(.url(urlStr: url.absoluteString, name: item["name"] as? String, iconURL: item["iconURL"] as? URL, autoReplace: true))
+                    enqueueInstall(.url(urlStr: url.absoluteString, name: item["name"] as? String, iconURL: item["iconURL"] as? URL, autoReplace: true, bundleID: item["bundleID"] as? String, version: item["version"] as? String))
                 }
             }
         }
@@ -572,6 +574,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // itself through DownloadHelper's cancelled flag.
             installQueue.removeAll()
             downloadHelper.queuedInstallCount = 0
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.ShowInstallSummaryNotification)) { _ in
+            // Tapped on the batch-with-failures success card.
+            if !batchSummaryText.isEmpty {
+                batchSummaryShow = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.OpenInstalledAppNotification)) { obj in
+            // The success card's Open button.
+            if let bundleID = obj.object as? String {
+                Task { await launchAppWithBundleId(bundleId: bundleID, container: nil) }
+            }
         }
         .searchable(text: $searchContext.query)
 
@@ -1115,7 +1129,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             await installFromPlist(urlStr: installUrlStr)
             return
         }
-        enqueueInstall(.url(urlStr: installUrlStr, name: nil, iconURL: nil, autoReplace: false))
+        enqueueInstall(.url(urlStr: installUrlStr, name: nil, iconURL: nil, autoReplace: false, bundleID: nil, version: nil))
     }
     
     /// Drain the serial install queue one app at a time. installFromUrl
@@ -1147,6 +1161,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         isInstallQueueRunning = true
         sessionTotalJobs = 0
         sessionFailures = []
+        sessionSuccesses = []
+        sessionWasCancelled = false
         downloadHelper.isInstallSessionActive = true
         defer {
             isInstallQueueRunning = false
@@ -1165,40 +1181,78 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // this job's — leave it for the normal alert path.
             let errorWasPending = errorShow
             switch job {
-            case .url(let urlStr, let name, let iconURL, let autoReplace):
+            case .url(let urlStr, let name, let iconURL, let autoReplace, _, _):
                 autoReplaceNextInstall = autoReplace
                 await performInstallFromUrl(urlStr: urlStr, downloadName: name, downloadIconURL: iconURL)
                 autoReplaceNextInstall = false
             case .file(let fileUrl):
                 await performInstallApp(fileUrl)
             }
+            var jobFailed = false
             if errorShow && !errorWasPending {
                 sessionFailures.append((jobKey: job.dedupeKey, name: job.displayName, error: errorInfo))
                 errorShow = false
+                jobFailed = true
+            }
+            if downloadHelper.cancelled {
+                // The user stopped this job (and drained the rest
+                // of the queue): it counts as neither success nor
+                // failure, and no success card is shown for the
+                // session — failures already recorded still are.
+                sessionWasCancelled = true
+            } else if !jobFailed {
+                switch job {
+                case .url(_, _, _, let autoReplace, let bundleID, let version):
+                    sessionSuccesses.append((name: job.displayName, isUpdate: autoReplace, version: version, bundleID: bundleID))
+                case .file:
+                    sessionSuccesses.append((name: job.displayName, isUpdate: false, version: nil, bundleID: nil))
+                }
             }
             currentInstallJobKey = nil
         }
     }
 
-    /// Presents what a finished session collected: a single job
-    /// keeps the classic error alert; a batch gets one summary
-    /// (success/failure counts plus each failure's name and
-    /// message) instead of an alert per failure.
+    /// Presents what a finished session collected. A single job:
+    /// success shows the capsule's success card, failure keeps
+    /// the classic error alert. A batch: one success card with
+    /// update/install counts, or — when anything failed — a
+    /// persistent mixed card whose tap opens the failure summary
+    /// (names and messages, kept in batchSummaryText). A session
+    /// the user cancelled shows no success card, but failures
+    /// recorded before the cancel are still reported.
     func reportSessionResults() {
-        guard !sessionFailures.isEmpty else { return }
-        if sessionTotalJobs <= 1 {
-            errorInfo = sessionFailures[0].error
-            errorShow = true
-        } else {
-            let failedJobs = Set(sessionFailures.map { $0.jobKey }).count
-            var text = "lc.install.batchSummary.result %lld %lld".localizeWithFormat(sessionTotalJobs - failedJobs, failedJobs)
-            for failure in sessionFailures {
+        let failures = sessionFailures
+        let successes = sessionSuccesses
+        let total = sessionTotalJobs
+        let cancelled = sessionWasCancelled
+        sessionFailures = []
+        sessionSuccesses = []
+        sessionWasCancelled = false
+        guard total > 0 else { return }
+
+        if total <= 1 {
+            if let failure = failures.first {
+                errorInfo = failure.error
+                errorShow = true
+            } else if !cancelled, let success = successes.first {
+                downloadHelper.installCompletion = .single(name: success.name, isUpdate: success.isUpdate, version: success.version, bundleID: success.bundleID)
+            }
+            return
+        }
+
+        let failedJobs = Set(failures.map { $0.jobKey }).count
+        let updates = successes.filter { $0.isUpdate }.count
+        let installs = successes.count - updates
+        if !failures.isEmpty {
+            var text = "lc.install.batchSummary.result %lld %lld".localizeWithFormat(total - failedJobs, failedJobs)
+            for failure in failures {
                 text += "\n\(failure.name)：\(failure.error)"
             }
             batchSummaryText = text
-            batchSummaryShow = true
+            downloadHelper.installCompletion = .batch(done: total - failedJobs, failed: failedJobs, updates: updates, installs: installs)
+        } else if !cancelled {
+            downloadHelper.installCompletion = .batch(done: total, failed: 0, updates: updates, installs: installs)
         }
-        sessionFailures = []
     }
 
     func installFromPlist(urlStr: String) async {
@@ -1255,7 +1309,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 return
             }
             
-            enqueueInstall(.url(urlStr: ipaUrlStr, name: nil, iconURL: nil, autoReplace: false))
+            enqueueInstall(.url(urlStr: ipaUrlStr, name: nil, iconURL: nil, autoReplace: false, bundleID: nil, version: nil))
 
         } catch {
             errorInfo = error.localizedDescription
@@ -1598,7 +1652,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     func handleURL(url : URL) {
         if url.isFileURL {
-            enqueueInstall(.url(urlStr: url.absoluteString, name: nil, iconURL: nil, autoReplace: false))
+            enqueueInstall(.url(urlStr: url.absoluteString, name: nil, iconURL: nil, autoReplace: false, bundleID: nil, version: nil))
             return
         }
         
@@ -1656,7 +1710,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     }
                 }
                 if let installUrl {
-                    enqueueInstall(.url(urlStr: installUrl, name: nil, iconURL: nil, autoReplace: false))
+                    enqueueInstall(.url(urlStr: installUrl, name: nil, iconURL: nil, autoReplace: false, bundleID: nil, version: nil))
                 }
             }
         }

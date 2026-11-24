@@ -28,6 +28,12 @@ public final class DownloadHelper : ObservableObject {
     /// here from the app list's view state so both the navigation
     /// bar bar and the capsule read the same value).
     @Published var installProgressPercentage : Float = 0.0
+    /// Success card shown in the capsule's place when an install
+    /// session ends (Ann 2026-11-24): set by the app list's
+    /// session report, cleared by the capsule modifier after a
+    /// few seconds unless the card is persistent (batch with
+    /// failures — tapping it opens the failure summary).
+    @Published var installCompletion : InstallCompletion? = nil
     private var downloadTask: URLSessionDownloadTask?
     private var continuation: UnsafeContinuation<(), Never>?
     
@@ -177,16 +183,7 @@ struct DownloadCapsule : View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(12)
-        .background {
-            RoundedRectangle(cornerRadius: 22)
-                .fill(.regularMaterial)
-                .shadow(color: .black.opacity(0.22), radius: 12, y: 4)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 22)
-                .strokeBorder(Color(UIColor.separator), lineWidth: 0.5)
-        }
+        .downloadCapsuleChrome()
     }
 
     private var clampedProgress: Float {
@@ -219,6 +216,158 @@ struct DownloadCapsule : View {
     }
 }
 
+/// Content of the capsule's success card. Fresh installs and
+/// updates deliberately look different (Ann 2026-11-24, as drawn):
+/// a green check for a new install, a blue up-arrow for an update,
+/// and one counts card for a whole batch.
+struct InstallCompletion: Equatable {
+    enum Kind: Equatable {
+        case installed
+        case updated
+        case batch
+    }
+
+    let id = UUID()
+    var kind: Kind
+    var title: String
+    var subtitle: String
+    /// When set, the card shows an Open button launching this app.
+    var bundleID: String? = nil
+    /// Batch-with-failures cards stay until tapped.
+    var persistent: Bool = false
+    var hasFailures: Bool = false
+
+    static func single(name: String, isUpdate: Bool, version: String?, bundleID: String?) -> InstallCompletion {
+        if isUpdate {
+            return InstallCompletion(
+                kind: .updated,
+                title: "lc.download.updatedTitle".loc,
+                subtitle: version != nil
+                    ? "lc.download.updatedTo %@ %@".localizeWithFormat(name, version!)
+                    : "lc.download.updated %@".localizeWithFormat(name),
+                bundleID: bundleID)
+        }
+        return InstallCompletion(
+            kind: .installed,
+            title: "lc.download.completedTitle".loc,
+            subtitle: "lc.download.installed %@".localizeWithFormat(name),
+            bundleID: bundleID)
+    }
+
+    static func batch(done: Int, failed: Int, updates: Int, installs: Int) -> InstallCompletion {
+        let counts = "lc.download.batchCounts %lld %lld".localizeWithFormat(updates, installs)
+        if failed > 0 {
+            return InstallCompletion(
+                kind: .batch,
+                title: "lc.download.batchPartial %lld %lld".localizeWithFormat(done, failed),
+                subtitle: counts,
+                persistent: true,
+                hasFailures: true)
+        }
+        return InstallCompletion(
+            kind: .batch,
+            title: "lc.download.batchCompletedTitle".loc,
+            subtitle: counts)
+    }
+}
+
+/// The success card that replaces the progress capsule in place
+/// when an install session ends.
+struct CompletionCapsule: View {
+    @ObservedObject var helper: DownloadHelper
+    let completion: InstallCompletion
+
+    var body: some View {
+        Group {
+            if completion.hasFailures {
+                Button(action: openSummary) {
+                    cardContent
+                }
+                .buttonStyle(.plain)
+            } else {
+                cardContent
+                    .onTapGesture { dismiss() }
+            }
+        }
+        .downloadCapsuleChrome()
+    }
+
+    private var cardContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.system(size: 30))
+                .foregroundStyle(iconColor)
+                .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(completion.title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                Text(completion.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let bundleID = completion.bundleID {
+                Button {
+                    NotificationCenter.default.post(name: NSNotification.OpenInstalledAppNotification, object: bundleID)
+                    dismiss()
+                } label: {
+                    Text("lc.sources.action.open".loc)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color(UIColor.tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
+            }
+            if completion.hasFailures {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var iconName: String {
+        if completion.hasFailures {
+            return "exclamationmark.circle.fill"
+        }
+        switch completion.kind {
+        case .installed, .batch:
+            return "checkmark.circle.fill"
+        case .updated:
+            return "arrow.up.circle.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        if completion.hasFailures {
+            return .orange
+        }
+        switch completion.kind {
+        case .installed, .batch:
+            return .green
+        case .updated:
+            return .blue
+        }
+    }
+
+    private func openSummary() {
+        NotificationCenter.default.post(name: NSNotification.ShowInstallSummaryNotification, object: nil)
+        dismiss()
+    }
+
+    private func dismiss() {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            helper.installCompletion = nil
+        }
+    }
+}
+
 public struct DownloadCapsuleModifier: ViewModifier {
     @ObservedObject var helper : DownloadHelper
     @EnvironmentObject var sceneDelegate: SceneDelegate
@@ -228,10 +377,16 @@ public struct DownloadCapsuleModifier: ViewModifier {
         content
             .overlay(alignment: .bottom) {
                 if show {
-                    DownloadCapsule(helper: helper)
-                        .padding(.horizontal, 12)
-                        .offset(y: -capsuleBottomOffset)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    Group {
+                        if let completion = helper.installCompletion, !helper.isInstallSessionActive {
+                            CompletionCapsule(helper: helper, completion: completion)
+                        } else {
+                            DownloadCapsule(helper: helper)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .offset(y: -capsuleBottomOffset)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .onChange(of: helper.isDownloading) { _ in
@@ -240,14 +395,31 @@ public struct DownloadCapsuleModifier: ViewModifier {
             .onChange(of: helper.isInstallSessionActive) { _ in
                 refreshShow()
             }
+            .onChange(of: helper.installCompletion) { completion in
+                refreshShow()
+                guard let completion else { return }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                // Non-persistent cards dismiss themselves after a
+                // few seconds; the batch-with-failures card stays
+                // until tapped.
+                guard !completion.persistent else { return }
+                let cardID = completion.id
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    if helper.installCompletion?.id == cardID {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            helper.installCompletion = nil
+                        }
+                    }
+                }
+            }
     }
 
     // The capsule lives for the whole install session — downloads
-    // and the install phases in between — and only leaves when
-    // the queue has fully drained.
+    // and the install phases in between — and then hands its
+    // place to the success card when the session report sets one.
     private func refreshShow() {
         withAnimation(.easeInOut(duration: 0.25)) {
-            show = helper.isDownloading || helper.isInstallSessionActive
+            show = helper.isDownloading || helper.isInstallSessionActive || helper.installCompletion != nil
         }
     }
 
@@ -302,5 +474,21 @@ class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
 extension View {
     public func downloadCapsule(helper: DownloadHelper) -> some View {
         self.modifier(DownloadCapsuleModifier(helper: helper))
+    }
+
+    /// The shared material-card look of the progress capsule and
+    /// its success card.
+    func downloadCapsuleChrome() -> some View {
+        self
+            .padding(12)
+            .background {
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.22), radius: 12, y: 4)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 22)
+                    .strokeBorder(Color(UIColor.separator), lineWidth: 0.5)
+            }
     }
 }

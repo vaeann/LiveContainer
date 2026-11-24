@@ -308,6 +308,8 @@ extension NSNotification {
     static let InstallAppNotification = Notification.Name.init("InstallAppNotification")
     static let InstallAppQueueNotification = Notification.Name.init("InstallAppQueueNotification")
     static let InstallCancelAllNotification = Notification.Name.init("InstallCancelAllNotification")
+    static let ShowInstallSummaryNotification = Notification.Name.init("ShowInstallSummaryNotification")
+    static let OpenInstalledAppNotification = Notification.Name.init("OpenInstalledAppNotification")
     static let MultitaskRunningAppsChanged = Notification.Name.init("MultitaskRunningAppsChanged")
     static let MultitaskCloseWindowRequested = Notification.Name.init("MultitaskCloseWindowRequested")
 }

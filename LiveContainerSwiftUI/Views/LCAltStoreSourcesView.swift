@@ -951,9 +951,12 @@ struct LCSourcesView: View {
     private func updateAll() {
         let items: [[String: Any]] = updatableApps.compactMap { entry in
             guard let downloadURL = entry.app.latestVersion?.downloadURL else { return nil }
-            var item: [String: Any] = ["url": downloadURL, "name": entry.app.name]
+            var item: [String: Any] = ["url": downloadURL, "name": entry.app.name, "bundleID": entry.app.bundleIdentifier]
             if let iconURL = entry.app.iconURL {
                 item["iconURL"] = iconURL
+            }
+            if let versionString = entry.app.latestVersion?.version {
+                item["version"] = versionString
             }
             return item
         }
@@ -1047,9 +1050,12 @@ struct LCSourcesView: View {
             DataManager.shared.model.selectedTab = .apps
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            var payload: [String: Any] = ["url": downloadURL, "autoReplace": autoReplace, "name": app.name]
+            var payload: [String: Any] = ["url": downloadURL, "autoReplace": autoReplace, "name": app.name, "bundleID": app.bundleIdentifier]
             if let iconURL = app.iconURL {
                 payload["iconURL"] = iconURL
+            }
+            if let versionString = (version ?? app.latestVersion)?.version {
+                payload["version"] = versionString
             }
             NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: payload)
         }
