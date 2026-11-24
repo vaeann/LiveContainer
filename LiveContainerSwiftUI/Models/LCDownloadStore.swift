@@ -216,61 +216,74 @@ final class LCDownloadStore: ObservableObject {
         return record
     }
 
+    /// Mutates the store's current copy of a record. All state
+    /// changes go through here by id — callers hold snapshots
+    /// that go stale the moment another change lands.
+    private func mutate(_ id: String, _ change: (inout LCDownloadedPackage) -> Void) {
+        guard var current = packages.first(where: { $0.id == id }) else { return }
+        change(&current)
+        upsert(current)
+    }
+
     /// Marks a download finished: the file is already at its
     /// store location. Enforces Ann's version rule — a completed
     /// package replaces only a record of the SAME app version;
     /// other versions are kept.
     func markCompleted(_ record: LCDownloadedPackage) {
-        var updated = record
         let fm = FileManager.default
-        updated.size = (try? fm.attributesOfItem(atPath: fileURL(for: updated).path)[.size] as? NSNumber)?.int64Value ?? updated.size
-        updated.isComplete = true
-        updated.downloadedBytes = updated.size
-        updated.totalBytes = updated.size
-        updated.hasResumeData = false
-        updated.savedAt = Date()
-        try? fm.removeItem(at: resumeDataURL(for: updated))
-        if let bundleID = updated.bundleID, let version = updated.version {
-            for other in packages where other.id != updated.id && other.bundleID == bundleID && other.version == version {
+        if let bundleID = record.bundleID, let version = record.version {
+            for other in packages where other.id != record.id && other.bundleID == bundleID && other.version == version {
                 removeFiles(of: other)
                 packages.removeAll { $0.id == other.id }
             }
         }
-        upsert(updated)
+        mutate(record.id) { updated in
+            updated.size = (try? fm.attributesOfItem(atPath: fileURL(for: updated).path)[.size] as? NSNumber)?.int64Value ?? updated.size
+            updated.isComplete = true
+            updated.downloadedBytes = updated.size
+            updated.totalBytes = updated.size
+            updated.hasResumeData = false
+            updated.savedAt = Date()
+        }
+        if let current = packages.first(where: { $0.id == record.id }) {
+            try? fm.removeItem(at: resumeDataURL(for: current))
+        }
     }
 
     /// Marks a download interrupted, keeping whatever progress
     /// and resume data the system produced so the downloads page
     /// can offer to continue it.
     func markPartial(_ record: LCDownloadedPackage, downloadedBytes: Int64, totalBytes: Int64, resumeData: Data?) {
-        var updated = record
-        updated.isComplete = false
-        updated.downloadedBytes = downloadedBytes
-        updated.totalBytes = totalBytes
         if let resumeData {
-            try? resumeData.write(to: resumeDataURL(for: updated), options: [.atomic])
-            updated.hasResumeData = true
+            try? resumeData.write(to: resumeDataURL(for: record), options: [.atomic])
         }
-        upsert(updated)
+        mutate(record.id) { updated in
+            updated.isComplete = false
+            updated.downloadedBytes = downloadedBytes
+            updated.totalBytes = totalBytes
+            if resumeData != nil {
+                updated.hasResumeData = true
+            }
+        }
     }
 
     /// Fills in app identity after an install parsed the IPA,
     /// and applies the same-version replacement rule (an import
     /// of a version already kept replaces that version's copy).
     func updateMetadata(_ record: LCDownloadedPackage, appName: String, bundleID: String, version: String?) {
-        var updated = record
-        updated.appName = appName
-        updated.bundleID = bundleID
-        updated.version = version
         if let version {
-            for other in packages where other.id != updated.id && other.bundleID == bundleID && other.version == version && other.isComplete {
+            for other in packages where other.id != record.id && other.bundleID == bundleID && other.version == version && other.isComplete {
                 // Our own file may sit under a generic name; the
                 // other record is the duplicate to drop.
                 removeFiles(of: other)
                 packages.removeAll { $0.id == other.id }
             }
         }
-        upsert(updated)
+        mutate(record.id) { updated in
+            updated.appName = appName
+            updated.bundleID = bundleID
+            updated.version = version
+        }
     }
 
     /// Copies an extracted app icon into the store so the row
@@ -283,9 +296,9 @@ final class LCDownloadStore: ObservableObject {
                 try FileManager.default.removeItem(at: destination)
             }
             try FileManager.default.copyItem(at: source, to: destination)
-            var updated = record
-            updated.iconFileName = iconName
-            upsert(updated)
+            mutate(record.id) { updated in
+                updated.iconFileName = iconName
+            }
         } catch {
             // Icon is decoration; never fail the flow over it.
         }

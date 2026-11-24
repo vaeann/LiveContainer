@@ -119,6 +119,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var sessionFailures: [(jobKey: String, name: String, error: String)] = []
     @State var sessionSuccesses: [(name: String, isUpdate: Bool, version: String?, bundleID: String?, isLocalFile: Bool)] = []
     @State var sessionWasCancelled = false
+    // Identity of the app installIpaFile most recently parsed,
+    // so a finished job can register its package in the
+    // downloads library with real metadata (name/version/icon).
+    @State var lastInstalledBundleID: String? = nil
+    @State var lastInstalledVersion: String? = nil
+    @State var lastInstalledName: String? = nil
     @State var batchSummaryShow = false
     @State var batchSummaryText = ""
     @State var isInstallQueueRunning = false
@@ -926,14 +932,47 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         downloadHelper.downloadName = fileUrl.lastPathComponent
         downloadHelper.downloadIconURL = nil
         downloadHelper.isInstallingPhase = true
+        // Keep a copy in the downloads library (Ann 2026-11-24):
+        // imports used to be deleted after install, so a package
+        // could only ever be installed once. A file that already
+        // lives in the library (install launched from the
+        // downloads page) is used in place — no copy, no delete.
+        let store = LCDownloadStore.shared
+        let inStore = fileUrl.standardizedFileURL.path.hasPrefix(store.folderURL.standardizedFileURL.path + "/")
+        let record = inStore
+            ? store.packages.first { store.fileURL(for: $0).standardizedFileURL == fileUrl.standardizedFileURL }
+            : store.beginImport(sourceFileURL: fileUrl)
         do {
             self.installprogressVisible = true
             try await installIpaFile(fileUrl)
-            try FileManager.default.removeItem(at: fileUrl)
+            if !inStore {
+                try FileManager.default.removeItem(at: fileUrl)
+            }
+            if let record {
+                finalizeDownloadRecord(record)
+            }
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
             self.installprogressVisible = false
+        }
+    }
+
+    /// Points a downloads-library record at the app that was
+    /// just installed from it: real name/version from the parsed
+    /// IPA, plus a copy of the installed app's icon when it has
+    /// been generated already (the downloads page also resolves
+    /// icons live from installed apps, so this is best-effort).
+    func finalizeDownloadRecord(_ record: LCDownloadedPackage) {
+        guard let bundleID = lastInstalledBundleID else { return }
+        let store = LCDownloadStore.shared
+        store.updateMetadata(record, appName: lastInstalledName ?? record.appName, bundleID: bundleID, version: lastInstalledVersion)
+        if let app = (sharedModel.apps + sharedModel.hiddenApps).first(where: { $0.appInfo.bundleIdentifier() == bundleID }) {
+            let base = app.uiIsShared ? LCPath.lcGroupBundlePath : LCPath.bundlePath
+            let icon = base.appendingPathComponent(app.appInfo.relativeBundlePath).appendingPathComponent("LCAppIconLight.png")
+            if FileManager.default.fileExists(atPath: icon.path) {
+                store.attachIcon(record, fromIconFile: icon)
+            }
         }
     }
     
@@ -943,7 +982,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     func installIpaFile(_ url:URL) async throws {
         let fm = FileManager()
-        
+        lastInstalledBundleID = nil
+        lastInstalledVersion = nil
+        lastInstalledName = nil
+
         let installProgress = Progress.discreteProgress(totalUnitCount: 100)
         self.downloadHelper.installProgressPercentage = 0.0
         self.installObserver = installProgress.observe(\.fractionCompleted) { p, v in
@@ -980,6 +1022,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         guard let newAppInfo = LCAppInfo(bundlePath: appFolderPath.path) else {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
+        lastInstalledBundleID = newAppInfo.bundleIdentifier()
+        lastInstalledVersion = newAppInfo.version()
+        lastInstalledName = newAppInfo.displayName()
 
         var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
@@ -1180,9 +1225,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // this job's — leave it for the normal alert path.
             let errorWasPending = errorShow
             switch job {
-            case .url(let urlStr, let name, let iconURL, let autoReplace, _, _):
+            case .url(let urlStr, let name, let iconURL, let autoReplace, let bundleID, let version):
                 autoReplaceNextInstall = autoReplace
-                await performInstallFromUrl(urlStr: urlStr, downloadName: name, downloadIconURL: iconURL)
+                await performInstallFromUrl(urlStr: urlStr, downloadName: name, downloadIconURL: iconURL, bundleID: bundleID, version: version)
                 autoReplaceNextInstall = false
             case .file(let fileUrl):
                 await performInstallApp(fileUrl)
@@ -1322,7 +1367,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     /// ever called by the serial queue processor, so installs can
     /// never overlap — the old "drop the request while busy" gate
     /// is gone because the queue now provides the serialization.
-    func performInstallFromUrl(urlStr: String, downloadName: String? = nil, downloadIconURL: URL? = nil) async {
+    func performInstallFromUrl(urlStr: String, downloadName: String? = nil, downloadIconURL: URL? = nil, bundleID: String? = nil, version: String? = nil) async {
 
         if sharedModel.multiLCStatus == 2 {
             errorInfo = "lc.appList.manageInPrimaryTip".loc
@@ -1387,9 +1432,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
             }
             
+            // Imports through this path are kept in the
+            // downloads library too (Ann 2026-11-24), copied
+            // while the security-scoped access above is active.
+            let importStore = LCDownloadStore.shared
+            let importInStore = installUrl.standardizedFileURL.path.hasPrefix(importStore.folderURL.standardizedFileURL.path + "/")
+            let importRecord = importInStore ? nil : importStore.beginImport(sourceFileURL: installUrl)
             do {
                 downloadHelper.isInstallingPhase = true
                 try await installIpaFile(installUrl)
+                if let importRecord {
+                    finalizeDownloadRecord(importRecord)
+                }
             } catch {
                 errorInfo = error.localizedDescription
                 errorShow = true
@@ -1414,20 +1468,35 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         
         do {
             let fileManager = FileManager.default
-            let destinationURL = fileManager.temporaryDirectory.appendingPathComponent(installUrl.lastPathComponent)
+            // Downloads land in the downloads library and are
+            // KEPT after install (Ann 2026-11-24) — the old
+            // temp-folder download + delete-after-install flow
+            // meant a package could only ever be installed once.
+            let store = LCDownloadStore.shared
+            let record = store.beginDownload(sourceURL: urlStr, name: downloadName, bundleID: bundleID, version: version, iconURL: downloadIconURL)
+            let destinationURL = store.fileURL(for: record)
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
-            
+
             downloadHelper.downloadName = downloadName ?? installUrl.lastPathComponent
             downloadHelper.downloadIconURL = downloadIconURL
-            try await downloadHelper.download(url: installUrl, to: destinationURL)
+            do {
+                try await downloadHelper.download(url: installUrl, to: destinationURL)
+            } catch {
+                // Keep the interrupted download listed so it can
+                // be resumed from the downloads page.
+                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: nil)
+                throw error
+            }
             if downloadHelper.cancelled {
+                store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: nil)
                 return
             }
+            store.markCompleted(record)
             downloadHelper.isInstallingPhase = true
             try await installIpaFile(destinationURL)
-            try fileManager.removeItem(at: destinationURL)
+            finalizeDownloadRecord(record)
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
