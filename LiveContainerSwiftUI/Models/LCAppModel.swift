@@ -278,17 +278,28 @@ class LCAppModel: ObservableObject, Hashable {
         {
             runningLC = (runningLC as NSString).deletingPathExtension
             
-            var openURLComp = URLComponents()
-            openURLComp.scheme = runningLC
-            if let urlStr {
-                openURLComp.host = "open-url"
-                openURLComp.queryItems = [
-                    URLQueryItem(name: "url", value: Data(urlStr.utf8).base64EncodedString())
-                ]
-            }
-            if await UIApplication.shared.canOpenURL(openURLComp.url!) {
-                await UIApplication.shared.open(openURLComp.url!)
-                return
+            // A container registered to THIS LiveContainer's own
+            // scheme is not another instance to jump to: opening
+            // our own scheme URL lands back here and swallows the
+            // tap, which is why a classic-mode app still running
+            // in the background could never be relaunched from
+            // the list. Fall through instead — the normal flow
+            // below brings the running guest back (classic mode
+            // reactivates it via launchToGuestApp, multitask
+            // relaunches it via LiveProcess).
+            if runningLC.caseInsensitiveCompare(LCUtils.appUrlScheme() ?? "") != .orderedSame {
+                var openURLComp = URLComponents()
+                openURLComp.scheme = runningLC
+                if let urlStr {
+                    openURLComp.host = "open-url"
+                    openURLComp.queryItems = [
+                        URLQueryItem(name: "url", value: Data(urlStr.utf8).base64EncodedString())
+                    ]
+                }
+                if await UIApplication.shared.canOpenURL(openURLComp.url!) {
+                    await UIApplication.shared.open(openURLComp.url!)
+                    return
+                }
             }
         }
         
