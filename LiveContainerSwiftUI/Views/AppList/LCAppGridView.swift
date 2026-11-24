@@ -156,6 +156,9 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     private let badgeButton = UIButton(type: .custom)
 
     private var iconSize: CGFloat = 0
+    private var lastBadgeSize: CGFloat = 0
+    private var lastRibbonMeasureSize: CGFloat = -1
+    private var lastRibbonMeasureSpec = RibbonSpec()
     private var showBadge = false
     private var ribbonSpec = RibbonSpec()
     private var lastIcon: UIImage?
@@ -259,19 +262,33 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         // above the visible area (Ann 2026-11-24).
         ribbonBackground?.frame = CGRect(x: 0, y: -6, width: iconSize, height: ribbonHeight + 6)
         ribbonStack.spacing = iconSize * 0.07
-        // The glyph row hugs its content and sits centered in the
-        // band, like the SwiftUI HStack it replaces.
-        let stackSize = ribbonStack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-        ribbonStack.frame = CGRect(x: (iconSize - stackSize.width) / 2,
-                                   y: (ribbonHeight - stackSize.height) / 2,
-                                   width: stackSize.width, height: stackSize.height)
+        // The glyph row is only re-measured when what it shows or
+        // the size it shows at actually changed (Ann 2026-11-25:
+        // re-measuring it on every layout pass did nothing —
+        // remove it). The row hugs its content and sits centered
+        // in the band, like the SwiftUI HStack it replaces.
+        if lastRibbonMeasureSize != iconSize || lastRibbonMeasureSpec != ribbonSpec {
+            lastRibbonMeasureSize = iconSize
+            lastRibbonMeasureSpec = ribbonSpec
+            let stackSize = ribbonStack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+            ribbonStack.frame = CGRect(x: (iconSize - stackSize.width) / 2,
+                                       y: (ribbonHeight - stackSize.height) / 2,
+                                       width: stackSize.width, height: stackSize.height)
+        }
         let badgeCenter = CGPoint(x: iconSize - overhang, y: overhang * 2)
         badgeButton.frame = CGRect(x: badgeCenter.x - badgeSize / 2, y: badgeCenter.y - badgeSize / 2,
                                    width: badgeSize, height: badgeSize)
         badgeButton.layer.cornerRadius = badgeSize / 2
-        badgeButton.setImage(UIImage(systemName: "xmark",
-                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: badgeSize * 0.5, weight: .bold)),
-                             for: .normal)
+        // Same for the badge's image: it only depends on the
+        // badge size, so it is only rebuilt when that changes
+        // instead of being thrown away and re-created on every
+        // layout pass (Ann 2026-11-25).
+        if badgeSize != lastBadgeSize {
+            lastBadgeSize = badgeSize
+            badgeButton.setImage(UIImage(systemName: "xmark",
+                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: badgeSize * 0.5, weight: .bold)),
+                                 for: .normal)
+        }
         badgeButton.isHidden = !showBadge
         snapContentToPixelGrid()
     }
