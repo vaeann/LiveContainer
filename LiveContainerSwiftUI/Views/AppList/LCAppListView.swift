@@ -36,6 +36,16 @@ struct AppReplaceOption : Hashable {
     var appToReplace: LCAppModel?
 }
 
+/// Thrown inside installIpaFile when the user aborts the install
+/// at a prompt (the replace choice's cancel button, or declining
+/// the hidden-app unlock): the job then ends quietly — it is
+/// neither an error nor a success. The perform* wrappers catch it
+/// and flag it for the install queue (Ann 2026-11-24: cancelling
+/// the replace prompt still showed the success card, because the
+/// old code returned silently and the queue counted any job
+/// without an error as installed).
+struct InstallUserAbort : Error {}
+
 /// Red close badge shown on running apps (list and grid). Drawn as a real
 /// circle shape rather than an SF Symbol so the visible circle is exactly
 /// `size` wide and its center lands precisely where it is positioned —
@@ -119,6 +129,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var sessionFailures: [(jobKey: String, name: String, error: String)] = []
     @State var sessionSuccesses: [(name: String, isUpdate: Bool, version: String?, bundleID: String?, isLocalFile: Bool)] = []
     @State var sessionWasCancelled = false
+    @State var sessionAbortedJobs = 0
+    // Set by the perform* wrappers when installIpaFile aborted at
+    // a user prompt; consumed by the queue for that job.
+    @State var lastInstallAborted = false
     // Identity of the app installIpaFile most recently parsed,
     // so a finished job can register its package in the
     // downloads library with real metadata (name/version/icon).
@@ -939,6 +953,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             if let record {
                 finalizeDownloadRecord(record)
             }
+        } catch is InstallUserAbort {
+            // Aborted at a prompt: nothing was installed, so no
+            // source-file removal and no record finalizing either.
+            lastInstallAborted = true
+            self.installprogressVisible = false
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
@@ -1023,6 +1042,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         lastInstalledBundleID = nil
         lastInstalledVersion = nil
         lastInstalledName = nil
+        lastInstallAborted = false
 
         let installProgress = Progress.discreteProgress(totalUnitCount: 100)
         self.downloadHelper.installProgressPercentage = 0.0
@@ -1078,16 +1098,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             
             // we found a hidden app, we need to authenticate before proceeding
             if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
+                let authenticated: Bool
                 do {
-                    if !(try await LCUtils.authenticateUser()) {
-                        self.installprogressVisible = false
-                        return
-                    }
+                    authenticated = try await LCUtils.authenticateUser()
                 } catch {
                     errorInfo = error.localizedDescription
                     errorShow = true
                     self.installprogressVisible = false
                     return
+                }
+                if !authenticated {
+                    // Declined the unlock: a user abort, not an
+                    // error — and not a success either.
+                    self.installprogressVisible = false
+                    throw InstallUserAbort()
                 }
             }
             
@@ -1114,10 +1138,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
 
             guard let installOptionChosen = await chooseReplaceOption(options: replaceOptions) else {
-                // user cancelled
+                // User cancelled the replace choice: a user abort,
+                // not an error — and not a success either (the old
+                // silent return was counted as installed).
                 self.installprogressVisible = false
                 try fm.removeItem(at: payloadPath)
-                return
+                throw InstallUserAbort()
             }
             
             if let appToReplace = installOptionChosen.appToReplace, appToReplace.uiIsShared {
@@ -1245,6 +1271,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         sessionFailures = []
         sessionSuccesses = []
         sessionWasCancelled = false
+        sessionAbortedJobs = 0
         downloadHelper.isInstallSessionActive = true
         defer {
             isInstallQueueRunning = false
@@ -1276,13 +1303,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 errorShow = false
                 jobFailed = true
             }
+            // A job the user aborted at a prompt counts as neither
+            // success nor failure.
+            let jobAborted = lastInstallAborted
+            lastInstallAborted = false
+            if jobAborted {
+                sessionAbortedJobs += 1
+            }
             if downloadHelper.cancelled {
                 // The user stopped this job (and drained the rest
                 // of the queue): it counts as neither success nor
                 // failure, and no success card is shown for the
                 // session — failures already recorded still are.
                 sessionWasCancelled = true
-            } else if !jobFailed {
+            } else if !jobFailed && !jobAborted {
                 switch job {
                 case .url(_, _, _, let autoReplace, let bundleID, let version):
                     // The card's Open button must name the app that
@@ -1313,9 +1347,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         let successes = sessionSuccesses
         let total = sessionTotalJobs
         let cancelled = sessionWasCancelled
+        let abortedJobs = sessionAbortedJobs
         sessionFailures = []
         sessionSuccesses = []
         sessionWasCancelled = false
+        sessionAbortedJobs = 0
         guard total > 0 else { return }
 
         if total <= 1 {
@@ -1334,14 +1370,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         let updates = successes.filter { $0.isUpdate }.count
         let installs = successes.count - updates
         if !failures.isEmpty {
-            var text = "lc.install.batchSummary.result %lld %lld".localizeWithFormat(total - failedJobs, failedJobs)
+            var text = "lc.install.batchSummary.result %lld %lld".localizeWithFormat(total - failedJobs - abortedJobs, failedJobs)
             for failure in failures {
                 text += "\n\(failure.name)：\(failure.error)"
             }
             batchSummaryText = text
-            downloadHelper.installCompletion = .batch(done: total - failedJobs, failed: failedJobs, updates: updates, installs: installs)
-        } else if !cancelled {
-            downloadHelper.installCompletion = .batch(done: total, failed: 0, updates: updates, installs: installs)
+            downloadHelper.installCompletion = .batch(done: total - failedJobs - abortedJobs, failed: failedJobs, updates: updates, installs: installs)
+        } else if !cancelled && abortedJobs < total {
+            downloadHelper.installCompletion = .batch(done: total - abortedJobs, failed: 0, updates: updates, installs: installs)
         }
     }
 
@@ -1488,6 +1524,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 if let importRecord {
                     finalizeDownloadRecord(importRecord)
                 }
+            } catch is InstallUserAbort {
+                lastInstallAborted = true
             } catch {
                 errorInfo = error.localizedDescription
                 errorShow = true
@@ -1541,6 +1579,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             downloadHelper.isInstallingPhase = true
             try await installIpaFile(destinationURL)
             finalizeDownloadRecord(record)
+        } catch is InstallUserAbort {
+            // The download itself completed (the record stays
+            // completed); only the install was aborted.
+            lastInstallAborted = true
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
