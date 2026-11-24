@@ -663,14 +663,20 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     // MARK: - List / Grid shared content
 
+    // The 6-column option was removed from the grid settings
+    // (Ann 2026-11-24); a stored 6 from before clamps to 5.
+    var effectiveGridColumns: Int {
+        min(max(gridColumns, 3), 5)
+    }
+
     var gridLayoutColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 16), count: gridColumns)
+        Array(repeating: GridItem(.flexible(), spacing: 16), count: effectiveGridColumns)
     }
 
     @ViewBuilder
     func appCollection(apps: [LCAppModel]) -> some View {
         if gridMode {
-            LCAppGridView(apps: apps, columns: gridColumns, iconSize: gridIconSize, darkModeIcon: darkModeIcon, actions: gridActions)
+            LCAppGridView(apps: apps, columns: effectiveGridColumns, iconSize: gridIconSize, darkModeIcon: darkModeIcon, actions: gridActions)
         } else {
             LazyVStack {
                 ForEach(apps, id: \.self) { app in
