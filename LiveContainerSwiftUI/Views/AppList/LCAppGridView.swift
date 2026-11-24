@@ -263,6 +263,17 @@ private struct LCAppGridCell: View {
                 // the icon just dims to 0.7 the moment it is pressed
                 // and stays dimmed for the whole launch.
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
+                // The long-press menu hangs on the icon itself, not
+                // the whole cell, and the lift shows the icon WITH
+                // its corner badges (see liftPreview below): the
+                // badges stay fixed on the icon through the lift
+                // instead of showing through from their own layer,
+                // and there is no white plate (Ann 2026-11-24).
+                .contextMenu {
+                    contextMenuItems
+                } preview: {
+                    liftPreview
+                }
 
                 Text(app.displayName)
                     .font(.footnote)
@@ -315,18 +326,6 @@ private struct LCAppGridCell: View {
                     })
         )
         // Explicit preview: without one, iOS lifts a snapshot of
-        // the whole cell on a white plate — the white box that
-        // flashed on long-press — and the corner badges, which
-        // live in overlays reaching outside the icon's frame,
-        // showed through under the lifted copy (Ann 2026-11-24).
-        // Lifting just the icon, like the home screen, avoids
-        // both: no white plate, no badges in the lifted copy.
-        .contextMenu {
-            contextMenuItems
-        } preview: {
-            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                .frame(width: iconSize, height: iconSize)
-        }
         // The running close badge lives in an overlay, outside the
         // gesture-carrying cell — the same structure as the list, whose
         // badge overlays the banner and works. Inside the cell it
@@ -349,6 +348,9 @@ private struct LCAppGridCell: View {
                     .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
                 }
                 .frame(width: iconSize, height: iconSize)
+                // Dim in sync with the icon so the badge reads as
+                // fixed on it, not floating on its own layer.
+                .opacity(isPressed ? 0.7 : 1)
             }
         }
         // The lock badge mirrors the close badge on the opposite
@@ -368,8 +370,49 @@ private struct LCAppGridCell: View {
                         .offset(x: -lockBadgeSize * 0.25, y: lockBadgeSize * 0.25)
                 }
                 .frame(width: iconSize, height: iconSize)
+                .opacity(isPressed ? 0.7 : 1)
             }
         }
+    }
+
+    // What the long-press lift shows: the icon with its corner
+    // badges drawn at their real positions, on a frame padded by
+    // the close badge's quarter-diameter overhang so nothing
+    // clips. The preview is centered on the icon, so its badges
+    // land on the live overlay badges beneath and the two read
+    // as one — the badges stay fixed on the icon through the
+    // whole lift (Ann 2026-11-24).
+    private var liftPreview: some View {
+        ZStack {
+            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
+                .frame(width: iconSize, height: iconSize)
+            if actions.isRunning(app) {
+                closeBadgePicture
+                    .offset(x: iconSize / 2 - badgeSize * 0.25,
+                            y: -(iconSize / 2 - badgeSize * 0.25))
+            }
+            if app.uiIsLocked && !app.uiIsHidden {
+                lockBadge
+                    .offset(x: -(iconSize / 2 - lockBadgeSize * 0.25),
+                            y: iconSize / 2 - lockBadgeSize * 0.25)
+            }
+        }
+        .frame(width: iconSize + badgeSize * 0.5,
+               height: iconSize + badgeSize * 0.5)
+    }
+
+    // The close badge as a plain picture for the lift preview
+    // (the live one in the cell overlay is a Button).
+    private var closeBadgePicture: some View {
+        ZStack {
+            Circle()
+                .fill(Color.red)
+            Image(systemName: "xmark")
+                .font(.system(size: badgeSize * 0.5, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: badgeSize, height: badgeSize)
+        .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
     private var hasBadges: Bool {
