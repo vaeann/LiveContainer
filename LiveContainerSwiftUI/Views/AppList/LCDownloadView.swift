@@ -25,8 +25,8 @@ public final class DownloadHelper : ObservableObject {
     @Published var isInstallingPhase = false
     @Published var queuedInstallCount = 0
     /// Real decompress/sign progress of the install phase (moved
-    /// here from the app list's view state so both the navigation
-    /// bar bar and the capsule read the same value).
+    /// here from the app list's view state so the capsule reads
+    /// the same value the installer writes).
     @Published var installProgressPercentage : Float = 0.0
     /// Success card shown in the capsule's place when an install
     /// session ends (Ann 2026-11-24): set by the app list's

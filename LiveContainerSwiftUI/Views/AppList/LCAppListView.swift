@@ -294,7 +294,6 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 }
 
             }
-            .navigationBarProgressBar(show:$installprogressVisible, progress: $downloadHelper.installProgressPercentage)
             .coordinateSpace(name: "scroll")
             .onAppear {
                 if !didAppear {
