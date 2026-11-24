@@ -1748,7 +1748,7 @@ struct AppIconView: View {
 /// touched. This layer installs no gesture recognizers and does not
 /// override hit testing, so the dock's own drag and the long-press
 /// close keep working as before; it only observes (the same pattern
-/// as the app grid's LCGridTouchObserver).
+/// as the app grid icon host's press tracking).
 private final class DockIconTouchView: UIView {
     var onBegan: (() -> Void)?
     var onMoved: ((Bool) -> Void)?

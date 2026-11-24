@@ -27,31 +27,6 @@ struct LCAppGridActions {
     let onCloseRunning: (LCAppModel) -> Void
 }
 
-private extension View {
-    /// The grid cell's long-press menu with its custom lift
-    /// preview where the OS supports one (the preview form of
-    /// contextMenu is iOS 16+; the deployment target is 15.0).
-    /// Older systems get the same menu with the default preview.
-    @ViewBuilder
-    func contextMenuWithPreview<MenuItems: View, Preview: View>(
-        @ViewBuilder menuItems: () -> MenuItems,
-        @ViewBuilder preview: () -> Preview
-    ) -> some View {
-        if #available(iOS 16.0, *) {
-            self.contextMenu(menuItems: menuItems, preview: preview)
-        } else {
-            self.contextMenu(menuItems: menuItems)
-        }
-    }
-}
-
-private struct LCGridIconFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
 struct LCAppGridView: View {
     let apps: [LCAppModel]
     let columns: Int
@@ -144,86 +119,411 @@ struct LCAppGridView: View {
     }
 }
 
-/// Transparent UIKit layer that reports raw touch-down / touch-up on the
-/// grid icon, mirroring how LCAppBannerViewController tracks touches for
-/// the list's press feedback. It installs no gesture recognizers and does
-/// not override hit testing, so it never competes with the cell's taps,
-/// context menu or the scroll view — it only observes the touches that
-/// land on it and forwards them up the responder chain untouched.
-private struct LCGridTouchObserver: UIViewRepresentable {
-    @Binding var isPressed: Bool
-    /// Side of the top-trailing corner square reserved for the close
-    /// badge (0 when the badge is not shown); see LCGridTouchView.
-    var badgeExclusion: CGFloat = 0
-
-    func makeUIView(context: Context) -> LCGridTouchView {
-        let view = LCGridTouchView()
-        view.badgeExclusion = badgeExclusion
-        view.onPressChange = { [self] pressed in
-            if isPressed != pressed {
-                isPressed = pressed
-            }
-        }
-        return view
+/// The grid cell's icon as ONE UIKit view (Ann 2026-11-25,
+/// approved after three SwiftUI arrangements failed): the icon,
+/// the status ribbon and the running close badge all live inside
+/// this single view, and a UIContextMenuInteraction on it provides
+/// the long-press menu. That is what finally lets the badge and
+/// the menu coexist — the badge is a real UIButton (its taps
+/// always land), the menu's targeted preview snapshots this whole
+/// view (badge included, nothing clipped by the platter, nothing
+/// left floating at the cell's old spot), and tap / double-tap /
+/// long-press arbitration is UIKit's own, exactly like the home
+/// screen. The SwiftUI attempts each broke one leg of that tripod:
+/// a badge inside the menu's source view rendered but never fired
+/// its tap, a badge outside it stayed behind during the lift, and
+/// hiding it via the preview's lifecycle was unreliable.
+///
+/// The view is a quarter-badge wider and taller than the icon so
+/// the badge (whose center sits a quarter of its diameter inside
+/// the icon's top-right corner) fits fully inside its bounds; the
+/// cell compensates the layout so the icon itself lands exactly
+/// where it always did.
+private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate {
+    struct RibbonSpec: Equatable {
+        var shared = false
+        var jit = false
+        var is32 = false
+        var locked = false
+        var visible: Bool { shared || jit || is32 || locked }
     }
 
-    func updateUIView(_ uiView: LCGridTouchView, context: Context) {
-        uiView.badgeExclusion = badgeExclusion
-        uiView.onPressChange = { [self] pressed in
-            if isPressed != pressed {
-                isPressed = pressed
-            }
-        }
-    }
-}
+    private let iconContainer = UIView()
+    private let iconImageView = UIImageView()
+    private let ribbonView = UIView()
+    private var ribbonBackground: UIView?
+    private let ribbonStack = UIStackView()
+    private let badgeButton = UIButton(type: .custom)
 
-private final class LCGridTouchView: UIView {
-    var onPressChange: ((Bool) -> Void)?
-    var badgeExclusion: CGFloat = 0
+    private var iconSize: CGFloat = 0
+    private var showBadge = false
+    private var ribbonSpec = RibbonSpec()
+    private var lastIcon: UIImage?
+    private var isPressed = false
+    private var isLaunching = false
+    private var inMenu = false
     private var clearWorkItem: DispatchWorkItem?
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // This view is a real UIView spread over the whole icon, and
-        // UIKit hit-tests it before the SwiftUI-drawn close badge that
-        // overlaps the icon's top-trailing corner — the badge rendered
-        // on top but its touches landed here and were forwarded up the
-        // responder chain as ordinary cell touches. Carve the badge's
-        // corner out so those touches reach the badge instead.
-        if badgeExclusion > 0,
-           point.x >= bounds.width - badgeExclusion, point.y <= badgeExclusion {
-            return nil
-        }
-        return super.hitTest(point, with: event)
+    private var onLaunch: ((CGRect?) -> Void)?
+    private var onOpenSettings: (() -> Void)?
+    private var onClose: (() -> Void)?
+    private var menuProvider: (() -> UIMenu)?
+
+    private var badgeSize: CGFloat { min(max(iconSize * 0.4, 18), 34) }
+    private var overhang: CGFloat { badgeSize * 0.25 }
+    private var ribbonHeight: CGFloat { iconSize * 0.28 }
+    private var ribbonGlyphSize: CGFloat { iconSize * 0.16 }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        iconImageView.contentMode = .scaleAspectFit
+        iconImageView.isUserInteractionEnabled = false
+        iconContainer.clipsToBounds = true
+        iconContainer.addSubview(iconImageView)
+
+        ribbonView.clipsToBounds = true
+        ribbonView.isUserInteractionEnabled = false
+        ribbonStack.axis = .horizontal
+        ribbonStack.alignment = .center
+        ribbonView.addSubview(ribbonStack)
+        iconContainer.addSubview(ribbonView)
+        addSubview(iconContainer)
+
+        badgeButton.backgroundColor = .red
+        badgeButton.tintColor = .white
+        badgeButton.layer.shadowColor = UIColor.black.withAlphaComponent(0.25).cgColor
+        badgeButton.layer.shadowRadius = 2
+        badgeButton.layer.shadowOffset = CGSize(width: 0, height: 1)
+        badgeButton.layer.shadowOpacity = 1
+        badgeButton.addTarget(self, action: #selector(handleBadgeTap), for: .touchUpInside)
+        addSubview(badgeButton)
+
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.delegate = self
+        addGestureRecognizer(doubleTap)
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
+        singleTap.numberOfTapsRequired = 1
+        singleTap.delegate = self
+        singleTap.require(toFail: doubleTap)
+        addGestureRecognizer(singleTap)
+
+        addInteraction(UIContextMenuInteraction(delegate: self))
     }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(icon: UIImage, iconSize: CGFloat, showBadge: Bool, ribbon: RibbonSpec,
+                   isLaunching: Bool,
+                   onLaunch: @escaping (CGRect?) -> Void,
+                   onOpenSettings: @escaping () -> Void,
+                   onClose: @escaping () -> Void,
+                   menuProvider: @escaping () -> UIMenu) {
+        self.onLaunch = onLaunch
+        self.onOpenSettings = onOpenSettings
+        self.onClose = onClose
+        self.menuProvider = menuProvider
+        self.isLaunching = isLaunching
+        if self.iconSize != iconSize {
+            self.iconSize = iconSize
+            lastIcon = nil
+            ribbonSpec = RibbonSpec()
+        }
+        if lastIcon !== icon {
+            lastIcon = icon
+            iconImageView.image = icon
+        }
+        if self.showBadge != showBadge {
+            self.showBadge = showBadge
+        }
+        if ribbonSpec != ribbon {
+            ribbonSpec = ribbon
+            rebuildRibbon()
+        }
+        applyDim()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        iconContainer.frame = CGRect(x: 0, y: overhang, width: iconSize, height: iconSize)
+        iconContainer.layer.cornerRadius = iconSize * 0.2667
+        iconImageView.frame = iconContainer.bounds
+        ribbonView.frame = CGRect(x: 0, y: iconSize - ribbonHeight, width: iconSize, height: ribbonHeight)
+        ribbonView.isHidden = !ribbonSpec.visible
+        // The glass is drawn 6pt taller than the band and the band
+        // clips the overflow, so the glass's bright top rim lands
+        // above the visible area (Ann 2026-11-24).
+        ribbonBackground?.frame = CGRect(x: 0, y: -6, width: iconSize, height: ribbonHeight + 6)
+        ribbonStack.spacing = iconSize * 0.07
+        // The glyph row hugs its content and sits centered in the
+        // band, like the SwiftUI HStack it replaces.
+        let stackSize = ribbonStack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        ribbonStack.frame = CGRect(x: (iconSize - stackSize.width) / 2,
+                                   y: (ribbonHeight - stackSize.height) / 2,
+                                   width: stackSize.width, height: stackSize.height)
+        let badgeCenter = CGPoint(x: iconSize - overhang, y: overhang * 2)
+        badgeButton.frame = CGRect(x: badgeCenter.x - badgeSize / 2, y: badgeCenter.y - badgeSize / 2,
+                                   width: badgeSize, height: badgeSize)
+        badgeButton.layer.cornerRadius = badgeSize / 2
+        badgeButton.setImage(UIImage(systemName: "xmark",
+                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: badgeSize * 0.5, weight: .bold)),
+                             for: .normal)
+        badgeButton.isHidden = !showBadge
+    }
+
+    private func rebuildRibbon() {
+        ribbonBackground?.removeFromSuperview()
+        ribbonBackground = nil
+        if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+            let effect = UIGlassEffect(style: .regular)
+            effect.tintColor = UIColor.black.withAlphaComponent(0.3)
+            let glass = UIVisualEffectView(effect: effect)
+            ribbonView.insertSubview(glass, at: 0)
+            ribbonBackground = glass
+        } else {
+            let band = UIView()
+            band.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+            ribbonView.insertSubview(band, at: 0)
+            ribbonBackground = band
+        }
+        for subview in ribbonStack.arrangedSubviews {
+            ribbonStack.removeArrangedSubview(subview)
+            subview.removeFromSuperview()
+        }
+        func glyph(_ systemName: String) {
+            let config = UIImage.SymbolConfiguration(pointSize: ribbonGlyphSize, weight: .bold)
+            let imageView = UIImageView(image: UIImage(systemName: systemName, withConfiguration: config)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal))
+            imageView.contentMode = .center
+            ribbonStack.addArrangedSubview(imageView)
+        }
+        // Banner order: shared, JIT, 32, lock ("32" replaces the
+        // bolt for 32-bit apps — the two never show together).
+        if ribbonSpec.shared { glyph("arrowshape.turn.up.left.fill") }
+        if ribbonSpec.jit { glyph("bolt.fill") }
+        if ribbonSpec.is32 {
+            let label = UILabel()
+            label.text = "32"
+            label.font = .systemFont(ofSize: ribbonGlyphSize * 0.92, weight: .bold)
+            label.textColor = .white
+            ribbonStack.addArrangedSubview(label)
+        }
+        if ribbonSpec.locked { glyph("lock.fill") }
+        setNeedsLayout()
+    }
+
+    // MARK: Press feedback (mirrors the banner's and the home
+    // screen's: the icon just dims to 0.7, no shrink, and stays
+    // dimmed for the whole launch).
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         clearWorkItem?.cancel()
         clearWorkItem = nil
-        onPressChange?(true)
+        setPressed(true)
         super.touchesBegan(touches, with: event)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // The cell's single tap only fires once the double tap has
-        // failed (~0.3s after the finger lifts), and only then does the
-        // launch state take over the dimming. Hold the press dim for
-        // that disambiguation window so a quick tap flows straight from
-        // press dim into launch dim with no undimmed gap in between.
-        let work = DispatchWorkItem { [weak self] in
-            self?.onPressChange?(false)
-        }
+        // The single tap only fires once the double tap has failed
+        // (~0.3s after the finger lifts), and only then does the
+        // launch state take over the dimming. Hold the press dim
+        // for that disambiguation window so a quick tap flows
+        // straight from press dim into launch dim with no gap.
+        let work = DispatchWorkItem { [weak self] in self?.setPressed(false) }
         clearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
         super.touchesEnded(touches, with: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // A scroll or the context menu taking over cancels the touch:
-        // clear immediately, no linger.
+        // A scroll or the context menu taking over cancels the
+        // touch: clear immediately, no linger.
         clearWorkItem?.cancel()
         clearWorkItem = nil
-        onPressChange?(false)
+        setPressed(false)
         super.touchesCancelled(touches, with: event)
+    }
+
+    private func setPressed(_ pressed: Bool) {
+        isPressed = pressed
+        applyDim()
+    }
+
+    private func applyDim() {
+        let dim: CGFloat = (isPressed || isLaunching) && !inMenu ? 0.7 : 1
+        iconContainer.alpha = dim
+        badgeButton.alpha = dim
+    }
+
+    // MARK: Taps
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // Taps that land on the close badge belong to the badge
+        // alone: no launch, no settings, whatever the tap count.
+        if showBadge, badgeButton.frame.contains(touch.location(in: self)) {
+            return false
+        }
+        return true
+    }
+
+    @objc private func handleSingleTap() {
+        // The tapped icon's frame in window coordinates: a running
+        // app's window grows out of it (iOS-style entrance).
+        let rect = iconContainer.convert(iconContainer.bounds, to: nil)
+        onLaunch?(rect)
+    }
+
+    @objc private func handleDoubleTap() {
+        onOpenSettings?()
+    }
+
+    @objc private func handleBadgeTap() {
+        onClose?()
+    }
+
+    // MARK: Context menu
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            self?.menuProvider?()
+        }
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        // The lift shows this view undimmed even if it was pressed
+        // (or mid-launch) when the hold began.
+        inMenu = true
+        applyDim()
+        return targetedPreview()
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        targetedPreview()
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                willEndFor configuration: UIContextMenuConfiguration,
+                                animator: UIContextMenuInteractionAnimating?) {
+        inMenu = false
+        applyDim()
+    }
+
+    private func targetedPreview() -> UITargetedPreview {
+        // The visible shape is the icon's rounded rect plus the
+        // badge's circle — exactly what is on screen, so the
+        // platter has nothing extra to show or clip.
+        let params = UIPreviewParameters()
+        let path = UIBezierPath(roundedRect: iconContainer.frame, cornerRadius: iconSize * 0.2667)
+        if showBadge {
+            path.append(UIBezierPath(ovalIn: badgeButton.frame))
+        }
+        params.visiblePath = path
+        params.backgroundColor = .clear
+        return UITargetedPreview(view: self, parameters: params)
+    }
+}
+
+/// SwiftUI wrapper for LCGridIconHostView; also builds the
+/// long-press menu as a UIMenu with the same items, in the same
+/// order, as the banner's context menu.
+private struct LCGridIconHost: UIViewRepresentable {
+    let app: LCAppModel
+    let iconSize: CGFloat
+    let darkModeIcon: Bool
+    let isRunning: Bool
+    let actions: LCAppGridActions
+    let onUninstall: () -> Void
+
+    func makeUIView(context: Context) -> LCGridIconHostView {
+        let view = LCGridIconHostView()
+        configure(view)
+        return view
+    }
+
+    func updateUIView(_ uiView: LCGridIconHostView, context: Context) {
+        configure(uiView)
+    }
+
+    private func configure(_ view: LCGridIconHostView) {
+        view.configure(
+            icon: app.appInfo.iconIsDarkIcon(darkModeIcon),
+            iconSize: iconSize,
+            showBadge: isRunning,
+            ribbon: .init(shared: app.uiIsShared,
+                          jit: app.uiIsJITNeeded && !app.uiIs32bit,
+                          is32: app.uiIs32bit,
+                          locked: app.uiIsLocked && !app.uiIsHidden),
+            isLaunching: app.isAppRunning,
+            onLaunch: { rect in actions.onLaunch(app, rect) },
+            onOpenSettings: { actions.onOpenSettings(app) },
+            onClose: { actions.onCloseRunning(app) },
+            menuProvider: { Self.buildMenu(app: app, actions: actions, onUninstall: onUninstall) }
+        )
+    }
+
+    private static func buildMenu(app: LCAppModel, actions: LCAppGridActions, onUninstall: @escaping () -> Void) -> UIMenu {
+        var rest: [UIMenuElement] = []
+        if !app.uiIsShared, app.uiSelectedContainer != nil {
+            rest.append(UIAction(title: "lc.appBanner.openDataFolder".loc,
+                                 image: UIImage(systemName: "folder")) { _ in
+                actions.onOpenDataFolder(app)
+            })
+        }
+        if #available(iOS 16.0, *) {
+            rest.append(UIAction(
+                title: app.shouldLaunchInMultitaskMode ? "lc.appBanner.run".loc : "lc.appBanner.multitask".loc,
+                image: UIImage(systemName: app.shouldLaunchInMultitaskMode ? "play.fill" : "macwindow.badge.plus")
+            ) { _ in
+                actions.onLaunchMultitaskToggle(app)
+            })
+        }
+        rest.append(UIMenu(title: "lc.appBanner.addToHomeScreen".loc,
+                           image: UIImage(systemName: "plus.app"),
+                           children: [
+                            UIAction(title: "lc.appBanner.copyLaunchUrl".loc,
+                                     image: UIImage(systemName: "link")) { _ in
+                                actions.onCopyLaunchUrl(app)
+                            },
+                            UIAction(title: "lc.appBanner.saveAppIcon".loc,
+                                     image: UIImage(systemName: "square.and.arrow.down")) { _ in
+                                Task { await actions.onSaveIcon(app) }
+                            },
+                            UIAction(title: "lc.appBanner.createAppClip".loc,
+                                     image: UIImage(systemName: "appclip")) { _ in
+                                Task { await actions.onCreateAppClip(app) }
+                            },
+                           ]))
+        rest.append(UIAction(title: "lc.tabView.settings".loc,
+                             image: UIImage(systemName: "gear")) { _ in
+            actions.onOpenSettings(app)
+        })
+        if !app.uiIsShared {
+            rest.append(UIAction(title: "lc.appBanner.uninstall".loc,
+                                 image: UIImage(systemName: "trash"),
+                                 attributes: .destructive) { _ in
+                onUninstall()
+            })
+        }
+        if app.uiContainers.count > 1 {
+            let containers = UIMenu(title: "Containers", children: app.uiContainers.map { container in
+                UIAction(title: container.name,
+                         state: container == app.uiSelectedContainer ? .on : .off) { _ in
+                    app.uiSelectedContainer = container
+                }
+            })
+            // An inline group renders with separators around it —
+            // the UIMenu form of the SwiftUI menu's Divider below
+            // the Containers submenu.
+            return UIMenu(children: [containers, UIMenu(title: "", options: .displayInline, children: rest)])
+        }
+        return UIMenu(children: rest)
     }
 }
 
@@ -233,313 +533,36 @@ private struct LCAppGridCell: View {
     let darkModeIcon: Bool
     let actions: LCAppGridActions
     let onUninstall: () -> Void
-    @State private var isPressed = false
-    // This cell's icon frame in window coordinates, kept current by
-    // the preference reporter on the icon below (scrolling included).
-    @State private var iconFrame: CGRect = .zero
-    // True while this cell's long-press menu is presented, driven
-    // by the lift preview's own appear/disappear (see liftPreview):
-    // the live close badge hides for exactly that span (Ann
-    // 2026-11-24 — the badge is NOT part of the lift, and nothing
-    // of it may stay behind at the cell's old spot either).
-    @State private var menuPresented = false
 
     // Close-badge diameter, scaled with the icon (0.4x, clamped).
     private var badgeSize: CGFloat {
         min(max(iconSize * 0.4, 18), 34)
     }
+    // The UIKit icon host is a quarter-badge larger than the icon
+    // on the top and right so the badge fits inside it; the offset
+    // below puts the icon itself back on the exact spot it occupied
+    // before the host existed, and the reduced spacing keeps the
+    // icon-to-name gap at its old 6pt.
+    private var hostSize: CGFloat { iconSize + badgeSize * 0.25 }
 
     var body: some View {
-            VStack(spacing: 6) {
-                ZStack(alignment: .topTrailing) {
-                    // Visual layer: the icon plus the status ribbon
-                    // across its bottom — Ann's design (2026-11-24):
-                    // a band like a pocket flap holding every status
-                    // glyph except the close badge, centered, in
-                    // banner order (shared, JIT, 32, lock), showing
-                    // whichever apply. Clipped to the icon's own
-                    // rounded shape so the ribbon's bottom corners
-                    // follow the icon's.
-                    ZStack(alignment: .bottom) {
-                        IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                            .frame(width: iconSize, height: iconSize)
-                        if hasRibbonBadges {
-                            statusRibbon
-                        }
-                    }
-                    .frame(width: iconSize, height: iconSize)
-                    .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
+        VStack(spacing: 6 - badgeSize * 0.125) {
+            LCGridIconHost(app: app,
+                           iconSize: iconSize,
+                           darkModeIcon: darkModeIcon,
+                           isRunning: actions.isRunning(app),
+                           actions: actions,
+                           onUninstall: onUninstall)
+                .frame(width: hostSize, height: hostSize)
+                .offset(x: badgeSize * 0.125, y: -badgeSize * 0.125)
 
-                    // UIKit touch tracking for the press feedback — the
-                    // same mechanism as the banner's touchesBegan/Ended,
-                    // which works. The earlier simultaneous DragGesture
-                    // observer never fired on device once the composed
-                    // tap gesture and the context menu competed in the
-                    // same cell. This transparent layer sits above the
-                    // icon but below the badge and only observes: it has
-                    // no gesture recognizers, so taps, double-taps, the
-                    // context menu and scrolling all work as before, and
-                    // a scroll cancels the touch (and the press) exactly
-                    // like on the home screen. The badge's corner is
-                    // carved out of its hit area (see LCGridTouchView):
-                    // the close badge overlaps this corner of the
-                    // icon, and this UIKit layer would otherwise
-                    // claim its touches.
-                    LCGridTouchObserver(isPressed: $isPressed,
-                                        badgeExclusion: actions.isRunning(app) ? badgeSize : 0)
-                }
-                .frame(width: iconSize, height: iconSize)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: LCGridIconFrameKey.self,
-                            value: geo.frame(in: .global)
-                        )
-                    }
-                )
-                .onPreferenceChange(LCGridIconFrameKey.self) { iconFrame = $0 }
-                // Feedback identical to the iOS home screen (and to
-                // the list banner's icon): no shrink, no animation —
-                // the icon just dims to 0.7 the moment it is pressed
-                // and stays dimmed for the whole launch.
-                .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
-
-                // The long-press menu hangs on the icon itself, not
-                // the whole cell, and its lift preview is the icon
-                // with its ribbon ONLY — no close badge (Ann
-                // 2026-11-24, her own proposal): a badge drawn into
-                // the preview was clipped by the system's platter,
-                // and a badge inside the menu's source view rendered
-                // but never fired its tap. The live badge stays in
-                // the cell overlay (below, where its tap works) and
-                // hides for exactly the menu's span, driven by the
-                // preview's own lifecycle, so nothing of it shows
-                // through the lift or stays behind at the old spot.
-                .contextMenuWithPreview {
-                    contextMenuItems
-                } preview: {
-                    liftPreview
-                }
-
-                Text(app.displayName)
-                    .font(.footnote)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .top)
-
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        // Single/double tap as ONE composed gesture: the double tap takes
-        // priority and the single tap fires only when the double tap fails
-        // (the SwiftUI equivalent of UIKit's require(toFail:)). Two
-        // independent .onTapGesture modifiers have no such dependency, and
-        // on device the taps never reached the actions once the context
-        // menu's long-press competed in the same cell — this composed form
-        // is what the zh fork's grid uses for the same banner behavior.
-        .gesture(
-            TapGesture(count: 2)
-                .onEnded {
-                    actions.onOpenSettings(app)
-                }
-                .exclusively(before: TapGesture(count: 1)
-                    .onEnded {
-                        actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
-                    })
-        )
-        // The running close badge lives in an overlay, outside the
-        // gesture-carrying cell — the same structure as the list,
-        // whose badge overlays the banner and works. Inside the
-        // gesture subtree it rendered but never fired (Ann
-        // 2026-11-24: the badge placed in the menu's source view
-        // could not be tapped). The spacer matches the icon's
-        // frame and the overlay is top-centered like the icon, so
-        // top-trailing alignment plus the quarter-diameter offset
-        // put the badge's center a quarter of its diameter inside
-        // the icon's top-right corner, like the iOS home screen's
-        // numeric badges. While the long-press menu is up the
-        // badge hides (menuPresented, driven by the lift preview's
-        // lifecycle) — Ann's fix for the badge being clipped in
-        // the lift and left floating at the old spot.
-        .overlay(alignment: .top) {
-            if actions.isRunning(app) && !menuPresented {
-                ZStack(alignment: .topTrailing) {
-                    Color.clear
-                        .allowsHitTesting(false)
-                    LCRunningCloseBadge(size: badgeSize) {
-                        actions.onCloseRunning(app)
-                    }
-                    .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
-                }
-                .frame(width: iconSize, height: iconSize)
-                // Dim in sync with the icon so the badge reads as
-                // fixed on it, not floating on its own layer.
-                .opacity(isPressed ? 0.7 : 1)
-            }
-        }
-        // Safety net for the badge's return: a fresh press on the
-        // icon means any menu is gone, so never leave it hidden.
-        .onChange(of: isPressed) { pressed in
-            if pressed { menuPresented = false }
-        }
-    }
-
-    // What the long-press lift shows: the icon with its ribbon,
-    // exactly icon-sized — no close badge and no padding for one,
-    // so the system's platter has nothing to clip (Ann
-    // 2026-11-24). Its appear/disappear IS the menu's presented
-    // span, and it drives the live badge's hiding in the cell
-    // overlay: the badge is absent from the lifted picture by
-    // construction and leaves the cell spot the moment the lift
-    // begins, then returns the moment the menu closes.
-    private var liftPreview: some View {
-        ZStack(alignment: .bottom) {
-            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                .frame(width: iconSize, height: iconSize)
-            if hasRibbonBadges {
-                statusRibbon
-            }
-        }
-        .frame(width: iconSize, height: iconSize)
-        .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
-        .onAppear { menuPresented = true }
-        .onDisappear { menuPresented = false }
-    }
-
-    // Whether the status ribbon shows at all: any of the four
-    // status marks applies.
-    private var hasRibbonBadges: Bool {
-        app.uiIsShared
-            || (app.uiIsJITNeeded && !app.uiIs32bit)
-            || app.uiIs32bit
-            || (app.uiIsLocked && !app.uiIsHidden)
-    }
-
-    private var ribbonHeight: CGFloat { iconSize * 0.28 }
-    private var ribbonGlyphSize: CGFloat { iconSize * 0.16 }
-
-    // The status ribbon: a liquid-glass band across the icon's
-    // bottom (dark translucent band where glass is unavailable),
-    // holding the status glyphs centered in banner order. The
-    // glass carries a slight dark tint so the white glyphs stay
-    // readable over bright icons. "32" replaces the bolt for
-    // 32-bit apps — the two never show together, the same rule
-    // as the list.
-    private var statusRibbon: some View {
-        HStack(spacing: iconSize * 0.07) {
-            if app.uiIsShared {
-                ribbonSymbol("arrowshape.turn.up.left.fill")
-            }
-            if app.uiIsJITNeeded && !app.uiIs32bit {
-                ribbonSymbol("bolt.fill")
-            }
-            if app.uiIs32bit {
-                Text("32")
-                    .font(.system(size: ribbonGlyphSize * 0.92, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            if app.uiIsLocked && !app.uiIsHidden {
-                ribbonSymbol("lock.fill")
-            }
+            Text(app.displayName)
+                .font(.footnote)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .top)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: ribbonHeight)
-        .background(alignment: .bottom) {
-            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                // The glass material rims the edges of its shape,
-                // and the top rim reads as a black line across
-                // the icon (Ann 2026-11-24). Draw the glass taller
-                // than the band and let the band's clip cut the
-                // overflow: the rim lands above the visible area.
-                Color.clear
-                    .glassEffect(.regular.tint(.black.opacity(0.3)), in: Rectangle())
-                    .frame(height: ribbonHeight + 6)
-            } else {
-                Rectangle()
-                    .fill(Color.black.opacity(0.45))
-            }
-        }
-        .clipped()
-    }
-
-    private func ribbonSymbol(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: ribbonGlyphSize, weight: .bold))
-            .foregroundStyle(.white)
-    }
-
-    @ViewBuilder
-    private var contextMenuItems: some View {
-        // Same items, in the same order, as the banner's context menu.
-        if app.uiContainers.count > 1 {
-            Menu("Containers") {
-                ForEach(app.uiContainers, id: \.self) { container in
-                    Button {
-                        app.uiSelectedContainer = container
-                    } label: {
-                        if container == app.uiSelectedContainer {
-                            Label(container.name, systemImage: "checkmark")
-                        } else {
-                            Text(container.name)
-                        }
-                    }
-                }
-            }
-            Divider()
-        }
-
-        if !app.uiIsShared, app.uiSelectedContainer != nil {
-            Button {
-                actions.onOpenDataFolder(app)
-            } label: {
-                Label("lc.appBanner.openDataFolder".loc, systemImage: "folder")
-            }
-        }
-
-        if #available(iOS 16.0, *) {
-            Button {
-                actions.onLaunchMultitaskToggle(app)
-            } label: {
-                Label(
-                    app.shouldLaunchInMultitaskMode ? "lc.appBanner.run".loc : "lc.appBanner.multitask".loc,
-                    systemImage: app.shouldLaunchInMultitaskMode ? "play.fill" : "macwindow.badge.plus"
-                )
-            }
-        }
-
-        Menu {
-            Button {
-                actions.onCopyLaunchUrl(app)
-            } label: {
-                Label("lc.appBanner.copyLaunchUrl".loc, systemImage: "link")
-            }
-            Button {
-                Task { await actions.onSaveIcon(app) }
-            } label: {
-                Label("lc.appBanner.saveAppIcon".loc, systemImage: "square.and.arrow.down")
-            }
-            Button {
-                Task { await actions.onCreateAppClip(app) }
-            } label: {
-                Label("lc.appBanner.createAppClip".loc, systemImage: "appclip")
-            }
-        } label: {
-            Label("lc.appBanner.addToHomeScreen".loc, systemImage: "plus.app")
-        }
-
-        Button {
-            actions.onOpenSettings(app)
-        } label: {
-            Label("lc.tabView.settings".loc, systemImage: "gear")
-        }
-
-        if !app.uiIsShared {
-            Button(role: .destructive) {
-                onUninstall()
-            } label: {
-                Label("lc.appBanner.uninstall".loc, systemImage: "trash")
-            }
-        }
     }
 }
 
