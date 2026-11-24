@@ -231,7 +231,9 @@ extension DownloadHelper: URLSessionDownloadDelegate {
 
         if let error {
             let nsError = error as NSError
-            if let resumeData = nsError.userInfo[NSURLSessionDownloadTaskResumeDataKey] as? Data {
+            // The userInfo key's bridged Swift constant is not
+            // visible in this SDK; its string value is stable.
+            if let resumeData = nsError.userInfo["NSURLSessionDownloadTaskResumeData"] as? Data {
                 lastResumeData = resumeData
             }
             if cancelled {
