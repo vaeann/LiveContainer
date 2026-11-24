@@ -27,6 +27,24 @@ struct LCAppGridActions {
     let onCloseRunning: (LCAppModel) -> Void
 }
 
+private extension View {
+    /// The grid cell's long-press menu with its custom lift
+    /// preview where the OS supports one (the preview form of
+    /// contextMenu is iOS 16+; the deployment target is 15.0).
+    /// Older systems get the same menu with the default preview.
+    @ViewBuilder
+    func contextMenuWithPreview<MenuItems: View, Preview: View>(
+        @ViewBuilder menuItems: () -> MenuItems,
+        @ViewBuilder preview: () -> Preview
+    ) -> some View {
+        if #available(iOS 16.0, *) {
+            self.contextMenu(menuItems: menuItems, preview: preview)
+        } else {
+            self.contextMenu(menuItems: menuItems)
+        }
+    }
+}
+
 private struct LCGridIconFrameKey: PreferenceKey {
     static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -285,7 +303,7 @@ private struct LCAppGridCell: View {
                 // lift instead of showing through from their own
                 // layer, and there is no white plate (Ann
                 // 2026-11-24).
-                .contextMenu {
+                .contextMenuWithPreview {
                     contextMenuItems
                 } preview: {
                     liftPreview
