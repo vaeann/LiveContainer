@@ -27,6 +27,24 @@ struct LCAppGridActions {
     let onCloseRunning: (LCAppModel) -> Void
 }
 
+private extension View {
+    /// The grid cell's long-press menu with its custom lift
+    /// preview where the OS supports one (the preview form of
+    /// contextMenu is iOS 16+; the deployment target is 15.0).
+    /// Older systems get the same menu with the default preview.
+    @ViewBuilder
+    func contextMenuWithPreview<MenuItems: View, Preview: View>(
+        @ViewBuilder menuItems: () -> MenuItems,
+        @ViewBuilder preview: () -> Preview
+    ) -> some View {
+        if #available(iOS 16.0, *) {
+            self.contextMenu(menuItems: menuItems, preview: preview)
+        } else {
+            self.contextMenu(menuItems: menuItems)
+        }
+    }
+}
+
 private struct LCGridIconFrameKey: PreferenceKey {
     static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -219,6 +237,12 @@ private struct LCAppGridCell: View {
     // This cell's icon frame in window coordinates, kept current by
     // the preference reporter on the icon below (scrolling included).
     @State private var iconFrame: CGRect = .zero
+    // True while this cell's long-press menu is presented, driven
+    // by the lift preview's own appear/disappear (see liftPreview):
+    // the live close badge hides for exactly that span (Ann
+    // 2026-11-24 — the badge is NOT part of the lift, and nothing
+    // of it may stay behind at the cell's old spot either).
+    @State private var menuPresented = false
 
     // Close-badge diameter, scaled with the icon (0.4x, clamped).
     private var badgeSize: CGFloat {
@@ -227,20 +251,6 @@ private struct LCAppGridCell: View {
 
     var body: some View {
             VStack(spacing: 6) {
-                // The menu's source view: the icon PLUS its close
-                // badge, on a frame padded by the badge's overhang.
-                // The badge must live INSIDE this view — with the
-                // menu on the icon alone and the badge in an outer
-                // overlay, the system lifted the icon and left the
-                // real badge floating at the cell's old spot, while
-                // a custom preview's badge was clipped by the
-                // system's circular platter (Ann's frame-by-frame
-                // screenshots, 2026-11-24). As one source view the
-                // system hides and lifts all of it together, like
-                // a home-screen icon and its badge. The outer
-                // iconSize frame restores the layout size so the
-                // cell around it does not move.
-                ZStack {
                 ZStack(alignment: .topTrailing) {
                     // Visual layer: the icon plus the status ribbon
                     // across its bottom — Ann's design (2026-11-24):
@@ -294,28 +304,21 @@ private struct LCAppGridCell: View {
                 // and stays dimmed for the whole launch.
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
 
-                if actions.isRunning(app) {
-                    LCRunningCloseBadge(size: badgeSize) {
-                        actions.onCloseRunning(app)
-                    }
-                    // Same spot as the old overlay put it: the
-                    // badge's center a quarter of its diameter
-                    // inside the icon's top-right corner.
-                    .offset(x: iconSize / 2 - badgeSize * 0.25,
-                            y: -(iconSize / 2 - badgeSize * 0.25))
-                    // Dim in sync with the icon so the badge reads
-                    // as fixed on it, not floating on its own layer.
-                    .opacity(isPressed ? 0.7 : 1)
-                }
-                }
-                .frame(width: iconSize + badgeSize * 0.5,
-                       height: iconSize + badgeSize * 0.5)
-                .frame(width: iconSize, height: iconSize)
-                // No custom preview: the system lifts this source
-                // view itself — icon, ribbon and badge as one
-                // piece, home-screen style.
-                .contextMenu {
+                // The long-press menu hangs on the icon itself, not
+                // the whole cell, and its lift preview is the icon
+                // with its ribbon ONLY — no close badge (Ann
+                // 2026-11-24, her own proposal): a badge drawn into
+                // the preview was clipped by the system's platter,
+                // and a badge inside the menu's source view rendered
+                // but never fired its tap. The live badge stays in
+                // the cell overlay (below, where its tap works) and
+                // hides for exactly the menu's span, driven by the
+                // preview's own lifecycle, so nothing of it shows
+                // through the lift or stays behind at the old spot.
+                .contextMenuWithPreview {
                     contextMenuItems
+                } preview: {
+                    liftPreview
                 }
 
                 Text(app.displayName)
@@ -344,6 +347,63 @@ private struct LCAppGridCell: View {
                         actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
                     })
         )
+        // The running close badge lives in an overlay, outside the
+        // gesture-carrying cell — the same structure as the list,
+        // whose badge overlays the banner and works. Inside the
+        // gesture subtree it rendered but never fired (Ann
+        // 2026-11-24: the badge placed in the menu's source view
+        // could not be tapped). The spacer matches the icon's
+        // frame and the overlay is top-centered like the icon, so
+        // top-trailing alignment plus the quarter-diameter offset
+        // put the badge's center a quarter of its diameter inside
+        // the icon's top-right corner, like the iOS home screen's
+        // numeric badges. While the long-press menu is up the
+        // badge hides (menuPresented, driven by the lift preview's
+        // lifecycle) — Ann's fix for the badge being clipped in
+        // the lift and left floating at the old spot.
+        .overlay(alignment: .top) {
+            if actions.isRunning(app) && !menuPresented {
+                ZStack(alignment: .topTrailing) {
+                    Color.clear
+                        .allowsHitTesting(false)
+                    LCRunningCloseBadge(size: badgeSize) {
+                        actions.onCloseRunning(app)
+                    }
+                    .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
+                }
+                .frame(width: iconSize, height: iconSize)
+                // Dim in sync with the icon so the badge reads as
+                // fixed on it, not floating on its own layer.
+                .opacity(isPressed ? 0.7 : 1)
+            }
+        }
+        // Safety net for the badge's return: a fresh press on the
+        // icon means any menu is gone, so never leave it hidden.
+        .onChange(of: isPressed) { pressed in
+            if pressed { menuPresented = false }
+        }
+    }
+
+    // What the long-press lift shows: the icon with its ribbon,
+    // exactly icon-sized — no close badge and no padding for one,
+    // so the system's platter has nothing to clip (Ann
+    // 2026-11-24). Its appear/disappear IS the menu's presented
+    // span, and it drives the live badge's hiding in the cell
+    // overlay: the badge is absent from the lifted picture by
+    // construction and leaves the cell spot the moment the lift
+    // begins, then returns the moment the menu closes.
+    private var liftPreview: some View {
+        ZStack(alignment: .bottom) {
+            IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
+                .frame(width: iconSize, height: iconSize)
+            if hasRibbonBadges {
+                statusRibbon
+            }
+        }
+        .frame(width: iconSize, height: iconSize)
+        .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
+        .onAppear { menuPresented = true }
+        .onDisappear { menuPresented = false }
     }
 
     // Whether the status ribbon shows at all: any of the four
