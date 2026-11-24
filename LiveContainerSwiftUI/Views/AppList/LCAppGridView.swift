@@ -286,9 +286,12 @@ private struct LCAppGridCell: View {
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(.blue))
                         }
-                        if app.uiIsLocked && !app.uiIsHidden {
-                            badge(systemName: "lock.fill", color: .orange)
-                        }
+                        // The lock is not here any more: it sits
+                        // on the icon's bottom-left corner instead
+                        // (see the overlay below) — in this row it
+                        // rendered as a stray capsule under the
+                        // name and made lock-only cells taller
+                        // than their neighbours (Ann 2026-11-24).
                     }
                 }
             }
@@ -338,13 +341,47 @@ private struct LCAppGridCell: View {
                 .frame(width: iconSize, height: iconSize)
             }
         }
+        // The lock badge mirrors the close badge on the opposite
+        // corner: same overlay structure, same quarter-diameter
+        // rule — its center sits a quarter of its diameter inside
+        // the icon's bottom-left corner (Ann 2026-11-24 asked for
+        // it on the icon, bottom-left, after the under-name
+        // capsule misbehaved in the grid). Purely visual: it
+        // takes no touches, so the icon's tap handling is
+        // untouched.
+        .overlay(alignment: .top) {
+            if app.uiIsLocked && !app.uiIsHidden {
+                ZStack(alignment: .bottomLeading) {
+                    Color.clear
+                        .allowsHitTesting(false)
+                    lockBadge
+                        .offset(x: -lockBadgeSize * 0.25, y: lockBadgeSize * 0.25)
+                }
+                .frame(width: iconSize, height: iconSize)
+            }
+        }
     }
 
     private var hasBadges: Bool {
         app.uiIsShared
             || (app.uiIsJITNeeded && !app.uiIs32bit)
             || app.uiIs32bit
-            || (app.uiIsLocked && !app.uiIsHidden)
+    }
+
+    // Lock-badge diameter, scaled with the icon like the close
+    // badge but a step smaller — it is a status mark, not a
+    // button.
+    private var lockBadgeSize: CGFloat {
+        min(max(iconSize * 0.32, 15), 26)
+    }
+
+    private var lockBadge: some View {
+        Image(systemName: "lock.fill")
+            .font(.system(size: lockBadgeSize * 0.52, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: lockBadgeSize, height: lockBadgeSize)
+            .background(Circle().fill(.orange))
+            .allowsHitTesting(false)
     }
 
     private func badge(systemName: String, color: Color) -> some View {
