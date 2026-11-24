@@ -16102,6 +16102,236 @@
         }
       }
     },
+    "lc.downloads.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "No saved packages yet. Packages you download from sources or import will be kept here."
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "还没有保存的安装包。从软件源下载或手动导入的包都会保存在这里。"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "還沒有保存的安裝包。從軟件源下載或手動導入的包都會保存在這裡。"
+            }
+          }
+      }
+    },
+    "lc.downloads.totalSize %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Total size %@"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "总占用 %@"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "總占用 %@"
+            }
+          }
+      }
+    },
+    "lc.downloads.clearAll" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Delete All"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "全部删除"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "全部刪除"
+            }
+          }
+      }
+    },
+    "lc.downloads.clearAllMessage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Delete all saved packages? This cannot be undone."
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "确定要删除全部保存的安装包吗？此操作不可撤销。"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "確定要刪除全部保存的安裝包嗎？此操作不可撤銷。"
+            }
+          }
+      }
+    },
+    "lc.downloads.install" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Install"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "安装"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "安裝"
+            }
+          }
+      }
+    },
+    "lc.downloads.resume" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Resume"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "继续下载"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "繼續下載"
+            }
+          }
+      }
+    },
+    "lc.downloads.share" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Share / Export"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "分享导出"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "分享匯出"
+            }
+          }
+      }
+    },
+    "lc.downloads.delete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Delete"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "删除"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "刪除"
+            }
+          }
+      }
+    },
+    "lc.downloads.incomplete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Incomplete"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "未完成"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "未完成"
+            }
+          }
+      }
+    },
+    "lc.downloads.progressOfTotal %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "%@ of %@ downloaded"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "已下载 %@ / %@"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "已下載 %@ / %@"
+            }
+          }
+      }
+    },
     "lc.guestTweak.appSwitchTip %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -31960,19 +32190,19 @@
           "en" : {
             "stringUnit" : {
               "state" : "translated",
-              "value" : "Sources (%lld)"
+              "value" : "Software (%lld)"
             }
           },
           "zh-Hans" : {
             "stringUnit" : {
               "state" : "translated",
-              "value" : "软件源（%lld)"
+              "value" : "软件（%lld)"
             }
           },
           "zh-Hant" : {
             "stringUnit" : {
               "state" : "translated",
-              "value" : "軟體源（%lld)"
+              "value" : "軟體（%lld)"
             }
           }
       }
@@ -31989,13 +32219,36 @@
           "zh-Hans" : {
             "stringUnit" : {
               "state" : "translated",
-              "value" : "待更新（%lld)"
+              "value" : "更新（%lld)"
             }
           },
           "zh-Hant" : {
             "stringUnit" : {
               "state" : "translated",
-              "value" : "待更新（%lld)"
+              "value" : "更新（%lld)"
+            }
+          }
+      }
+    },
+    "lc.sources.segment.downloadsWithCount" : {
+      "extractionState" : "manual",
+      "localizations" : {
+          "en" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "Downloads (%lld)"
+            }
+          },
+          "zh-Hans" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "下载（%lld)"
+            }
+          },
+          "zh-Hant" : {
+            "stringUnit" : {
+              "state" : "translated",
+              "value" : "下載（%lld)"
             }
           }
       }
