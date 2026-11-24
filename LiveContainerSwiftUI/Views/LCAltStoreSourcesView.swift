@@ -1442,6 +1442,10 @@ final class SourceIconCache {
 
     private let memoryCache = NSCache<NSString, UIImage>()
     private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    /// Negative cache (Ann 2026-11-24): when an icon URL failed,
+    /// when it failed — dead URLs are not retried for an hour
+    /// instead of on every scroll-in.
+    private var failedAt: [String: Date] = [:]
     private let lock = NSLock()
 
     private var cacheDirectory: URL {
@@ -1463,6 +1467,12 @@ final class SourceIconCache {
         if let data = try? Data(contentsOf: file), let image = UIImage(data: data) {
             memoryCache.setObject(image, forKey: key)
             return image
+        }
+        lock.lock()
+        let recentlyFailed = failedAt[url.absoluteString].map { Date().timeIntervalSince($0) < 3600 } ?? false
+        lock.unlock()
+        if recentlyFailed {
+            return nil
         }
         // Share one download between rows asking for the same icon.
         let task: Task<UIImage?, Never>
@@ -1486,6 +1496,11 @@ final class SourceIconCache {
         let image = await task.value
         lock.lock()
         inFlight[url.absoluteString] = nil
+        if image == nil {
+            failedAt[url.absoluteString] = Date()
+        } else {
+            failedAt.removeValue(forKey: url.absoluteString)
+        }
         lock.unlock()
         if let image {
             memoryCache.setObject(image, forKey: key)
@@ -1495,6 +1510,9 @@ final class SourceIconCache {
 
     static func clearAll() {
         shared.memoryCache.removeAllObjects()
+        shared.lock.lock()
+        shared.failedAt.removeAll()
+        shared.lock.unlock()
         try? FileManager.default.removeItem(at: shared.cacheDirectory)
     }
 
