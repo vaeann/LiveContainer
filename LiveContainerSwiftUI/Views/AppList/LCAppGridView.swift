@@ -27,24 +27,6 @@ struct LCAppGridActions {
     let onCloseRunning: (LCAppModel) -> Void
 }
 
-private extension View {
-    /// The grid cell's long-press menu with its custom lift
-    /// preview where the OS supports one (the preview form of
-    /// contextMenu is iOS 16+; the deployment target is 15.0).
-    /// Older systems get the same menu with the default preview.
-    @ViewBuilder
-    func contextMenuWithPreview<MenuItems: View, Preview: View>(
-        @ViewBuilder menuItems: () -> MenuItems,
-        @ViewBuilder preview: () -> Preview
-    ) -> some View {
-        if #available(iOS 16.0, *) {
-            self.contextMenu(menuItems: menuItems, preview: preview)
-        } else {
-            self.contextMenu(menuItems: menuItems)
-        }
-    }
-}
-
 private struct LCGridIconFrameKey: PreferenceKey {
     static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
@@ -245,6 +227,20 @@ private struct LCAppGridCell: View {
 
     var body: some View {
             VStack(spacing: 6) {
+                // The menu's source view: the icon PLUS its close
+                // badge, on a frame padded by the badge's overhang.
+                // The badge must live INSIDE this view — with the
+                // menu on the icon alone and the badge in an outer
+                // overlay, the system lifted the icon and left the
+                // real badge floating at the cell's old spot, while
+                // a custom preview's badge was clipped by the
+                // system's circular platter (Ann's frame-by-frame
+                // screenshots, 2026-11-24). As one source view the
+                // system hides and lifts all of it together, like
+                // a home-screen icon and its badge. The outer
+                // iconSize frame restores the layout size so the
+                // cell around it does not move.
+                ZStack {
                 ZStack(alignment: .topTrailing) {
                     // Visual layer: the icon plus the status ribbon
                     // across its bottom — Ann's design (2026-11-24):
@@ -276,8 +272,9 @@ private struct LCAppGridCell: View {
                     // a scroll cancels the touch (and the press) exactly
                     // like on the home screen. The badge's corner is
                     // carved out of its hit area (see LCGridTouchView):
-                    // the close badge lives in the cell's overlay, and
-                    // this UIKit layer would otherwise claim its touches.
+                    // the close badge overlaps this corner of the
+                    // icon, and this UIKit layer would otherwise
+                    // claim its touches.
                     LCGridTouchObserver(isPressed: $isPressed,
                                         badgeExclusion: actions.isRunning(app) ? badgeSize : 0)
                 }
@@ -296,17 +293,29 @@ private struct LCAppGridCell: View {
                 // the icon just dims to 0.7 the moment it is pressed
                 // and stays dimmed for the whole launch.
                 .opacity(isPressed || app.isAppRunning ? 0.7 : 1)
-                // The long-press menu hangs on the icon itself, not
-                // the whole cell, and the lift shows the icon WITH
-                // its ribbon and close badge (see liftPreview
-                // below): they stay fixed on the icon through the
-                // lift instead of showing through from their own
-                // layer, and there is no white plate (Ann
-                // 2026-11-24).
-                .contextMenuWithPreview {
+
+                if actions.isRunning(app) {
+                    LCRunningCloseBadge(size: badgeSize) {
+                        actions.onCloseRunning(app)
+                    }
+                    // Same spot as the old overlay put it: the
+                    // badge's center a quarter of its diameter
+                    // inside the icon's top-right corner.
+                    .offset(x: iconSize / 2 - badgeSize * 0.25,
+                            y: -(iconSize / 2 - badgeSize * 0.25))
+                    // Dim in sync with the icon so the badge reads
+                    // as fixed on it, not floating on its own layer.
+                    .opacity(isPressed ? 0.7 : 1)
+                }
+                }
+                .frame(width: iconSize + badgeSize * 0.5,
+                       height: iconSize + badgeSize * 0.5)
+                .frame(width: iconSize, height: iconSize)
+                // No custom preview: the system lifts this source
+                // view itself — icon, ribbon and badge as one
+                // piece, home-screen style.
+                .contextMenu {
                     contextMenuItems
-                } preview: {
-                    liftPreview
                 }
 
                 Text(app.displayName)
@@ -335,75 +344,6 @@ private struct LCAppGridCell: View {
                         actions.onLaunch(app, iconFrame == .zero ? nil : iconFrame)
                     })
         )
-        // The running close badge lives in an overlay, outside the
-        // gesture-carrying cell — the same structure as the list, whose
-        // badge overlays the banner and works. Inside the cell it
-        // rendered but never fired: the cell's composed tap gesture
-        // competes for the same touches, and the UIKit touch observer
-        // over the icon claims them at the UIKit level first. The
-        // spacer matches the icon's frame and the overlay is top-
-        // centered like the icon, so top-trailing alignment plus the
-        // quarter-diameter offset put the badge's center a quarter of
-        // its diameter inside the icon's top-right corner, like the
-        // iOS home screen's numeric badges.
-        .overlay(alignment: .top) {
-            if actions.isRunning(app) {
-                ZStack(alignment: .topTrailing) {
-                    Color.clear
-                        .allowsHitTesting(false)
-                    LCRunningCloseBadge(size: badgeSize) {
-                        actions.onCloseRunning(app)
-                    }
-                    .offset(x: badgeSize * 0.25, y: -badgeSize * 0.25)
-                }
-                .frame(width: iconSize, height: iconSize)
-                // Dim in sync with the icon so the badge reads as
-                // fixed on it, not floating on its own layer.
-                .opacity(isPressed ? 0.7 : 1)
-            }
-        }
-    }
-
-    // What the long-press lift shows: the icon with its ribbon
-    // and the close badge drawn at its real position, on a frame
-    // padded by the badge's quarter-diameter overhang so nothing
-    // clips. The preview is centered on the icon, so its close
-    // badge lands on the live overlay badge beneath and the two
-    // read as one — everything stays fixed on the icon through
-    // the whole lift (Ann 2026-11-24).
-    private var liftPreview: some View {
-        ZStack {
-            ZStack(alignment: .bottom) {
-                IconImageView(icon: app.appInfo.iconIsDarkIcon(darkModeIcon))
-                    .frame(width: iconSize, height: iconSize)
-                if hasRibbonBadges {
-                    statusRibbon
-                }
-            }
-            .frame(width: iconSize, height: iconSize)
-            .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2667))
-            if actions.isRunning(app) {
-                closeBadgePicture
-                    .offset(x: iconSize / 2 - badgeSize * 0.25,
-                            y: -(iconSize / 2 - badgeSize * 0.25))
-            }
-        }
-        .frame(width: iconSize + badgeSize * 0.5,
-               height: iconSize + badgeSize * 0.5)
-    }
-
-    // The close badge as a plain picture for the lift preview
-    // (the live one in the cell overlay is a Button).
-    private var closeBadgePicture: some View {
-        ZStack {
-            Circle()
-                .fill(Color.red)
-            Image(systemName: "xmark")
-                .font(.system(size: badgeSize * 0.5, weight: .bold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: badgeSize, height: badgeSize)
-        .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
     // Whether the status ribbon shows at all: any of the four
