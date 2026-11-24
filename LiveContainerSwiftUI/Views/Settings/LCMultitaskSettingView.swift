@@ -18,6 +18,7 @@ struct LCMultitaskSettingView: View {
     @AppStorage("LCRestartTerminatedApp", store: LCUtils.appGroupUserDefault) var restartTerminatedApp = false
     @AppStorage("LCMaxOneAppOnStage", store: LCUtils.appGroupUserDefault) var onlyOneAppOnStage = false
     @AppStorage("LCDockWidth", store: LCUtils.appGroupUserDefault) var dockWidth: Double = 80
+    @AppStorage("LCBreathingLightColor", store: LCUtils.appGroupUserDefault) var breathingLightColorRaw: String = LCBreathingLightColor.standard.rawValue
     @AppStorage("LCRedirectURLToHost", store: LCUtils.appGroupUserDefault) var redirectURLToHost = false
     
     var body: some View {
@@ -92,6 +93,19 @@ struct LCMultitaskSettingView: View {
                 Text("lc.settings.dock.gestureGuide".loc)
                     .font(.footnote)
                     .foregroundColor(.secondary)
+                Picker(selection: $breathingLightColorRaw) {
+                    ForEach(LCBreathingLightColor.allCases, id: \.rawValue) { preset in
+                        HStack {
+                            Circle()
+                                .fill(preset.color)
+                                .frame(width: 12, height: 12)
+                            Text(preset.labelKey.loc)
+                        }
+                        .tag(preset.rawValue)
+                    }
+                } label: {
+                    Text("lc.settings.breathingLightColor".loc)
+                }
             }
         }
         .navigationTitle("lc.appBanner.multitask".loc)

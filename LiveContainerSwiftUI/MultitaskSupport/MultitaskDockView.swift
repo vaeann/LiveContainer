@@ -1510,6 +1510,7 @@ public struct MultitaskDockSwiftView: View {
 @available(iOS 16.0, *)
 struct CollapsedDockView: View {
     @EnvironmentObject var dockManager: MultitaskDockManager
+    @AppStorage("LCBreathingLightColor", store: LCUtils.appGroupUserDefault) var breathingLightColorRaw: String = LCBreathingLightColor.standard.rawValue
     @State private var breathing = false
 
     var body: some View {
@@ -1520,7 +1521,7 @@ struct CollapsedDockView: View {
             // property is what makes it feel smooth; the glyph is the
             // theme text color, like Weizhu's glyphs on glass.
             Image(systemName: "square.grid.2x2.fill")
-                .foregroundStyle(.primary)
+                .foregroundStyle((LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).color)
                 // Sized off the dock width, not adaptiveIconSize:
                 // the orb keeps its exact pre-0.68 glyph size
                 // (0.375 x width) — only the expanded icons shrank.
@@ -1877,6 +1878,44 @@ struct LoadingIconView: View {
     }
 }
 
+/// Breathing-light color presets (Ann 2026-11-25): one setting
+/// tints every breathing light the dock has — the collapsed
+/// orb's glyph and the hidden handle's grip — so the dock's two
+/// states share one "I am here" signal, in a color picked from
+/// a few presets chosen to stay distinguishable on any
+/// background. Stored by raw value under LCBreathingLightColor
+/// in the app-group defaults.
+enum LCBreathingLightColor: String, CaseIterable {
+    case standard, red, orange, green, blue, purple, pink
+
+    static var current: LCBreathingLightColor {
+        LCBreathingLightColor(rawValue: LCUtils.appGroupUserDefault.string(forKey: "LCBreathingLightColor") ?? "") ?? .standard
+    }
+
+    /// nil for the standard preset: each surface then keeps its
+    /// platform default (the orb glyph is Color.primary; the
+    /// handle's grip is the dark line drawn for its light bar).
+    var uiColor: UIColor? {
+        switch self {
+        case .standard: return nil
+        case .red: return .systemRed
+        case .orange: return .systemOrange
+        case .green: return .systemGreen
+        case .blue: return .systemBlue
+        case .purple: return .systemPurple
+        case .pink: return .systemPink
+        }
+    }
+
+    var color: Color {
+        uiColor.map { Color($0) } ?? .primary
+    }
+
+    var labelKey: String {
+        "lc.settings.breathingLightColor.\(rawValue)"
+    }
+}
+
 /// The handle a hidden dock leaves on the screen edge (Ann
 /// 2026-11-25, replacing the slid-out sliver and the window-level
 /// edge-swipe recognizers): a thin frosted bar in the dock's own
@@ -1950,9 +1989,32 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     }
 
     func fadeIn() {
+        applyGripStyle()
         alpha = 0
         UIView.animate(withDuration: 0.25) { self.alpha = 0.85 }
         restartIdleTimer()
+    }
+
+    /// The grip is a breathing light too (Ann 2026-11-25): the
+    /// shared breathing-light color, pulsing with the orb's own
+    /// rhythm (opacity 0.38 <-> 1, 1.15s ease-in-out). Re-read
+    /// every time the handle appears, so a color picked in
+    /// Settings applies the next time the dock hides.
+    private func applyGripStyle() {
+        if let color = LCBreathingLightColor.current.uiColor {
+            gripView.backgroundColor = color
+        } else {
+            gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        }
+        gripView.layer.removeAnimation(forKey: "breathing")
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.38
+        pulse.toValue = 1.0
+        pulse.duration = 1.15
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        gripView.layer.add(pulse, forKey: "breathing")
     }
 
     // MARK: Idle dim (bright under the finger, dim when left alone)
