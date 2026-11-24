@@ -255,7 +255,21 @@ struct InstallCompletion: Equatable {
     }
 
     static func batch(done: Int, failed: Int, updates: Int, installs: Int) -> InstallCompletion {
-        let counts = "lc.download.batchCounts %lld %lld".localizeWithFormat(updates, installs)
+        // Only name the kinds that actually happened: a plain
+        // update-all session is all updates, a queue of fresh
+        // installs is all new — "0 of the other kind" is noise.
+        // A mixed line-up only occurs when the user queues more
+        // installs while a session is already running.
+        let counts: String
+        if updates > 0 && installs > 0 {
+            counts = "lc.download.batchCounts %lld %lld".localizeWithFormat(updates, installs)
+        } else if updates > 0 {
+            counts = "lc.download.batchUpdatesOnly %lld".localizeWithFormat(updates)
+        } else if installs > 0 {
+            counts = "lc.download.batchInstallsOnly %lld".localizeWithFormat(installs)
+        } else {
+            counts = ""
+        }
         if failed > 0 {
             return InstallCompletion(
                 kind: .batch,
@@ -303,10 +317,12 @@ struct CompletionCapsule: View {
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .lineLimit(1)
-                Text(completion.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !completion.subtitle.isEmpty {
+                    Text(completion.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let bundleID = completion.bundleID {
