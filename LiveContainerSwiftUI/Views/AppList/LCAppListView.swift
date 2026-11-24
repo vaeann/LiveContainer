@@ -565,6 +565,12 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 enqueueInstall(.url(urlStr: installUrl.absoluteString, name: obj2["name"] as? String, iconURL: obj2["iconURL"] as? URL, autoReplace: autoReplace, bundleID: obj2["bundleID"] as? String, version: obj2["version"] as? String))
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallLocalFileNotification)) { obj in
+            // Install tapped on the downloads page.
+            if let fileUrl = obj.object as? URL {
+                enqueueInstall(.file(fileUrl))
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppQueueNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let items = obj2["items"] as? [[String: Any]] {
                 for item in items {

@@ -579,6 +579,7 @@ struct LCSourcesView: View {
     @State private var ignoreTick = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
+    @ObservedObject private var downloadStore = LCDownloadStore.shared
 
     /// Total number of apps across all sources (the sources tab's count).
     private var totalSourceAppsCount: Int {
@@ -590,10 +591,11 @@ struct LCSourcesView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                if !viewModel.sources.isEmpty {
+                if !viewModel.sources.isEmpty || downloadStore.count > 0 {
                     Picker("lc.sources.segment".loc, selection: $selectedSegment) {
                         Text("lc.sources.segment.sourcesWithCount".localizeWithFormat(totalSourceAppsCount)).tag(0)
                         Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
+                        Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(downloadStore.count)).tag(2)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
@@ -601,7 +603,9 @@ struct LCSourcesView: View {
                 }
 
                 Group {
-                    if viewModel.sources.isEmpty {
+                    if selectedSegment == 2 {
+                        LCDownloadsView()
+                    } else if viewModel.sources.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: "link.badge.plus")
                                 .font(.system(size: 48))

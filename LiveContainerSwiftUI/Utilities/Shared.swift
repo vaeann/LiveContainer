@@ -302,6 +302,7 @@ struct JITStreamerEBMountResponse : Codable {
 
 extension NSNotification {
     static let InstallAppNotification = Notification.Name.init("InstallAppNotification")
+    static let InstallLocalFileNotification = Notification.Name.init("InstallLocalFileNotification")
     static let InstallAppQueueNotification = Notification.Name.init("InstallAppQueueNotification")
     static let InstallCancelAllNotification = Notification.Name.init("InstallCancelAllNotification")
     static let ShowInstallSummaryNotification = Notification.Name.init("ShowInstallSummaryNotification")
