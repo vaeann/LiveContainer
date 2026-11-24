@@ -705,7 +705,11 @@ struct LCSourcesView: View {
                 autoRefreshSourcesIfNeeded()
             }
             publishBadgeCount()
-            expandedSources = []
+            // Expansion state deliberately survives tab switches
+            // (Ann 2026-11-24: re-collapsing every source on each
+            // return to this page was a nuisance). Stale entries
+            // for removed sources are pruned by the sources
+            // onChange below.
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .sources, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
