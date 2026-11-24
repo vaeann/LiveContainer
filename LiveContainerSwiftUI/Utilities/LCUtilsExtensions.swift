@@ -154,29 +154,7 @@ extension LCUtils {
         }
         return true
     }
-
-    /// Per-app verification (Ann 2026-11-25): the same system
-    /// authentication as authenticateUser(), but it always
-    /// prompts and never touches the global isHiddenAppUnlocked
-    /// flag — neither shortcutting on it nor setting it. Locked
-    /// apps verify one by one; the flag stays what it was, the
-    /// hidden section's own unlock.
-    public static func authenticateUserPerApp() async throws -> Bool {
-        var success = false
-        var error: Error? = nil
-        await withUnsafeContinuation { c in
-            LCUtils.authenticateUser { success1, error1 in
-                success = success1
-                error = error1
-                c.resume()
-            }
-        }
-        if let error = error {
-            throw error
-        }
-        return success
-    }
-
+    
     public static func getStoreName() -> String {
         switch LCUtils.store() {
         case .AltStore:
