@@ -13,6 +13,10 @@ public final class DownloadHelper : ObservableObject {
     @Published var totalSize : Int64 = 0
     @Published var isDownloading = false
     @Published var cancelled = false
+    /// What the floating progress capsule shows for the current
+    /// download; set by the install flow right before it starts.
+    @Published var downloadName : String? = nil
+    @Published var downloadIconURL : URL? = nil
     private var downloadTask: URLSessionDownloadTask?
     private var continuation: UnsafeContinuation<(), Never>?
     
@@ -81,69 +85,127 @@ public final class DownloadHelper : ObservableObject {
     }
 }
 
-struct DownloadAlert : View {
-    @StateObject var helper : DownloadHelper
+// Floating download progress capsule (Ann 2026-11-24, plan A):
+// replaces the old full-screen DownloadAlert, whose dim layer
+// swallowed every touch and froze the whole app for the length of
+// a download. The capsule floats above the tab bar and is the
+// only touchable surface it adds — everything behind it stays
+// fully usable while a download runs.
+struct DownloadCapsule : View {
+    @ObservedObject var helper : DownloadHelper
     var body: some View {
-        
-        Color.black.opacity(0.2) // Semi-transparent grey background
-            .edgesIgnoringSafeArea(.all) // Covers entire screen
-        
-        VStack {
-            Text("lc.download.downloading".loc)
-                .font(.headline)
-                .padding(.top)
-            
-            ProgressView(value: helper.downloadProgress, total: 1)
-                .padding()
-            
-            Text("\(formatBytes(helper.downloadedSize)) / \(formatBytes(helper.totalSize))")
-                .font(.subheadline)
-                .padding(.bottom)
-            
-            Button(action: cancelDownload) {
-                Text("lc.common.cancel".loc)
-                    .foregroundColor(.red)
-                    .padding(.bottom)
+        HStack(spacing: 10) {
+            Group {
+                if let iconURL = helper.downloadIconURL {
+                    SourceIconView(url: iconURL)
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(UIColor.tertiarySystemFill))
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
+            .frame(width: 34, height: 34)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(helper.downloadName ?? "")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(sizeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if helper.totalSize > 0 {
+                    ProgressView(value: clampedProgress, total: 1)
+                    Text("\("lc.download.downloading".loc) \(Int(clampedProgress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    Text("lc.download.downloading".loc)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button(action: cancelDownload) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(Color(UIColor.tertiarySystemFill)))
+            }
+            .buttonStyle(.plain)
         }
-        .frame(width: 300)
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 10)
-        .padding()
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: 22)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.22), radius: 12, y: 4)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22)
+                .strokeBorder(Color(UIColor.separator), lineWidth: 0.5)
+        }
     }
-    
+
+    private var clampedProgress: Float {
+        min(max(helper.downloadProgress, 0), 1)
+    }
+
+    private var sizeText: String {
+        if helper.totalSize > 0 {
+            return "\(formatBytes(helper.downloadedSize)) / \(formatBytes(helper.totalSize))"
+        }
+        return formatBytes(helper.downloadedSize)
+    }
+
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB] // Allow KB, MB, and GB
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
     }
-    
+
     func cancelDownload() {
         helper.cancel()
     }
 }
 
-public struct DownloadAlertModifier: ViewModifier {
+public struct DownloadCapsuleModifier: ViewModifier {
     @ObservedObject var helper : DownloadHelper
+    @EnvironmentObject var sceneDelegate: SceneDelegate
     @State var show = false
-    
-    public func body(content: Content) -> some View {
 
-        ZStack {
-            content
-            if show {
-                DownloadAlert(helper: helper)
-                
+    public func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottom) {
+                if show {
+                    DownloadCapsule(helper: helper)
+                        .padding(.horizontal, 12)
+                        .offset(y: -capsuleBottomOffset)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
-            
-        }
-        .onChange(of: helper.isDownloading) { newVal in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                show = newVal
+            .onChange(of: helper.isDownloading) { newVal in
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    show = newVal
+                }
             }
-        }
+    }
+
+    // Tab bar height (49) + bottom safe area + a small gap, so the
+    // capsule floats just above the tab bar on any device.
+    private var capsuleBottomOffset: CGFloat {
+        49 + (sceneDelegate.window?.safeAreaInsets.bottom ?? 0) + 10
     }
 }
 
@@ -189,7 +251,7 @@ class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
 }
 
 extension View {
-    public func downloadAlert(helper: DownloadHelper) -> some View {
-        self.modifier(DownloadAlertModifier(helper: helper))
+    public func downloadCapsule(helper: DownloadHelper) -> some View {
+        self.modifier(DownloadCapsuleModifier(helper: helper))
     }
 }

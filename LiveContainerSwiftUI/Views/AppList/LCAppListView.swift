@@ -76,7 +76,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @State var installObserver : NSKeyValueObservation?
 
     // serial install queue (used by the sources page's "update all")
-    @State var installQueue: [URL] = []
+    @State var installQueue: [(url: URL, name: String?, iconURL: URL?)] = []
     @State var isInstallQueueRunning = false
     // when true, the next install silently replaces the same-bundle app
     // instead of asking which bundle to replace
@@ -498,14 +498,17 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 let autoReplace = obj2["autoReplace"] as? Bool ?? false
                 Task {
                     autoReplaceNextInstall = autoReplace
-                    await installFromUrl(urlStr: installUrl.absoluteString)
+                    await installFromUrl(urlStr: installUrl.absoluteString, downloadName: obj2["name"] as? String, downloadIconURL: obj2["iconURL"] as? URL)
                     autoReplaceNextInstall = false
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppQueueNotification)) { obj in
-            if let obj2 = obj.object as? [String: Any], let installUrls = obj2["urls"] as? [URL] {
-                installQueue.append(contentsOf: installUrls)
+            if let obj2 = obj.object as? [String: Any], let items = obj2["items"] as? [[String: Any]] {
+                installQueue.append(contentsOf: items.compactMap { item in
+                    guard let url = item["url"] as? URL else { return nil }
+                    return (url: url, name: item["name"] as? String, iconURL: item["iconURL"] as? URL)
+                })
                 Task { await processInstallQueue() }
             }
         }
@@ -1056,9 +1059,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         isInstallQueueRunning = true
         defer { isInstallQueueRunning = false }
         while !installQueue.isEmpty {
-            let url = installQueue.removeFirst()
+            let item = installQueue.removeFirst()
             autoReplaceNextInstall = true
-            await installFromUrl(urlStr: url.absoluteString)
+            await installFromUrl(urlStr: item.url.absoluteString, downloadName: item.name, downloadIconURL: item.iconURL)
             autoReplaceNextInstall = false
         }
     }
@@ -1129,7 +1132,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
     }
     
-    func installFromUrl(urlStr: String) async {
+    func installFromUrl(urlStr: String, downloadName: String? = nil, downloadIconURL: URL? = nil) async {
         // ignore any install request if we are installing another app
         if self.installprogressVisible {
             return
@@ -1229,6 +1232,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 try fileManager.removeItem(at: destinationURL)
             }
             
+            downloadHelper.downloadName = downloadName ?? installUrl.lastPathComponent
+            downloadHelper.downloadIconURL = downloadIconURL
             try await downloadHelper.download(url: installUrl, to: destinationURL)
             if downloadHelper.cancelled {
                 return

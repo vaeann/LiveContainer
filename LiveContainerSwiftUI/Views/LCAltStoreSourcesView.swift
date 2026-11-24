@@ -949,13 +949,20 @@ struct LCSourcesView: View {
     }
 
     private func updateAll() {
-        let urls = updatableApps.compactMap { $0.app.latestVersion?.downloadURL }
-        guard !urls.isEmpty else { return }
+        let items: [[String: Any]] = updatableApps.compactMap { entry in
+            guard let downloadURL = entry.app.latestVersion?.downloadURL else { return nil }
+            var item: [String: Any] = ["url": downloadURL, "name": entry.app.name]
+            if let iconURL = entry.app.iconURL {
+                item["iconURL"] = iconURL
+            }
+            return item
+        }
+        guard !items.isEmpty else { return }
         withAnimation {
             DataManager.shared.model.selectedTab = .apps
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NotificationCenter.default.post(name: NSNotification.InstallAppQueueNotification, object: ["urls": urls])
+            NotificationCenter.default.post(name: NSNotification.InstallAppQueueNotification, object: ["items": items])
         }
     }
 
@@ -1040,7 +1047,11 @@ struct LCSourcesView: View {
             DataManager.shared.model.selectedTab = .apps
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: ["url": downloadURL, "autoReplace": autoReplace])
+            var payload: [String: Any] = ["url": downloadURL, "autoReplace": autoReplace, "name": app.name]
+            if let iconURL = app.iconURL {
+                payload["iconURL"] = iconURL
+            }
+            NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: payload)
         }
     }
     
