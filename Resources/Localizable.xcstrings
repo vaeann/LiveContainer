@@ -8950,6 +8950,18 @@
             "state" : "translated",
             "value" : "32-bit emulator"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "32 位模拟器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "32 位模擬器"
+          }
         }
       }
     },
@@ -28694,6 +28706,18 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Default 32-bit emulator"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认 32 位模拟器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設 32 位模擬器"
           }
         }
       }
