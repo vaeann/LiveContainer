@@ -468,8 +468,17 @@ class AppInfoProvider {
     /// hides the dock keeps it correct.
     private func syncHiddenHandle(dockFrame: CGRect, isOnRightSide: Bool) {
         guard isDockHidden, isVisible, let parent = hostingController?.view.superview else {
-            hiddenHandle?.removeFromSuperview()
-            hiddenHandle = nil
+            // Recall (or dismissal): the handle fades out as the
+            // orb springs back in, instead of popping out of
+            // existence mid-handoff.
+            if let handle = hiddenHandle {
+                hiddenHandle = nil
+                UIView.animate(withDuration: 0.18, animations: {
+                    handle.alpha = 0
+                }, completion: { _ in
+                    handle.removeFromSuperview()
+                })
+            }
             return
         }
         let handle: LCHiddenDockHandleView
