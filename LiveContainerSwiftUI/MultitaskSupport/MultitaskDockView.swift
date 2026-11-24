@@ -1241,7 +1241,18 @@ public struct MultitaskDockSwiftView: View {
                 // their offsets and are revealed by the capsule
                 // clip as it grows.
                 .frame(height: (CGFloat(dockManager.apps.count + 1) * dockManager.adaptiveIconSize + CGFloat(dockManager.apps.count) * 8) * morphProgress)
-                .opacity(Double(min(1, morphProgress * 2.2)))
+                // Staggered fades (Ann 2026-11-25, optimized morph):
+                // the icons reach full opacity early (progress 0.2,
+                // while they are still near the orb and the growing
+                // glass clips their travel), and the glyph below
+                // only starts fading once the icons are solid. The
+                // old curves crossed mid-fade (icons full at 0.45,
+                // glyph gone at 0.4) and the whole dock read as
+                // transparent for an instant; now some element is
+                // solid at every point of the morph, both ways —
+                // the same functions of progress run in reverse on
+                // collapse.
+                .opacity(Double(min(1, morphProgress * 5)))
                 .allowsHitTesting(!dockManager.isCollapsed)
 
                 // Two gestures on the floating button (Ann
@@ -1260,7 +1271,10 @@ public struct MultitaskDockSwiftView: View {
                 // target is visible. The long press's flag
                 // keeps its release from also firing the tap.
                 CollapsedDockView()
-                    .opacity(Double(max(0, 1 - morphProgress * 2.5)))
+                    // Delayed fade (see the icons' note above): the
+                    // glyph holds until progress 0.15 — the icons
+                    // are solid by then — and is gone by 0.4.
+                    .opacity(Double(1 - min(1, max(0, (morphProgress - 0.15) * 4))))
                     .allowsHitTesting(dockManager.isCollapsed)
                     .onTapGesture {
                         if collapsedLongPressTriggered {
