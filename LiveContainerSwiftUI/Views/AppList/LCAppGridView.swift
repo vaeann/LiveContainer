@@ -444,15 +444,22 @@ private struct LCAppGridCell: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: ribbonHeight)
-        .background {
+        .background(alignment: .bottom) {
             if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                // The glass material rims the edges of its shape,
+                // and the top rim reads as a black line across
+                // the icon (Ann 2026-11-24). Draw the glass taller
+                // than the band and let the band's clip cut the
+                // overflow: the rim lands above the visible area.
                 Color.clear
                     .glassEffect(.regular.tint(.black.opacity(0.3)), in: Rectangle())
+                    .frame(height: ribbonHeight + 6)
             } else {
                 Rectangle()
                     .fill(Color.black.opacity(0.45))
             }
         }
+        .clipped()
     }
 
     private func ribbonSymbol(_ systemName: String) -> some View {
