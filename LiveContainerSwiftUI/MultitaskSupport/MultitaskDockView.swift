@@ -226,15 +226,6 @@ class AppInfoProvider {
         
         // MARK: - Animation & Interaction
 
-        static var dockHiddenOffset: CGFloat {
-            let ans = LCUtils.appGroupUserDefault.double(forKey: "LCDockWidth")
-            if ans != 0 {
-                return ans * 2 / 3
-            } else {
-                return 50
-            }
-        }
-        static let edgeSwipeThreshold: CGFloat = 30.0
 
         static let standardAnimationDuration: TimeInterval = 0.3
         static let longAnimationDuration: TimeInterval = 0.4
@@ -462,6 +453,57 @@ class AppInfoProvider {
         applyNewFrame(newFrame, for: hostingController, animated: animated)
         updateStatusBarFix()
         syncTapOutsideScrim()
+        syncHiddenHandle(dockFrame: newFrame, isOnRightSide: isOnRightSide)
+    }
+
+    // MARK: - Hidden handle
+
+    private var hiddenHandle: LCHiddenDockHandleView?
+
+    /// The handle is the only thing a hidden dock leaves on
+    /// screen (Ann 2026-11-25): it lives in the same superview as
+    /// the dock itself (the top layer, above every guest window),
+    /// on the dock's own edge, centered on the dock's height.
+    /// Synced from updateDockFrame so every path that moves or
+    /// hides the dock keeps it correct.
+    private func syncHiddenHandle(dockFrame: CGRect, isOnRightSide: Bool) {
+        guard isDockHidden, isVisible, let parent = hostingController?.view.superview else {
+            hiddenHandle?.removeFromSuperview()
+            hiddenHandle = nil
+            return
+        }
+        let handle: LCHiddenDockHandleView
+        if let existing = hiddenHandle {
+            handle = existing
+        } else {
+            handle = LCHiddenDockHandleView()
+            handle.onShow = { [weak self] in self?.showDockFromHidden() }
+            handle.onMoveEnd = { [weak self] centerY in self?.moveHiddenDock(centerY: centerY) }
+            hiddenHandle = handle
+        }
+        if handle.superview !== parent {
+            parent.addSubview(handle)
+            handle.fadeIn()
+        }
+        handle.isOnRightSide = isOnRightSide
+        let screenBounds = keyWindow?.bounds ?? dockFrame
+        let minY = safeAreaInsets.top + Constants.dockVerticalMargin
+        let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - LCHiddenDockHandleView.handleHeight
+        let y = min(max(dockFrame.midY - LCHiddenDockHandleView.handleHeight / 2, minY), maxY)
+        let x = isOnRightSide ? screenBounds.width - LCHiddenDockHandleView.handleWidth : 0
+        handle.frame = CGRect(x: x, y: y, width: LCHiddenDockHandleView.handleWidth, height: LCHiddenDockHandleView.handleHeight)
+        handle.setNeedsLayout()
+    }
+
+    /// The handle was dragged vertically: move the hidden dock
+    /// (and with it the handle, via the frame sync) so the orb
+    /// returns at the new height.
+    private func moveHiddenDock(centerY: CGFloat) {
+        guard isDockHidden, let hostingController else { return }
+        let frame = hostingController.view.frame
+        hostingController.view.frame = CGRect(x: frame.origin.x, y: centerY - frame.height / 2,
+                                              width: frame.width, height: frame.height)
+        updateDockFrame()
     }
 
     /// Keep the tap-outside scrim in step with the dock: present on
@@ -554,7 +596,11 @@ class AppInfoProvider {
             }
 
             if isDockHidden {
-                ans += Constants.dockHiddenOffset
+                // Fully out (Ann 2026-11-25): a hidden dock no
+                // longer leaves a sliver of itself behind — the
+                // handle (see LCHiddenDockHandleView) is what
+                // stays on the edge instead.
+                ans += dockWidth + 2
             }
         } else {
             ans = 0
@@ -562,7 +608,7 @@ class AppInfoProvider {
                 ans += safeInsets.left
             }
             if isDockHidden {
-                ans -= Constants.dockHiddenOffset
+                ans -= dockWidth + 2
             }
         }
 
@@ -668,8 +714,6 @@ class AppInfoProvider {
             }
             
             self.updateDockFrame(animated: false)
-            
-            self.setupEdgeGestureRecognizers()
 
             
             hostingController.view.alpha = 0
@@ -708,6 +752,9 @@ class AppInfoProvider {
                 self.isCollapsed = true
                 hostingController.view.transform = .identity
                 self.syncTapOutsideScrim()
+                // A dismissed dock leaves no handle behind either.
+                self.hiddenHandle?.removeFromSuperview()
+                self.hiddenHandle = nil
             }
         }
     }
@@ -726,48 +773,17 @@ class AppInfoProvider {
         DispatchQueue.main.async {
             self.isDockHidden = false
             self.updateDockFrame()
-            self.setupEdgeGestureRecognizers()
         }
     }
 
     @objc public func hideDockToSide() {
         DispatchQueue.main.async {
+            // Hiding is a collapsed-orb state (Ann 2026-11-25):
+            // an expanded dock shoved out of the way collapses
+            // first, and the handle always brings the orb back.
+            self.isCollapsed = true
             self.isDockHidden = true
             self.updateDockFrame()
-            self.setupEdgeGestureRecognizers()
-        }
-    }
-
-    // Add edge gesture recognition areas when dock is hidden
-    private func setupEdgeGestureRecognizers() {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let keyWindow = windowScene.windows.first else { return }
-
-        keyWindow.gestureRecognizers?.removeAll { gesture in
-            return gesture is UITapGestureRecognizer || gesture is UIScreenEdgePanGestureRecognizer
-        }
-
-        if isDockHidden {
-            let leftEdgeGesture = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleEdgeSwipe(_:)))
-            leftEdgeGesture.edges = .left
-            keyWindow.addGestureRecognizer(leftEdgeGesture)
-
-            let rightEdgeGesture = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(handleEdgeSwipe(_:)))
-            rightEdgeGesture.edges = .right
-            keyWindow.addGestureRecognizer(rightEdgeGesture)
-        }
-    }
-
-    @objc private func handleEdgeSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
-        guard isDockHidden, gesture.state == .began || gesture.state == .changed else {
-            return
-        }
-
-        let translation = gesture.translation(in: gesture.view)
-        let swipeDistance = abs(translation.x)
-
-        if swipeDistance > Constants.edgeSwipeThreshold {
-            showDockFromHidden()
         }
     }
 
@@ -1185,7 +1201,6 @@ public struct MultitaskDockSwiftView: View {
     @State private var isMoving: Bool = false
     @State private var homeLongPressTriggered = false
     @State private var collapsedLongPressTriggered = false
-    @AppStorage("LCHideCollapsedDock", store: LCUtils.appGroupUserDefault) var hideCollapsedDock: Bool = false
     @State private var showCloseAllConfirm = false
 
     /// Morph progress for the collapse/expand animation: 0 is
@@ -1376,12 +1391,10 @@ public struct MultitaskDockSwiftView: View {
             .clipShape(Capsule())
             .scaleEffect(dockManager.isVisible ? 1.0 : 0.8)
             // Collapsed button: 60% opacity, dimming to 20% after 3s
-            // idle. Expanded dock: fully opaque. Hidden to the side:
-            // the remaining sliver dims to 0.4, or to 0.01 (nearly
-            // invisible) when the "hide collapsed dock" setting is on.
-            .opacity(dockManager.isDockHidden ? (hideCollapsedDock && dockManager.isCollapsed ? 0.01 : 0.4) : (dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0))
+            // idle. Expanded dock: fully opaque. (A hidden dock is
+            // fully off-screen now; its handle carries the visual.)
+            .opacity(dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0)
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
-            .animation(.easeInOut(duration: 0.35), value: dockManager.isDockHidden)
             // The remaining isCollapsed-keyed values (the root
             // opacity above) ride the morph spring like
             // everything else in the collapse change — they used
@@ -1860,6 +1873,161 @@ struct LoadingIconView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .scaleEffect(1.2)
+        }
+    }
+}
+
+/// The handle a hidden dock leaves on the screen edge (Ann
+/// 2026-11-25, replacing the slid-out sliver and the window-level
+/// edge-swipe recognizers): a thin frosted bar in the dock's own
+/// top layer, so it stays touchable even while a guest app fills
+/// the screen — guest touches are routed straight to the guest
+/// process and never reached the old window recognizers anywhere
+/// except on the sliver itself. Tap it, or drag it inward, to
+/// bring the orb back; drag it vertically to move the hidden
+/// dock's height. It dims when idle and brightens under the
+/// finger, like the orb itself.
+private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
+    static let handleWidth: CGFloat = 12
+    static let handleHeight: CGFloat = 72
+
+    var onShow: (() -> Void)?
+    /// The handle finished a vertical drag at this center Y.
+    var onMoveEnd: ((CGFloat) -> Void)?
+
+    var isOnRightSide = true {
+        didSet { setNeedsLayout() }
+    }
+
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+    private let tintView = UIView()
+    private let gripView = UIView()
+    private var idleTimer: Timer?
+    private var dragStartCenterY: CGFloat = 0
+    private var dragMode: Int = 0 // 0 undecided, 1 show, 2 move
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.25
+        layer.shadowRadius = 4
+        layer.shadowOffset = CGSize(width: 0, height: 1)
+
+        tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        blurView.contentView.addSubview(tintView)
+        gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        gripView.layer.cornerRadius = 2
+        blurView.contentView.addSubview(gripView)
+        addSubview(blurView)
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.delegate = self
+        addGestureRecognizer(pan)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        tap.require(toFail: pan)
+        addGestureRecognizer(tap)
+
+        alpha = 0.85
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        blurView.frame = bounds
+        // Only the corners facing the screen's middle are round;
+        // the edge side sits flush against the screen edge.
+        blurView.layer.cornerRadius = Self.handleWidth / 2
+        blurView.layer.maskedCorners = isOnRightSide
+            ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+            : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        blurView.clipsToBounds = true
+        tintView.frame = bounds
+        gripView.frame = CGRect(x: (bounds.width - 4) / 2, y: (bounds.height - 38) / 2, width: 4, height: 38)
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: Self.handleWidth / 2).cgPath
+    }
+
+    func fadeIn() {
+        alpha = 0
+        UIView.animate(withDuration: 0.25) { self.alpha = 0.85 }
+        restartIdleTimer()
+    }
+
+    // MARK: Idle dim (bright under the finger, dim when left alone)
+
+    private func restartIdleTimer() {
+        idleTimer?.invalidate()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            UIView.animate(withDuration: 0.6) { self.alpha = 0.35 }
+        }
+    }
+
+    private func brighten() {
+        idleTimer?.invalidate()
+        UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        brighten()
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        restartIdleTimer()
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        restartIdleTimer()
+        super.touchesCancelled(touches, with: event)
+    }
+
+    // MARK: Gestures
+
+    @objc private func handleTap() {
+        onShow?()
+    }
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: superview)
+        switch gesture.state {
+        case .began:
+            dragStartCenterY = center.y
+            dragMode = 0
+        case .changed:
+            if dragMode == 0 {
+                // Inward wins over vertical: a drag that leans
+                // toward the screen's center by 12pt is a recall,
+                // anything mainly vertical is a height move.
+                let inward = isOnRightSide ? -translation.x : translation.x
+                if inward > 12, abs(translation.x) > abs(translation.y) {
+                    dragMode = 1
+                    onShow?()
+                } else if abs(translation.y) > 8, abs(translation.y) > abs(translation.x) {
+                    dragMode = 2
+                }
+            }
+            if dragMode == 2, let superview {
+                let minY = superview.safeAreaInsets.top + Self.handleHeight / 2 + 8
+                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - Self.handleHeight / 2 - 8
+                center.y = min(max(dragStartCenterY + translation.y, minY), maxY)
+            }
+        case .ended:
+            if dragMode == 2 {
+                onMoveEnd?(center.y)
+            }
+            restartIdleTimer()
+        case .cancelled, .failed:
+            if dragMode == 2 {
+                // Settle back to the dock's own height.
+                onMoveEnd?(center.y)
+            }
+            restartIdleTimer()
+        default:
+            break
         }
     }
 }

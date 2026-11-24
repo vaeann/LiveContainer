@@ -18,7 +18,6 @@ struct LCMultitaskSettingView: View {
     @AppStorage("LCRestartTerminatedApp", store: LCUtils.appGroupUserDefault) var restartTerminatedApp = false
     @AppStorage("LCMaxOneAppOnStage", store: LCUtils.appGroupUserDefault) var onlyOneAppOnStage = false
     @AppStorage("LCDockWidth", store: LCUtils.appGroupUserDefault) var dockWidth: Double = 80
-    @AppStorage("LCHideCollapsedDock", store: LCUtils.appGroupUserDefault) var hideCollapsedDock: Bool = false
     @AppStorage("LCRedirectURLToHost", store: LCUtils.appGroupUserDefault) var redirectURLToHost = false
     
     var body: some View {
@@ -93,9 +92,6 @@ struct LCMultitaskSettingView: View {
                 Text("lc.settings.dock.gestureGuide".loc)
                     .font(.footnote)
                     .foregroundColor(.secondary)
-                Toggle(isOn: $hideCollapsedDock) {
-                    Text("lc.settings.hideCollapsedDock".loc)
-                }
             }
         }
         .navigationTitle("lc.appBanner.multitask".loc)
