@@ -266,8 +266,8 @@ class AppInfoProvider {
         // had its own delayed pop-in — three clocks, and the
         // expansion read as disjointed no matter how they were
         // tuned.
-        static let morphSpringResponse: Double = 0.55
-        static let morphSpringDamping: Double = 0.86
+        static let morphSpringResponse: Double = 0.35
+        static let morphSpringDamping: Double = 1.0
     }
     
     // Original dock width from user settings (without auto-adjustment)
