@@ -150,6 +150,7 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
 
     private let iconContainer = UIView()
     private let iconImageView = UIImageView()
+    private let dimOverlay = UIView()
     private let ribbonView = UIView()
     private var ribbonBackground: UIView?
     private let ribbonStack = UIStackView()
@@ -166,6 +167,8 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     private var isLaunching = false
     private var inMenu = false
     private var clearWorkItem: DispatchWorkItem?
+    private weak var observedApp: LCAppModel?
+    private var launchSink: AnyCancellable?
 
     private var onLaunch: ((CGRect?) -> Void)?
     private var onOpenSettings: (() -> Void)?
@@ -192,6 +195,15 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         ribbonStack.alignment = .center
         ribbonView.addSubview(ribbonStack)
         iconContainer.addSubview(ribbonView)
+        // The press/launch dim is a black veil over the icon, not
+        // the icon's own transparency: a transparent icon blends
+        // toward the page behind it and reads as a white haze in
+        // light mode (Ann 2026-11-25), while the veil darkens the
+        // artwork itself on any background.
+        dimOverlay.backgroundColor = .black
+        dimOverlay.alpha = 0
+        dimOverlay.isUserInteractionEnabled = false
+        iconContainer.addSubview(dimOverlay)
         addSubview(iconContainer)
 
         badgeButton.backgroundColor = .red
@@ -220,7 +232,7 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(icon: UIImage, iconSize: CGFloat, showBadge: Bool, ribbon: RibbonSpec,
-                   isLaunching: Bool,
+                   isLaunching: Bool, app: LCAppModel,
                    onLaunch: @escaping (CGRect?) -> Void,
                    onOpenSettings: @escaping () -> Void,
                    onClose: @escaping () -> Void,
@@ -230,6 +242,29 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         self.onClose = onClose
         self.menuProvider = menuProvider
         self.isLaunching = isLaunching
+        if observedApp !== app {
+            // A recycled host starts clean for its new app.
+            observedApp = app
+            clearWorkItem?.cancel()
+            clearWorkItem = nil
+            isPressed = false
+            // The launch flag's last change can be swallowed
+            // while the launched app covers the grid — SwiftUI
+            // then never re-runs configure, and the dim outlives
+            // the launch until a scroll forces a repaint (Ann
+            // 2026-11-25: back home the icon was still hazed;
+            // scrolling or switching tabs cleared it). So the
+            // host also follows the model directly and lifts the
+            // dim the moment the launch really ends, covered
+            // or not.
+            launchSink = app.$isAppRunning
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] running in
+                    guard let self, self.isLaunching != running else { return }
+                    self.isLaunching = running
+                    self.applyDim()
+                }
+        }
         if self.iconSize != iconSize {
             self.iconSize = iconSize
             lastIcon = nil
@@ -255,6 +290,7 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         iconContainer.frame = CGRect(x: 0, y: overhang, width: iconSize, height: iconSize)
         iconContainer.layer.cornerRadius = iconSize * 0.2667
         iconImageView.frame = iconContainer.bounds
+        dimOverlay.frame = iconContainer.bounds
         ribbonView.frame = CGRect(x: 0, y: iconSize - ribbonHeight, width: iconSize, height: ribbonHeight)
         ribbonView.isHidden = !ribbonSpec.visible
         // The glass is drawn 6pt taller than the band and the band
@@ -371,9 +407,9 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     }
 
     private func applyDim() {
-        let dim: CGFloat = (isPressed || isLaunching) && !inMenu ? 0.7 : 1
-        iconContainer.alpha = dim
-        badgeButton.alpha = dim
+        let dimmed = (isPressed || isLaunching) && !inMenu
+        dimOverlay.alpha = dimmed ? 0.3 : 0
+        badgeButton.alpha = dimmed ? 0.7 : 1
     }
 
     // MARK: Taps
@@ -478,6 +514,7 @@ private struct LCGridIconHost: UIViewRepresentable {
                           is32: app.uiIs32bit,
                           locked: app.uiIsLocked && !app.uiIsHidden),
             isLaunching: app.isAppRunning,
+            app: app,
             onLaunch: { rect in actions.onLaunch(app, rect) },
             onOpenSettings: { actions.onOpenSettings(app) },
             onClose: { actions.onCloseRunning(app) },
