@@ -19,6 +19,7 @@ struct LCSourceAppDetailView: View {
     let installVersionAction: (AltStoreSourceAppVersion) -> Void
 
     @State private var copied = false
+    @EnvironmentObject private var downloadHelper: DownloadHelper
 
     private var descriptionText: String? {
         if let description = app.description, !description.isEmpty {
@@ -30,6 +31,9 @@ struct LCSourceAppDetailView: View {
     var body: some View {
         List {
             Section {
+                // 头部一行排完（Ann 2026-11-26）：图标 + 名字信息 +
+                // 复制图标 + 与列表同款的安装按钮（不再用宽按钮那行）；
+                // 安装中时版本行让位给状态文字，和列表行同款逻辑。
                 HStack(alignment: .center, spacing: 14) {
                     SourceIconView(url: app.iconURL)
                         .frame(width: 72, height: 72)
@@ -42,24 +46,18 @@ struct LCSourceAppDetailView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-                        if let latest = app.latestVersion {
+                        if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
+                            Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else if let latest = app.latestVersion {
                             Text(versionLine(latest))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                }
-                .padding(.vertical, 4)
-
-                HStack(spacing: 12) {
-                    LCSourceInstallButton(
-                        app: app,
-                        buttonState: buttonState,
-                        tint: Color("FontColor"),
-                        wide: true,
-                        action: action
-                    )
-
+                    Spacer()
                     Button {
                         copyAction()
                         copied = true
@@ -71,9 +69,16 @@ struct LCSourceAppDetailView: View {
                             .frame(width: 36, height: 36)
                     }
                     .buttonStyle(.plain)
+                    LCSourceInstallButton(
+                        app: app,
+                        buttonState: buttonState,
+                        tint: Color("FontColor"),
+                        action: action
+                    )
                 }
+                .padding(.vertical, 4)
 
-                // bundle ID 从列表行挪到这里显示（Ann 2026-11-26）
+                // 包名放在图标行下面一行（Ann 2026-11-26）
                 HStack {
                     Text("lc.sources.detail.bundleId".loc)
                     Spacer()
@@ -156,8 +161,7 @@ struct LCSourceAppDetailView: View {
                 }
             }
         }
-        .navigationTitle(app.name)
-        .navigationBarTitleDisplayMode(.inline)
+        // 顶部导航栏不显示 App 名字（Ann 2026-11-26）：名字在头部卡片里有
     }
 
     private func versionLine(_ version: AltStoreSourceAppVersion) -> String {
