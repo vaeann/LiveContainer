@@ -479,12 +479,20 @@ class AppInfoProvider {
         // and it follows the dock's size when that is resized.
         let handleHeight = collapsedDockHeight(for: dockWidth)
         let handleWidth = LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth)
+        handle.pillWidth = handleWidth
+        // The frame is the body plus the flare space at
+        // both ends; the body stays centered on the dock's
+        // mid-height. The clamp is on the BODY (same as the
+        // drag's), so the sync after a snap leaves the
+        // handle exactly where it landed.
+        let flare = LCHiddenDockHandleView.flareLength(forPillWidth: handleWidth)
+        let frameHeight = handleHeight + 2 * flare
         let screenBounds = keyWindow?.bounds ?? dockFrame
-        let minY = safeAreaInsets.top + Constants.dockVerticalMargin
-        let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - handleHeight
-        let y = min(max(dockFrame.midY - handleHeight / 2, minY), maxY)
+        let minY = safeAreaInsets.top + Constants.dockVerticalMargin - flare
+        let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - frameHeight + flare
+        let y = min(max(dockFrame.midY - frameHeight / 2, minY), maxY)
         let x = isOnRightSide ? screenBounds.width - handleWidth : 0
-        handle.frame = CGRect(x: x, y: y, width: handleWidth, height: handleHeight)
+        handle.frame = CGRect(x: x, y: y, width: handleWidth, height: frameHeight)
         handle.setNeedsLayout()
     }
 
@@ -1921,10 +1929,9 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         didSet { if useLiquidGlass != oldValue { applyMaterial() } }
     }
 
-    /// True while a drag has the handle off its edge: all
-    /// four corners round then (Ann 2026-11-25, later: the
-    /// flat edge side read as a harsh cut while the handle
-    /// was moving); it squares off again when the snap lands.
+    /// True while a drag has the handle off its edge: the
+    /// outline is the plain pill then; the root flares grow
+    /// back as the snap lands it on an edge.
     private var isFloating = false {
         didSet { if isFloating != oldValue { setNeedsLayout() } }
     }
@@ -1932,12 +1939,34 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private let blurView = UIVisualEffectView()
     private let tintView = UIView()
 
-    /// The outline's mask: a shape layer, not cornerRadius +
-    /// maskedCorners, so the outline can MORPH between its
-    /// two states — masked corners switch instantly, a path
-    /// interpolates (Ann 2026-11-26: the docked corners must
-    /// appear with an animation, melted into the pill).
+    /// The plain wrapper the outline mask sits on (the
+    /// Weizhu handle's structure): the mask goes on THIS
+    /// view's layer, never on the effect view's own — a
+    /// mask set directly on the glass effect view was
+    /// ignored on device and the handle rendered as a
+    /// plain rectangle (Ann 2026-11-26).
+    private let clipView = UIView()
     private let shapeMask = CAShapeLayer()
+    /// A hairline tracing the outline: native glass puts
+    /// its own edge highlight on a rectangular boundary,
+    /// so a custom silhouette draws its own rim.
+    private let rimLayer = CAShapeLayer()
+
+    /// The pill's width (the frame's width), fed by the
+    /// manager like the other values it owns. Every outline
+    /// proportion derives from it: the dome radius is half
+    /// of it, the root flares run three quarters of it
+    /// along the wall.
+    var pillWidth: CGFloat = 16 {
+        didSet { if pillWidth != oldValue { setNeedsLayout() } }
+    }
+
+    /// How far the docked outline's root flares reach along
+    /// the wall, above and below the body. The frame always
+    /// reserves this much room at both ends; the flares
+    /// grow into it as the handle docks.
+    static func flareLength(forPillWidth width: CGFloat) -> CGFloat { width * 0.75 }
+    private var flareLength: CGFloat { Self.flareLength(forPillWidth: pillWidth) }
 
     /// The handle's material: the expanded dock's recipe,
     /// exactly (Ann 2026-11-26) — where the dock uses liquid
@@ -1955,62 +1984,75 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
         }
     }
-    /// The handle's outline in a given state, built with a
-    /// FIXED command structure (line/arc × 4, in the same
-    /// order, zero-radius arcs collapsed to points) so Core
-    /// Animation can interpolate between states. Floating is
-    /// a pill: every corner at half the width. Docked melts
-    /// the edge side's corners to zero — flush with the
-    /// screen edge — while the inner corners keep the pill's
-    /// own curve: one continuous piece, not a pill with two
-    /// corners stuck on (Ann 2026-11-26). The shadow follows
-    /// the same path, so it cannot betray the pill's outline
-    /// around the docked shape either.
-    private func shapePath(in rect: CGRect, floating: Bool) -> CGPath {
-        let r = rect.width / 2
-        let edgeR: CGFloat = floating ? r : 0
-        let tl = isOnRightSide ? r : edgeR
-        let tr = isOnRightSide ? edgeR : r
-        let br = isOnRightSide ? edgeR : r
-        let bl = isOnRightSide ? r : edgeR
+    /// The handle's outline: ONE closed path of fixed
+    /// structure (M C C L C C Z, cubics only, so any two
+    /// states interpolate cleanly under CABasicAnimation).
+    /// A pill body whose wall-side corners, when docked,
+    /// grow concave root flares that run along the screen
+    /// edge and melt the body into the wall — the pill and
+    /// the flares are a single outline, drawn in one go,
+    /// so there is no seam to see (the Weizhu handle's
+    /// recipe, in the proportions Ann picked 2026-11-26:
+    /// our pill, plus the flares). `flare` is the growth
+    /// amount: 0 is the plain pill (while dragging), 1 the
+    /// docked silhouette. The dome's inner half is the
+    /// same in both states, so the morph reads as the
+    /// roots growing out of the pill, not the whole shape
+    /// swimming. Built for a right-hand dock; every x is
+    /// mirrored for the left.
+    private func outlinePath(flare t: CGFloat) -> CGPath {
+        let w = bounds.width, h = bounds.height
+        let r = pillWidth / 2
+        let bodyTop = flareLength
+        let bodyBottom = h - flareLength
+        let k: CGFloat = 0.5523 // quarter-circle cubic factor
+        func mx(_ x: CGFloat) -> CGFloat { isOnRightSide ? x : w - x }
+        func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * t }
         let path = CGMutablePath()
-        path.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
-        path.addArc(center: CGPoint(x: rect.maxX - tr, y: rect.minY + tr), radius: tr,
-                    startAngle: -.pi / 2, endAngle: 0, clockwise: false)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
-        path.addArc(center: CGPoint(x: rect.maxX - br, y: rect.maxY - br), radius: br,
-                    startAngle: 0, endAngle: .pi / 2, clockwise: false)
-        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
-        path.addArc(center: CGPoint(x: rect.minX + bl, y: rect.maxY - bl), radius: bl,
-                    startAngle: .pi / 2, endAngle: .pi, clockwise: false)
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
-        path.addArc(center: CGPoint(x: rect.minX + tl, y: rect.minY + tl), radius: tl,
-                    startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
+        // Wall side, top: the flare's tip on the wall (the
+        // plain pill starts lower, where its right edge
+        // meets the dome).
+        path.move(to: CGPoint(x: mx(w), y: lerp(bodyTop + r, 0)))
+        // The root flare (docked) / the dome's wall quarter
+        // (pill): one curve into the dome's apex either way.
+        path.addCurve(to: CGPoint(x: mx(w / 2), y: bodyTop),
+                      control1: CGPoint(x: mx(w), y: lerp(bodyTop + r - k * r, bodyTop * 0.45)),
+                      control2: CGPoint(x: mx(lerp(w / 2 + k * r, w / 2 + r * 0.4)), y: bodyTop))
+        // The dome's inner quarter — identical in both
+        // states, the morph's anchor.
+        path.addCurve(to: CGPoint(x: mx(0), y: bodyTop + r),
+                      control1: CGPoint(x: mx(w / 2 - k * r), y: bodyTop),
+                      control2: CGPoint(x: mx(0), y: bodyTop + r - k * r))
+        path.addLine(to: CGPoint(x: mx(0), y: bodyBottom - r))
+        path.addCurve(to: CGPoint(x: mx(w / 2), y: bodyBottom),
+                      control1: CGPoint(x: mx(0), y: bodyBottom - r + k * r),
+                      control2: CGPoint(x: mx(w / 2 - k * r), y: bodyBottom))
+        // The bottom flare, mirroring the top.
+        path.addCurve(to: CGPoint(x: mx(w), y: lerp(bodyBottom - r, h)),
+                      control1: CGPoint(x: mx(lerp(w / 2 + k * r, w / 2 + r * 0.4)), y: bodyBottom),
+                      control2: CGPoint(x: mx(w), y: lerp(bodyBottom - r + k * r, h - bodyTop * 0.45)))
+        // The wall itself closes the outline.
         path.closeSubpath()
         return path
     }
 
-    /// Morph the outline (mask + shadow together) to the
-    /// given state over the given duration.
-    private func animateShape(toFloating floating: Bool, duration: TimeInterval) {
+    /// Morph the outline (mask, rim and shadow together)
+    /// between the pill and the docked silhouette.
+    private func animateOutline(toDocked docked: Bool, duration: TimeInterval) {
         guard bounds.width > 0 else { return }
-        let target = shapePath(in: bounds, floating: floating)
-        let timing = CAMediaTimingFunction(name: .easeOut)
-        let maskAnim = CABasicAnimation(keyPath: "path")
-        maskAnim.fromValue = (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path
-        maskAnim.toValue = target
-        maskAnim.duration = duration
-        maskAnim.timingFunction = timing
-        shapeMask.path = target
-        shapeMask.add(maskAnim, forKey: "cornerMorph")
-        let shadowAnim = CABasicAnimation(keyPath: "shadowPath")
-        shadowAnim.fromValue = layer.presentation()?.shadowPath ?? layer.shadowPath
-        shadowAnim.toValue = target
-        shadowAnim.duration = duration
-        shadowAnim.timingFunction = timing
-        layer.shadowPath = target
-        layer.add(shadowAnim, forKey: "cornerMorph")
+        let target = outlinePath(flare: docked ? 1 : 0)
+        func morph(_ layer: CALayer, _ keyPath: String, from: CGPath?, apply: (CGPath) -> Void) {
+            let anim = CABasicAnimation(keyPath: keyPath)
+            anim.fromValue = from
+            anim.toValue = target
+            anim.duration = duration
+            anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            apply(target)
+            layer.add(anim, forKey: "outlineMorph")
+        }
+        morph(shapeMask, "path", from: (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path) { shapeMask.path = $0 }
+        morph(rimLayer, "path", from: (rimLayer.presentation() as? CAShapeLayer)?.path ?? rimLayer.path) { rimLayer.path = $0 }
+        morph(layer, "shadowPath", from: layer.presentation()?.shadowPath ?? layer.shadowPath) { layer.shadowPath = $0 }
     }
 
     /// The grip: two short segments in a column, breathing
@@ -2033,7 +2075,6 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         layer.shadowOffset = CGSize(width: 0, height: 1)
 
         applyMaterial()
-        blurView.layer.mask = shapeMask
         blurView.contentView.addSubview(tintView)
         for segment in [gripTopSegment, gripBottomSegment] {
             segment.backgroundColor = UIColor.black.withAlphaComponent(0.4)
@@ -2041,7 +2082,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             gripView.addSubview(segment)
         }
         blurView.contentView.addSubview(gripView)
-        addSubview(blurView)
+        clipView.addSubview(blurView)
+        clipView.layer.mask = shapeMask
+        rimLayer.fillColor = UIColor.clear.cgColor
+        rimLayer.strokeColor = UIColor.white.withAlphaComponent(0.35).cgColor
+        rimLayer.lineWidth = 1
+        clipView.layer.addSublayer(rimLayer)
+        addSubview(clipView)
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.delegate = self
@@ -2083,16 +2130,18 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        clipView.frame = bounds
         blurView.frame = bounds
-        // Keep the mask and the shadow on the current bounds
-        // in the current state; state CHANGES morph the path
-        // through animateShape instead of snapping it here.
+        // Keep the outline on the current bounds in the
+        // current state; state CHANGES morph it through
+        // animateOutline instead of snapping it here.
         shapeMask.frame = bounds
-        if shapeMask.animation(forKey: "cornerMorph") == nil {
-            shapeMask.path = shapePath(in: bounds, floating: isFloating)
-        }
-        if layer.animation(forKey: "cornerMorph") == nil {
-            layer.shadowPath = shapePath(in: bounds, floating: isFloating)
+        rimLayer.frame = bounds
+        if shapeMask.animation(forKey: "outlineMorph") == nil {
+            let outline = outlinePath(flare: isFloating ? 0 : 1)
+            shapeMask.path = outline
+            rimLayer.path = outline
+            layer.shadowPath = outline
         }
         tintView.frame = bounds
         // The segments keep the old orb glyph's proportions
@@ -2120,8 +2169,9 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         // A fresh appearance is docked by definition: never
         // come back wearing the floating corners.
         isFloating = false
-        shapeMask.removeAnimation(forKey: "cornerMorph")
-        layer.removeAnimation(forKey: "cornerMorph")
+        shapeMask.removeAnimation(forKey: "outlineMorph")
+        rimLayer.removeAnimation(forKey: "outlineMorph")
+        layer.removeAnimation(forKey: "outlineMorph")
         setNeedsLayout()
         alpha = 0
         UIView.animate(withDuration: 0.25) { self.alpha = 0.85 }
@@ -2218,13 +2268,19 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             if dragMode == 0, hypot(translation.x, translation.y) > 8 {
                 dragMode = 2
                 isFloating = true
-                // The flat edge melts back into the pill.
-                animateShape(toFloating: true, duration: 0.2)
+                // Leaving the edge: the root flares melt
+                // back into the pill.
+                animateOutline(toDocked: false, duration: 0.2)
             }
             if dragMode == 2, let superview {
                 let margin = dragVerticalMargin
-                let minY = superview.safeAreaInsets.top + margin + bounds.height / 2
-                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - margin - bounds.height / 2
+                // The clamp is on the BODY: the frame's
+                // center is the body's center, but the frame
+                // is taller than the body by the two flare
+                // spaces at its ends.
+                let bodyHeight = bounds.height - 2 * flareLength
+                let minY = superview.safeAreaInsets.top + margin + bodyHeight / 2
+                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - margin - bodyHeight / 2
                 center = CGPoint(
                     x: min(max(dragStartCenter.x + translation.x, bounds.width / 2), superview.bounds.width - bounds.width / 2),
                     y: min(max(dragStartCenter.y + translation.y, minY), maxY)
@@ -2248,13 +2304,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private func snapToNearestEdge(_ gesture: UIPanGestureRecognizer) {
         guard let superview else { isFloating = false; return }
         let toRight = center.x > superview.bounds.width / 2
-        // The flat side adopts the target edge at once, and
-        // its two corners grow out of the pill over the
-        // flight, landing flush exactly when the snap does
-        // (Ann 2026-11-26: the corners appear WITH the
-        // animation, not as a pop).
         isOnRightSide = toRight
-        animateShape(toFloating: false, duration: 0.34)
+        // The flares grow as the handle flies home: the
+        // outline morph runs the same 0.34s as the snap, so
+        // the roots reach the wall exactly when the handle
+        // lands (Ann 2026-11-26: the corners appear WITH
+        // the animation, grown out of the pill itself).
+        animateOutline(toDocked: true, duration: 0.34)
         let targetX = toRight ? superview.bounds.width - bounds.width / 2 : bounds.width / 2
         let distance = targetX - center.x
         let velocityX = gesture.velocity(in: superview).x
@@ -2265,7 +2321,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             // A new drag interrupting the snap owns the
             // handle now; only a landed snap reports.
             guard finished else { return }
-            // Landed: square the edge side off, then report.
+            // Landed: flush against the edge; report.
             self.isFloating = false
             self.onMoveEnd?(self.center.y, toRight)
         }
