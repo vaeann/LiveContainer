@@ -170,10 +170,6 @@ class AppInfoProvider {
     /// updateStatusBarFix(), which already runs on every front-app
     /// change.
     @Published var frontAppUUID: String?
-    /// The app that was in front before the current one — or the
-    /// last one before everything went home: the collapsed orb's
-    /// long press jumps back to it (Ann 2026-11-23).
-    var previousAppUUID: String?
 
     /// Reset the idle-dim countdown; any dock interaction counts.
     public func noteDockInteraction() {
@@ -1456,36 +1452,12 @@ class AppInfoProvider {
             }
         }
         if frontAppUUID != frontUUID {
-            // Any departure from an app records it as the
-            // previous one: app -> app keeps the one we left,
-            // app -> home keeps the last app, so the orb's long
-            // press can also resume it from the home screen.
-            if let old = frontAppUUID {
-                previousAppUUID = old
-            }
             frontAppUUID = frontUUID
         }
         if hide != statusBarFixApplied,
            LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
             statusBarFixApplied = hide
         }
-    }
-
-    /// Orb long press: jump straight back to the previous app —
-    /// the two-app bounce (chat <-> browser) without opening the
-    /// dock (Ann 2026-11-23; going home moved to the expanded
-    /// dock's home button the same evening, and the cycle button
-    /// this method used to serve is gone — blind flipping made
-    /// no sense once every icon is visible). Grows out of the
-    /// dock like every other switch. Returns whether there was
-    /// somewhere to go, so the caller can skip its haptic when
-    /// there was not.
-    @discardableResult
-    @objc public func switchToPreviousApp() -> Bool {
-        noteDockInteraction()
-        guard let prev = previousAppUUID, prev != frontAppUUID,
-              apps.contains(where: { $0.appUUID == prev }) else { return false }
-        return bringMultitaskViewToFront(uuid: prev, from: dockHomeRect())
     }
 
     /// Toggle a window between maximized and windowed, through the
@@ -1631,12 +1603,11 @@ public struct MultitaskDockSwiftView: View {
                 // top-heavy: the lightest gesture did the
                 // heaviest thing): single tap expands — the
                 // most-used, zero-risk action, and instant now
-                // that no double tap has to be waited out; long
-                // press jumps back to the previous app — the
-                // one quick switch worth doing blind, because
-                // where "back" lands is predictable (it briefly
-                // went home instead, until the expanded dock
-                // got its own home button the same evening).
+                // that no double tap has to be waited out.
+                // Long press switches the collapsed form to
+                // the handle (Ann 2026-11-25; it jumped back to
+                // the previous app until tonight — that switch
+                // and its tracking are removed with the remap).
                 // Double tap (blind cycling) is gone: switching
                 // happens in the expanded dock, where the
                 // target is visible. The long press's flag
@@ -1659,9 +1630,8 @@ public struct MultitaskDockSwiftView: View {
                         LongPressGesture(minimumDuration: 0.5)
                             .onEnded { _ in
                                 collapsedLongPressTriggered = true
-                                if dockManager.switchToPreviousApp() {
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                }
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                dockManager.hideDockToSide()
                             }
                     )
             }
@@ -2401,6 +2371,8 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     var onPullEnded: ((Bool) -> Void)?
     /// A tap: expand the dock directly from the handle.
     var onExpand: (() -> Void)?
+    /// A long press: switch back to the orb form.
+    var onLongPress: (() -> Void)?
     /// The handle finished a vertical drag at this center Y.
     var onMoveEnd: ((CGFloat) -> Void)?
 
@@ -2442,8 +2414,20 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.delegate = self
         addGestureRecognizer(pan)
+        // Long press switches back to the orb (Ann 2026-11-25),
+        // mirroring the orb's long press the other way. The
+        // recognizer's default 10pt movement allowance keeps it
+        // a genuine press-and-hold: any real pull or move fails
+        // it first, and a pull needs more travel than that, so
+        // the two never overlap. The tap waits for it to fail,
+        // which a quick tap does at touch-up, so taps stay
+        // instant.
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.5
+        addGestureRecognizer(longPress)
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         tap.require(toFail: pan)
+        tap.require(toFail: longPress)
         addGestureRecognizer(tap)
 
         // Suspension strips layer animations (see the orb's
@@ -2568,6 +2552,12 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     @objc private func handleTap() {
         onExpand?()
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onLongPress?()
     }
 
     /// The pull's progress for an inward distance: the first
