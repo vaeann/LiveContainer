@@ -513,6 +513,7 @@ class AppInfoProvider {
             handle.fadeIn()
         }
         handle.isOnRightSide = isOnRightSide
+        handle.dragVerticalMargin = Constants.dockVerticalMargin
         // The handle is the orb squashed flat (Ann 2026-11-25):
         // same height as the orb, only the width is squeezed —
         // and both follow the orb's size when it is resized.
@@ -2202,6 +2203,12 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// center Y, on this side of the screen.
     var onMoveEnd: ((CGFloat, Bool) -> Void)?
 
+    /// The vertical margin the drag is clamped to, mirroring
+    /// the dock's own clamp. The manager feeds it in: this
+    /// view predates the multitask availability boundary and
+    /// cannot read the manager's constants directly.
+    var dragVerticalMargin: CGFloat = 30
+
     var isOnRightSide = true {
         didSet { setNeedsLayout() }
     }
@@ -2405,7 +2412,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
                 dragMode = 2
             }
             if dragMode == 2, let superview {
-                let margin = MultitaskDockManager.Constants.dockVerticalMargin
+                let margin = dragVerticalMargin
                 let minY = superview.safeAreaInsets.top + margin + bounds.height / 2
                 let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - margin - bounds.height / 2
                 center = CGPoint(
