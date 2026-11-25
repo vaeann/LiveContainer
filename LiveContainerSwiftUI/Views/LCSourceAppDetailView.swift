@@ -20,6 +20,14 @@ struct LCSourceAppDetailView: View {
 
     @State private var copied = false
     @EnvironmentObject private var downloadHelper: DownloadHelper
+    @AppStorage("dynamicColors") private var dynamicColors = true
+
+    /// 与列表行完全同款的按钮颜色（Ann 2026-11-26）：列表用 App 的
+    /// 主题色，详情页之前写死 FontColor，同一个按钮两个颜色不协调。
+    private var primaryColor: Color {
+        guard dynamicColors else { return Color("FontColor") }
+        return app.tintColor ?? source.tintColor ?? Color("FontColor")
+    }
 
     private var descriptionText: String? {
         if let description = app.description, !description.isEmpty {
@@ -72,7 +80,7 @@ struct LCSourceAppDetailView: View {
                     LCSourceInstallButton(
                         app: app,
                         buttonState: buttonState,
-                        tint: Color("FontColor"),
+                        tint: primaryColor,
                         action: action
                     )
                 }
