@@ -153,8 +153,8 @@ class AppInfoProvider {
     /// the orb, or the handle — the same orb squashed flat
     /// against the screen edge, at the orb's own height. Hiding
     /// the orb squashes it into the handle and sets this;
-    /// pulling the handle back out restores the orb and clears
-    /// it. Expanding straight from the handle keeps it set, so
+    /// recalling it as the orb (showDockFromHidden) clears it.
+    /// Expanding straight from the handle keeps it set, so
     /// the next collapse squashes back into the handle instead
     /// of stopping at the orb (see toggleDockCollapse).
     var collapsedFormIsHandle: Bool = false
@@ -478,10 +478,6 @@ class AppInfoProvider {
     /// hides the dock keeps it correct.
     private func syncHiddenHandle(dockFrame: CGRect, isOnRightSide: Bool) {
         guard isDockHidden, isVisible, let parent = hostingController?.view.superview else {
-            // A pull-from-handle in flight owns the handle: it
-            // fades with the pull, and only the pull's own end
-            // decides whether it is removed or restored.
-            if handlePullInProgress { return }
             // Recall (or dismissal): the handle fades out as the
             // orb springs back in, instead of popping out of
             // existence mid-handoff.
@@ -500,10 +496,15 @@ class AppInfoProvider {
             handle = existing
         } else {
             handle = LCHiddenDockHandleView()
-            handle.onPullBegan = { [weak self] in self?.beginPullFromHandle() }
-            handle.onPullChanged = { [weak self] progress in self?.updatePullFromHandle(progress: progress) }
-            handle.onPullEnded = { [weak self] commit in self?.endPullFromHandle(commit: commit) }
             handle.onExpand = { [weak self] in self?.expandDockFromHidden() }
+            handle.onLongPress = { [weak self] in
+                guard let self else { return }
+                // A deliberate switch to the orb form: the orb
+                // is home again, so a later collapse lands on
+                // the orb, not back here.
+                self.collapsedFormIsHandle = false
+                self.showDockFromHidden()
+            }
             handle.onMoveEnd = { [weak self] centerY in self?.moveHiddenDock(centerY: centerY) }
             hiddenHandle = handle
         }
@@ -838,135 +839,7 @@ class AppInfoProvider {
         }
     }
 
-    // MARK: - Finger-scrubbed squash (orb <-> handle)
-
-    /// The orb→handle squeeze follows the finger (Ann
-    /// 2026-11-25, preview-approved): dragging the collapsed
-    /// orb outward deforms it against its own edge — drag
-    /// distance maps linearly onto the squash, released past
-    /// halfway it settles into the handle, short of that it
-    /// springs back. Like Weizhu's droplet pull, the shape is
-    /// scrubbed by the drag itself; no timed squash plays
-    /// after the fact and nothing snaps in or out.
-    private let squashFullDragDistance: CGFloat = 70
-    private(set) var dockSquashProgress: CGFloat = 0
-    private var dockSquashAnchorApplied = false
-
-    /// A drag translation's outward component: positive when
-    /// the drag heads off the dock's own edge.
-    func dockOutwardDistance(_ translation: CGSize) -> CGFloat {
-        guard let frame = hostingController?.view.frame,
-              let screenWidth = keyWindow?.bounds.width else { return 0 }
-        return frame.origin.x > screenWidth / 2 ? translation.width : -translation.width
-    }
-
-    func scrubDockSquash(outwardDistance: CGFloat) {
-        guard isCollapsed, !isDockHidden, let view = hostingController?.view else { return }
-        if !dockSquashAnchorApplied {
-            let anchorX: CGFloat = dockIsOnRightSide(view) ? 1 : 0
-            setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            dockSquashAnchorApplied = true
-        }
-        let s = min(max(outwardDistance / squashFullDragDistance, 0), 1)
-        dockSquashProgress = s
-        // The droplet press from the approved preview: mid-press
-        // the orb bulges slightly taller; at full squash its
-        // height is the orb's own again, exactly where the
-        // handle (same height) takes over.
-        view.transform = CGAffineTransform(
-            scaleX: 1 + (handleSquashScale - 1) * s,
-            y: 1 + 0.10 * sin(s * .pi)
-        )
-    }
-
-    /// The drag ended (or turned away) without committing to
-    /// the handle: spring the orb back to shape.
-    func releaseDockSquash() {
-        guard dockSquashAnchorApplied, let view = hostingController?.view else { return }
-        dockSquashAnchorApplied = false
-        dockSquashProgress = 0
-        UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
-            view.transform = .identity
-        } completion: { _ in
-            self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-        }
-    }
-
-    // MARK: - Handle pull (scrubbed recall)
-
-    /// While a pull is in flight, syncHiddenHandle leaves the
-    /// handle alone (see its guard branch): the pull fades it
-    /// and decides its fate at the end.
-    private var handlePullInProgress = false
-    private var pullHandleBaseAlpha: CGFloat = 0.85
-
-    func beginPullFromHandle() {
-        guard isDockHidden, isVisible, let view = hostingController?.view else { return }
-        handlePullInProgress = true
-        pullHandleBaseAlpha = hiddenHandle?.alpha ?? 0.85
-        collapsedFormIsHandle = false
-        isDockHidden = false
-        // The orb's frame, wearing the full squash — the pull
-        // relaxes it from here. updateDockFrame's syncs are
-        // safe to run in this state: collapsed means no scrim,
-        // and handlePullInProgress keeps the handle in place.
-        UIView.performWithoutAnimation {
-            updateDockFrame(animated: false)
-            let anchorX: CGFloat = dockIsOnRightSide(view) ? 1 : 0
-            setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            view.transform = CGAffineTransform(scaleX: handleSquashScale, y: 1)
-        }
-    }
-
-    func updatePullFromHandle(progress: CGFloat) {
-        guard handlePullInProgress, let view = hostingController?.view else { return }
-        let p = min(max(progress, 0), 1)
-        // The same droplet curve as the squeeze, run backwards:
-        // the bulge peaks halfway out.
-        view.transform = CGAffineTransform(
-            scaleX: handleSquashScale + (1 - handleSquashScale) * p,
-            y: 1 + 0.10 * sin((1 - p) * .pi)
-        )
-        hiddenHandle?.alpha = pullHandleBaseAlpha * (1 - p)
-    }
-
-    func endPullFromHandle(commit: Bool) {
-        guard handlePullInProgress, let view = hostingController?.view else { return }
-        if commit {
-            UIView.animate(
-                withDuration: 0.3,
-                delay: 0,
-                usingSpringWithDamping: 0.8,
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .curveEaseOut]
-            ) {
-                view.transform = .identity
-            } completion: { _ in
-                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-                self.handlePullInProgress = false
-                self.updateDockFrame()
-            }
-        } else {
-            UIView.animate(withDuration: 0.16, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
-                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
-            } completion: { _ in
-                // Same rule as the hide: identity and the center
-                // anchor are restored BEFORE the hidden frame is
-                // taken, in one unrendered pass; the handle's
-                // alpha comes back in the same pass.
-                UIView.performWithoutAnimation {
-                    view.transform = .identity
-                    self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-                    self.isDockHidden = true
-                    self.handlePullInProgress = false
-                    self.hiddenHandle?.alpha = self.pullHandleBaseAlpha
-                    self.updateDockFrame(animated: false)
-                }
-            }
-        }
-    }
-
-    /// Pulling the handle back out restores the orb (Ann
+    /// Recalling the handle restores the orb (Ann
     /// 2026-11-25): the squashed dock is placed at the orb's
     /// frame still wearing the handle's width, then springs
     /// back to full width around its edge-side anchor — the
@@ -1089,8 +962,6 @@ class AppInfoProvider {
                 UIView.performWithoutAnimation {
                     view.transform = .identity
                     self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-                    self.dockSquashProgress = 0
-                    self.dockSquashAnchorApplied = false
                     self.isDockHidden = true
                     self.updateDockFrame(animated: false)
                 }
@@ -1125,9 +996,8 @@ class AppInfoProvider {
     /// direction that would hide the dock — follows the finger at
     /// only a third of the distance, so the dock feels stuck to
     /// its edge and an accidental outward drift during a vertical
-    /// reposition barely moves it. Every other direction (inward,
-    /// vertical, and the inward pull that recalls a hidden dock)
-    /// follows 1:1.
+    /// reposition barely moves it. Every other direction (inward
+    /// and vertical) follows 1:1.
     func resistedDragTranslation(_ translation: CGSize) -> CGSize {
         guard let originalFrame = hostingController?.view.frame,
               let screenWidth = keyWindow?.bounds.width else { return translation }
@@ -1136,41 +1006,6 @@ class AppInfoProvider {
         guard outward > 0 else { return translation }
         let resisted = outward / 3
         return CGSize(width: isOnRightSide ? resisted : -resisted, height: translation.height)
-    }
-
-    // Check if gesture is for cross-screen movement (left to right or vice versa)
-    func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize) -> Bool {
-        let screenWidth = keyWindow!.bounds.width
-        let isOnRightSide = originalFrame.origin.x > screenWidth / 2
-        // A horizontal value's outward component: positive = away
-        // from the screen's center, off the dock's own edge.
-        func outward(_ dx: CGFloat) -> CGFloat { isOnRightSide ? dx : -dx }
-
-        if isDockHidden {
-            // Recall stays effortless (Ann 2026-11-25): any
-            // inward-leaning release brings the dock back.
-            guard outward(translation.width) < 0 else { return false }
-            self.showDockFromHidden()
-            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-            impactFeedback.impactOccurred()
-            return true
-        }
-
-        // Hiding by drag is the squeeze, and only the squeeze
-        // (Ann 2026-11-25, later: the fling tests are deleted —
-        // a flick whose predicted landing flew out, or a shove
-        // that pushed the dock's center off the screen, used to
-        // hide it too). The orb has been deforming under the
-        // finger the whole way out, so a mainly-horizontal
-        // release past halfway through the squash simply lets
-        // it land as the handle; anything else falls through
-        // and the dock settles back onto its edge.
-        guard isCollapsed, abs(translation.width) > abs(translation.height),
-              outward(translation.width) >= squashFullDragDistance / 2 else { return false }
-        self.hideDockToSide()
-        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-        impactFeedback.impactOccurred()
-        return true
     }
 
     // Check if gesture is for cross-screen movement (left to right or vice versa)
@@ -1702,22 +1537,11 @@ public struct MultitaskDockSwiftView: View {
             .onChanged { value in
                 dockManager.noteDockInteraction()
                 self.isMoving = true
-                // Finger-scrubbed squeeze (Ann 2026-11-25): an
-                // outward, mainly-horizontal drag on the
-                // collapsed orb no longer pokes it off its edge
-                // at a resisted rate — the orb stays pinned and
-                // squashes toward the handle under the finger,
-                // while only the drag's vertical component
-                // still travels with it.
-                let outward = dockManager.dockOutwardDistance(value.translation)
-                if dockManager.isCollapsed, !dockManager.isDockHidden,
-                   outward > 0, abs(value.translation.width) > abs(value.translation.height) {
-                    dockManager.scrubDockSquash(outwardDistance: outward)
-                    self.dragOffset = CGSize(width: 0, height: value.translation.height)
-                } else {
-                    dockManager.releaseDockSquash()
-                    self.dragOffset = dockManager.resistedDragTranslation(value.translation)
-                }
+                // The drag only moves the dock (Ann 2026-11-25,
+                // later: the finger-scrubbed squeeze that shared
+                // this drag is deleted — form switching is the
+                // long press's job now, both ways).
+                self.dragOffset = dockManager.resistedDragTranslation(value.translation)
             }
             .onEnded { value in
                 self.isMoving = true
@@ -1727,7 +1551,6 @@ public struct MultitaskDockSwiftView: View {
                 let currentPhysicalFrame = hcFrame.offsetBy(dx: self.dragOffset.width, dy: self.dragOffset.height)
                 
                 if dockManager.isPositionChangeGesture(for: hcFrame, translation: value.translation) {
-                    dockManager.releaseDockSquash()
                     let screenBounds = dockManager.keyWindow!.bounds
                     let targetX = dockManager.calculateTargetX(isDockHidden: dockManager.isDockHidden, isOnRightSide: currentPhysicalFrame.midX > screenBounds.width / 2, dockWidth: dockManager.dockWidth, screenWidth: screenBounds.width)
                     
@@ -1760,19 +1583,6 @@ public struct MultitaskDockSwiftView: View {
                     return
                 }
                 
-                if dockManager.handleSwipeToHideOrShowGesture(for: hcFrame, translation: value.translation) {
-                    withAnimation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping)) {
-                        self.dragOffset = .zero
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + MultitaskDockManager.Constants.longAnimationDuration) {
-                        self.isMoving = false
-                    }
-                    return
-                }
-
-                // No hide: any squeeze the drag built up springs
-                // back with the settle.
-                dockManager.releaseDockSquash()
                 let screenBounds = dockManager.keyWindow!.bounds
                 let safeAreaInsets = dockManager.safeAreaInsets
                 let dockVerticalMargin = MultitaskDockManager.Constants.dockVerticalMargin
@@ -2344,8 +2154,8 @@ enum LCBreathingLightColor: String, CaseIterable {
 /// except on the sliver itself. Since later the same day it is
 /// the orb's second collapsed form, not a separate part: the
 /// orb squashes flat into it (same height, squeezed width), a
-/// tap expands the dock directly, an inward drag pulls it back
-/// out into the orb, and a vertical drag moves the hidden
+/// tap expands the dock directly, a long press switches it
+/// back into the orb, and a vertical drag moves the hidden
 /// dock's height. It dims when idle and brightens under the
 /// finger, like the orb itself.
 private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
@@ -2362,13 +2172,6 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     // flat (Ann 2026-11-25), so the two collapsed forms share
     // one height and one center line.
 
-    /// An inward drag pulls the handle back out into the orb,
-    /// scrubbed by the finger (Ann 2026-11-25): the manager is
-    /// told when the pull starts, how far it has got (0...1),
-    /// and whether it ended past the commit point.
-    var onPullBegan: (() -> Void)?
-    var onPullChanged: ((CGFloat) -> Void)?
-    var onPullEnded: ((Bool) -> Void)?
     /// A tap: expand the dock directly from the handle.
     var onExpand: (() -> Void)?
     /// A long press: switch back to the orb form.
@@ -2391,7 +2194,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private let gripBottomSegment = UIView()
     private var idleTimer: Timer?
     private var dragStartCenterY: CGFloat = 0
-    private var dragMode: Int = 0 // 0 undecided, 1 pull, 2 move
+    private var dragMode: Int = 0 // 0 undecided, 2 move
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2417,11 +2220,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         // Long press switches back to the orb (Ann 2026-11-25),
         // mirroring the orb's long press the other way. The
         // recognizer's default 10pt movement allowance keeps it
-        // a genuine press-and-hold: any real pull or move fails
-        // it first, and a pull needs more travel than that, so
-        // the two never overlap. The tap waits for it to fail,
-        // which a quick tap does at touch-up, so taps stay
-        // instant.
+        // a genuine press-and-hold: any real move fails it
+        // first (a move needs more travel than the allowance),
+        // so the two never overlap. The tap waits for it to
+        // fail, which a quick tap does at touch-up, so taps
+        // stay instant.
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPress.minimumPressDuration = 0.5
         addGestureRecognizer(longPress)
@@ -2560,35 +2363,21 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         onLongPress?()
     }
 
-    /// The pull's progress for an inward distance: the first
-    /// 12pt only prove intent (the mode decision below), the
-    /// pull itself is measured from there over the next 68pt.
-    private func pullProgress(forInward inward: CGFloat) -> CGFloat {
-        min(max((inward - 12) / 68, 0), 1)
-    }
-
+    /// The pan only moves the handle up and down (Ann
+    /// 2026-11-25, later: the inward pull that scrubbed it
+    /// back into the orb is deleted — switching forms is the
+    /// long press's job now). A mainly-vertical drag past 8pt
+    /// is a move; anything else is ignored, so a stray
+    /// horizontal wiggle never lifts the handle off its edge.
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let translation = gesture.translation(in: superview)
-        let inward = isOnRightSide ? -translation.x : translation.x
         switch gesture.state {
         case .began:
             dragStartCenterY = center.y
             dragMode = 0
         case .changed:
-            if dragMode == 0 {
-                // Inward wins over vertical: a drag that leans
-                // toward the screen's center by 12pt starts a
-                // pull, anything mainly vertical is a height
-                // move.
-                if inward > 12, abs(translation.x) > abs(translation.y) {
-                    dragMode = 1
-                    onPullBegan?()
-                } else if abs(translation.y) > 8, abs(translation.y) > abs(translation.x) {
-                    dragMode = 2
-                }
-            }
-            if dragMode == 1 {
-                onPullChanged?(pullProgress(forInward: inward))
+            if dragMode == 0, abs(translation.y) > 8, abs(translation.y) > abs(translation.x) {
+                dragMode = 2
             }
             if dragMode == 2, let superview {
                 let minY = superview.safeAreaInsets.top + bounds.height / 2 + 8
@@ -2596,19 +2385,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
                 center.y = min(max(dragStartCenterY + translation.y, minY), maxY)
             }
         case .ended:
-            if dragMode == 1 {
-                // Past halfway the pull lands as the orb;
-                // short of it the handle takes the dock back.
-                onPullEnded?(pullProgress(forInward: inward) > 0.5)
-            }
             if dragMode == 2 {
                 onMoveEnd?(center.y)
             }
             restartIdleTimer()
         case .cancelled, .failed:
-            if dragMode == 1 {
-                onPullEnded?(false)
-            }
             if dragMode == 2 {
                 // Settle back to the dock's own height.
                 onMoveEnd?(center.y)
