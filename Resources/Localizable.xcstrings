@@ -22689,19 +22689,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Floating dock gestures: when collapsed, tap to expand, long-press to switch back to the previous app. When expanded, tap an icon to switch apps (the current app's icon: double-tap to toggle maximized), long-press an icon to close that app, tap the home button to go to the home screen, long-press the home button to close all apps, tap outside the dock to collapse it. Shove or flick the orb outward and it squashes flat into a handle on the screen edge, at the orb's own height; tap the handle to expand the dock directly, drag it inward to turn it back into the orb, and drag it up or down to move it. A dock expanded from the handle collapses back into the handle."
+            "value" : "Floating dock gestures: when collapsed, tap to expand, long-press to switch back to the previous app. When expanded, tap an icon to switch apps (the current app's icon: double-tap to toggle maximized), long-press an icon to close that app, tap the home button to go to the home screen, long-press the home button to close all apps, tap outside the dock to collapse it. Drag the orb outward and it squashes flat against the screen edge into a handle at the orb's own height; release past halfway to keep it there, or drag back to cancel. Tap the handle to expand the dock directly, drag it inward to turn it back into the orb, and drag it up or down to move it. A dock expanded from the handle collapses back into the handle."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "悬浮坞手势：收起时点按展开，长按切回上一个 App；展开后点按图标切换 App（当前 App 的图标双击切换最大化），长按图标关闭该 App，点按主页按钮回主屏幕，长按主页按钮关闭全部 App，点坞外区域收起；将圆球用力向外拖出或甩出，圆球会压扁成贴在屏幕边缘的把手（与圆球同高）；点按把手直接展开，将把手向内拖变回圆球，把手可上下拖动调整位置；从把手展开的坞，收起时变回把手。"
+            "value" : "悬浮坞手势：收起时点按展开，长按切回上一个 App；展开后点按图标切换 App（当前 App 的图标双击切换最大化），长按图标关闭该 App，点按主页按钮回主屏幕，长按主页按钮关闭全部 App，点坞外区域收起；将圆球向外拖，圆球会贴着屏幕边缘被挤压成把手（与圆球同高），拖过一半松手落定，中途拖回可取消；点按把手直接展开，将把手向内拖变回圆球，把手可上下拖动调整位置；从把手展开的坞，收起时变回把手。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "懸浮塢手勢：收起時點按展開，長按切回上一個 App；展開後點按圖示切換 App（目前 App 的圖示雙擊切換最大化），長按圖示關閉該 App，點按主頁按鈕回主畫面，長按主頁按鈕關閉全部 App，點塢外區域收起；將圓球用力向外拖出或甩出，圓球會壓扁成貼在螢幕邊緣的把手（與圓球同高）；點按把手直接展開，將把手向內拖變回圓球，把手可上下拖動調整位置；從把手展開的塢，收起時變回把手。"
+            "value" : "懸浮塢手勢：收起時點按展開，長按切回上一個 App；展開後點按圖示切換 App（目前 App 的圖示雙擊切換最大化），長按圖示關閉該 App，點按主頁按鈕回主畫面，長按主頁按鈕關閉全部 App，點塢外區域收起；將圓球向外拖，圓球會貼著螢幕邊緣被擠壓成把手（與圓球同高），拖過一半鬆手落定，中途拖回可取消；點按把手直接展開，將把手向內拖變回圓球，把手可上下拖動調整位置；從把手展開的塢，收起時變回把手。"
           }
         }
       }

@@ -1143,7 +1143,7 @@ class AppInfoProvider {
     }
 
     // Check if gesture is for cross-screen movement (left to right or vice versa)
-    func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize, predictedTranslation: CGSize) -> Bool {
+    func handleSwipeToHideOrShowGesture(for originalFrame: CGRect, translation: CGSize) -> Bool {
         let screenWidth = keyWindow!.bounds.width
         let isOnRightSide = originalFrame.origin.x > screenWidth / 2
         // A horizontal value's outward component: positive = away
@@ -1160,33 +1160,17 @@ class AppInfoProvider {
             return true
         }
 
-        // Deliberate hide (Ann 2026-11-25, replacing the old
-        // sign-only test under which any outward drift hid the
-        // dock): the release counts as a hide only when the shove
-        // is unmistakable — the drag is mainly horizontal AND
-        // either the dock's center was pushed past the screen
-        // edge, or the flick's predicted landing flies at least a
-        // full dock width outward. Repositioning (mostly vertical,
-        // or a slow outward creep that never gets the center out)
-        // falls through and the dock settles back onto its edge.
-        guard abs(translation.width) > abs(translation.height) else { return false }
-        // The finger-scrubbed squeeze commits on its own terms
-        // (Ann 2026-11-25): the orb has been deforming under the
-        // finger the whole way out, so a release past halfway
-        // through the squash simply lets it land as the handle.
-        // (Dragging back before release cancels — the scrub is
-        // reversible in a way the old poke-out never was.)
-        if isCollapsed, outward(translation.width) >= squashFullDragDistance / 2 {
-            self.hideDockToSide()
-            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-            impactFeedback.impactOccurred()
-            return true
-        }
-        let pushedMidX = originalFrame.midX + translation.width
-        let centerPushedOut = isOnRightSide ? pushedMidX > screenWidth : pushedMidX < 0
-        let flickedOut = outward(predictedTranslation.width) >= dockWidth
-            && abs(predictedTranslation.width) > abs(predictedTranslation.height)
-        guard centerPushedOut || flickedOut else { return false }
+        // Hiding by drag is the squeeze, and only the squeeze
+        // (Ann 2026-11-25, later: the fling tests are deleted —
+        // a flick whose predicted landing flew out, or a shove
+        // that pushed the dock's center off the screen, used to
+        // hide it too). The orb has been deforming under the
+        // finger the whole way out, so a mainly-horizontal
+        // release past halfway through the squash simply lets
+        // it land as the handle; anything else falls through
+        // and the dock settles back onto its edge.
+        guard isCollapsed, abs(translation.width) > abs(translation.height),
+              outward(translation.width) >= squashFullDragDistance / 2 else { return false }
         self.hideDockToSide()
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
@@ -1806,7 +1790,7 @@ public struct MultitaskDockSwiftView: View {
                     return
                 }
                 
-                if dockManager.handleSwipeToHideOrShowGesture(for: hcFrame, translation: value.translation, predictedTranslation: value.predictedEndTranslation) {
+                if dockManager.handleSwipeToHideOrShowGesture(for: hcFrame, translation: value.translation) {
                     withAnimation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping)) {
                         self.dragOffset = .zero
                     }
