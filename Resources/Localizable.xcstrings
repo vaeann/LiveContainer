@@ -22689,19 +22689,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Floating dock gestures: when collapsed, tap to expand, long-press to turn the orb into the handle. When expanded, tap an icon to switch apps (the current app's icon: double-tap to toggle maximized), long-press an icon to close that app, tap the home button to go to the home screen, long-press the home button to close all apps, tap outside the dock to collapse it. Tap the handle to expand the dock directly, long-press it to turn it back into the orb, and drag it freely to move it — it snaps to the nearest screen edge on release. A dock expanded from the handle collapses back into the handle."
+            "value" : "Floating dock gestures: tap the handle to expand the dock, long-press the handle to jump back to the previous app, drag the handle to move it freely — it snaps to the nearest screen edge on release. When expanded, tap an icon to switch apps (the current app's icon: double-tap to toggle maximized), long-press an icon to close that app, tap the home button to go to the home screen, long-press the home button to close all apps, tap outside the dock to collapse it back to the handle."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "悬浮坞手势：收起时点按展开，长按把圆球变为把手；展开后点按图标切换 App（当前 App 的图标双击切换最大化），长按图标关闭该 App，点按主页按钮回主屏幕，长按主页按钮关闭全部 App，点坞外区域收起；点按把手直接展开，长按把手变回圆球，拖动把手可自由移动，松手吸到最近的屏幕边缘；从把手展开的坞，收起时变回把手。"
+            "value" : "悬浮坞手势：点按把手展开悬浮坞，长按把手切回上一个 App，拖动把手可自由移动，松手吸到最近的屏幕边缘；展开后点按图标切换 App（当前 App 的图标双击切换最大化），长按图标关闭该 App，点按主页按钮回主屏幕，长按主页按钮关闭全部 App，点坞外区域收起为把手。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "懸浮塢手勢：收起時點按展開，長按把圓球變為把手；展開後點按圖示切換 App（目前 App 的圖示雙擊切換最大化），長按圖示關閉該 App，點按主頁按鈕回主畫面，長按主頁按鈕關閉全部 App，點塢外區域收起；點按把手直接展開，長按把手變回圓球，拖動把手可自由移動，鬆手吸到最近的螢幕邊緣；從把手展開的塢，收起時變回把手。"
+            "value" : "懸浮塢手勢：點按把手展開懸浮塢，長按把手切回上一個 App，拖動把手可自由移動，鬆手吸到最近的螢幕邊緣；展開後點按圖示切換 App（目前 App 的圖示雙擊切換最大化），長按圖示關閉該 App，點按主頁按鈕回主畫面，長按主頁按鈕關閉全部 App，點塢外區域收起為把手。"
           }
         }
       }

@@ -138,27 +138,17 @@ class AppInfoProvider {
     @Published @objc var isCollapsed: Bool = true
     @Published var settingsChanged: Bool = false
 
-    /// The dock no longer hides off-screen: it stays visible at 60%
-    /// opacity and dims to 30% after 5 seconds without interaction
-    /// (the hidden handle dims on the same 5-second clock).
-    @Published var isDockIdleDimmed: Bool = false
-
-    /// Whether the dock is currently slid to the screen edge
-    /// (hide-to-side). 微珠's multitask takeover probes the @objc
-    /// methods that drive this state (showDockFromHidden,
-    /// toggleDockVisibility, hideDockToSide) by name.
+    /// Whether the dock is currently parked off-screen with
+    /// only its handle on the edge (hide-to-side). Since the
+    /// handle became the dock's only collapsed form (Ann
+    /// 2026-11-25, later: the orb is deleted), collapsed and
+    /// hidden are the same resting state: isCollapsed says
+    /// "not expanded", isDockHidden says the pill itself is
+    /// off-screen and the handle is showing. 微珠's multitask
+    /// takeover probes the @objc methods that drive this
+    /// state (showDockFromHidden, toggleDockVisibility,
+    /// hideDockToSide) by name.
     @Published var isDockHidden: Bool = false
-
-    /// Which collapsed form the dock rests in (Ann 2026-11-25):
-    /// the orb, or the handle — the same orb squashed flat
-    /// against the screen edge, at the orb's own height. Hiding
-    /// the orb squashes it into the handle and sets this;
-    /// recalling it as the orb (showDockFromHidden) clears it.
-    /// Expanding straight from the handle keeps it set, so
-    /// the next collapse squashes back into the handle instead
-    /// of stopping at the orb (see toggleDockCollapse).
-    var collapsedFormIsHandle: Bool = false
-    private var dockIdleTimer: Timer?
 
     /// Status bar fix state: whether the host status bar override is
     /// currently applied.
@@ -170,24 +160,10 @@ class AppInfoProvider {
     /// updateStatusBarFix(), which already runs on every front-app
     /// change.
     @Published var frontAppUUID: String?
-
-    /// Reset the idle-dim countdown; any dock interaction counts.
-    public func noteDockInteraction() {
-        DispatchQueue.main.async {
-            self.isDockIdleDimmed = false
-            self.dockIdleTimer?.invalidate()
-            // 5 seconds, in sync with the hidden handle's idle
-            // fade (Ann 2026-11-25): the two collapsed forms are
-            // one object and dim on the same clock.
-            self.dockIdleTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-                // Idle dimming applies to the collapsed button only; the
-                // expanded dock is always fully opaque.
-                if self.isCollapsed {
-                    self.isDockIdleDimmed = true
-                }
-            }
-        }
-    }
+    /// The app that was in front before the current one — or
+    /// the last one before everything went home: the handle's
+    /// long press jumps back to it.
+    var previousAppUUID: String?
 
     @objc public var windowHostingView = VirtualWindowsHostView()
 
@@ -255,7 +231,7 @@ class AppInfoProvider {
 
         // Collapse/expand morph (Ann 2026-11-24): ONE physical
         // spring drives the UIKit frame, the SwiftUI morph
-        // progress and the root fades, so the orb stretches into
+        // progress and the root fades, so the dock stretches into
         // the capsule as a single motion. She first picked the
         // jelly tuning (response 0.6, damping 0.60) from the
         // demos, then found it wobbled too much on device and
@@ -479,7 +455,7 @@ class AppInfoProvider {
     private func syncHiddenHandle(dockFrame: CGRect, isOnRightSide: Bool) {
         guard isDockHidden, isVisible, let parent = hostingController?.view.superview else {
             // Recall (or dismissal): the handle fades out as the
-            // orb springs back in, instead of popping out of
+            // dock springs back in, instead of popping out of
             // existence mid-handoff.
             if let handle = hiddenHandle {
                 hiddenHandle = nil
@@ -498,12 +474,7 @@ class AppInfoProvider {
             handle = LCHiddenDockHandleView()
             handle.onExpand = { [weak self] in self?.expandDockFromHidden() }
             handle.onLongPress = { [weak self] in
-                guard let self else { return }
-                // A deliberate switch to the orb form: the orb
-                // is home again, so a later collapse lands on
-                // the orb, not back here.
-                self.collapsedFormIsHandle = false
-                self.showDockFromHidden()
+                self?.switchToPreviousApp() ?? false
             }
             handle.onMoveEnd = { [weak self] centerY, isOnRightSide in self?.moveHiddenDock(centerY: centerY, isOnRightSide: isOnRightSide) }
             hiddenHandle = handle
@@ -514,11 +485,12 @@ class AppInfoProvider {
         }
         handle.isOnRightSide = isOnRightSide
         handle.dragVerticalMargin = Constants.dockVerticalMargin
-        // The handle is the orb squashed flat (Ann 2026-11-25):
-        // same height as the orb, only the width is squeezed —
-        // and both follow the orb's size when it is resized.
+        handle.useLiquidGlass = SharedModel.isLiquidGlassEnabled
+        // The handle is the collapsed dock (Ann 2026-11-25):
+        // the collapsed height, only the width is squeezed —
+        // and it follows the dock's size when that is resized.
         let handleHeight = collapsedDockHeight(for: dockWidth)
-        let handleWidth = LCHiddenDockHandleView.handleWidth(forOrbWidth: dockWidth)
+        let handleWidth = LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth)
         let screenBounds = keyWindow?.bounds ?? dockFrame
         let minY = safeAreaInsets.top + Constants.dockVerticalMargin
         let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - handleHeight
@@ -528,9 +500,6 @@ class AppInfoProvider {
         handle.setNeedsLayout()
     }
 
-    /// The handle was dragged vertically: move the hidden dock
-    /// (and with it the handle, via the frame sync) so the orb
-    /// returns at the new height.
     /// The handle was dropped and snapped to an edge: plant
     /// the hidden dock at the dropped height on the dropped
     /// side. updateDockFrame reads the side from the current
@@ -716,7 +685,6 @@ class AppInfoProvider {
         guard isDockEnabled() else { return }
         
         DispatchQueue.main.async {
-            self.noteDockInteraction()
             self.apps.removeAll { $0.appUUID == appUUID }
             
             if self.apps.isEmpty {
@@ -736,13 +704,13 @@ class AppInfoProvider {
         
         DispatchQueue.main.async {
             self.isVisible = true
-            // A fresh multitask session always starts from the collapsed
-            // button, even if the previous session ended expanded.
+            // A fresh multitask session always starts collapsed,
+            // even if the previous session ended expanded — and
+            // collapsed means the handle now (the orb is gone):
+            // the dock starts parked off-screen and the handle
+            // fades in at the edge.
             self.isCollapsed = true
-            // …and from the orb form, whatever form the last
-            // session ended in.
-            self.collapsedFormIsHandle = false
-            self.noteDockInteraction()
+            self.isDockHidden = true
 
             let screenBounds = keyWindow.bounds
             let currentDockWidth = self.dockWidth
@@ -761,18 +729,11 @@ class AppInfoProvider {
             
             self.updateDockFrame(animated: false)
 
-            
-            hostingController.view.alpha = 0
-            hostingController.view.transform = CGAffineTransform(scaleX: Constants.showHideScale, y: Constants.showHideScale)
-
-            UIView.animate(
-                withDuration: Constants.showAnimationDuration,
-                delay: 0,
-                options: .curveEaseOut
-            ) {
-                hostingController.view.alpha = 1
-                hostingController.view.transform = .identity
-            }
+            // No entrance animation on the hosting view: it is
+            // parked off-screen, and the handle's own fadeIn is
+            // the entrance.
+            hostingController.view.alpha = 1
+            hostingController.view.transform = .identity
         }
     }
     
@@ -797,7 +758,6 @@ class AppInfoProvider {
                 // The next session starts collapsed again (see showDock).
                 self.isCollapsed = true
                 self.isDockHidden = false
-                self.collapsedFormIsHandle = false
                 hostingController.view.transform = .identity
                 self.syncTapOutsideScrim()
                 // A dismissed dock leaves no handle behind either.
@@ -829,9 +789,9 @@ class AppInfoProvider {
     }
 
     /// The hosting view's horizontal squash when it poses as the
-    /// handle: the handle's width over the orb's width.
+    /// handle: the handle's width over the dock's width.
     private var handleSquashScale: CGFloat {
-        LCHiddenDockHandleView.handleWidth(forOrbWidth: dockWidth) / max(dockWidth, 1)
+        LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth) / max(dockWidth, 1)
     }
 
     private func dockIsOnRightSide(_ view: UIView) -> Bool {
@@ -844,68 +804,48 @@ class AppInfoProvider {
     // their signatures must stay exactly as they are.
     @objc public func toggleDockVisibility() {
         DispatchQueue.main.async {
-            self.isDockHidden.toggle()
-            self.collapsedFormIsHandle = self.isDockHidden
-            self.updateDockFrame()
+            if self.isCollapsed {
+                if self.isDockHidden {
+                    self.expandDockFromHidden()
+                } else {
+                    self.isCollapsed = false
+                    self.updateDockFrame()
+                }
+            } else {
+                self.hideDockToSide()
+            }
         }
     }
 
-    /// Recalling the handle restores the orb (Ann
-    /// 2026-11-25): the squashed dock is placed at the orb's
-    /// frame still wearing the handle's width, then springs
-    /// back to full width around its edge-side anchor — the
-    /// reverse of the hide squash in hideDockToSide.
+    /// Probed compat entry: "show the dock from hidden" used
+    /// to restore the orb; with the orb gone it grows the
+    /// dock out of the handle instead — the same motion as
+    /// tapping the handle.
     @objc public func showDockFromHidden() {
-        DispatchQueue.main.async {
-            guard self.isDockHidden else {
-                self.updateDockFrame()
-                return
-            }
-            self.collapsedFormIsHandle = false
-            self.isDockHidden = false
-            self.updateDockFrame(animated: false)
-            guard let view = self.hostingController?.view else { return }
-            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
-            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
-            UIView.animate(
-                withDuration: Constants.morphSpringResponse,
-                delay: 0,
-                usingSpringWithDamping: 0.8,
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .curveEaseOut]
-            ) {
-                view.transform = .identity
-            } completion: { _ in
-                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-            }
-        }
+        expandDockFromHidden()
     }
 
     /// Tapping the handle expands the dock directly (Ann
-    /// 2026-11-25): orb and handle are two collapsed forms of
-    /// the same dock, and a tap on either one expands it. The
-    /// form memory stays on the handle (collapsedFormIsHandle),
-    /// so collapsing afterwards squashes back into the handle
-    /// rather than stopping at the orb. The growth is ONE
-    /// continuous motion (Ann 2026-11-25, later: an earlier
-    /// two-stage version visibly paused at the orb on its way
-    /// out — a sequencing artifact of the frame/transform fix,
-    /// not the intent): the final expanded frame is placed
-    /// first, at identity, then a two-axis squash about the
-    /// handle's own spot makes it LOOK like the handle, and a
-    /// single spring back to identity grows it straight into
-    /// the expanded dock — passing through the orb's shape
-    /// without stopping there — while the content runs its
-    /// ordinary expand morph on the same clock.
+    /// 2026-11-25): the handle is the dock's collapsed form.
+    /// The growth is ONE continuous motion (Ann 2026-11-25,
+    /// later: an earlier two-stage version visibly paused at
+    /// the orb on its way out — a sequencing artifact of the
+    /// frame/transform fix, not the intent): the final
+    /// expanded frame is placed first, at identity, then a
+    /// two-axis squash about the handle's own spot makes it
+    /// LOOK like the handle, and a single spring back to
+    /// identity grows it straight into the expanded dock,
+    /// while the content runs its ordinary expand morph on
+    /// the same clock.
     @objc public func expandDockFromHidden() {
         DispatchQueue.main.async {
             guard self.isDockHidden, self.isVisible,
                   let view = self.hostingController?.view else { return }
             let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
-            // The hidden frame's midY is the orb's center; the
-            // handle is centered on it too.
-            let orbMidY = view.frame.midY
+            // The hidden frame's midY is the collapsed
+            // height's center; the handle is centered on it
+            // too.
+            let handleMidY = view.frame.midY
             self.isDockHidden = false
             self.isCollapsed = false
             UIView.performWithoutAnimation {
@@ -913,12 +853,13 @@ class AppInfoProvider {
                 let expanded = view.frame
                 guard expanded.height > 0 else { return }
                 // Anchor at the handle's spot inside the final
-                // frame: the edge horizontally, the orb's center
-                // vertically. The dock's width is the same in
-                // both forms, so handleSquashScale is the exact
-                // horizontal squash here too; vertically the
-                // expanded height squashes down to the orb's.
-                let anchorY = min(max((orbMidY - expanded.minY) / expanded.height, 0), 1)
+                // frame: the edge horizontally, the collapsed
+                // center vertically. The dock's width is the
+                // same in both forms, so handleSquashScale is
+                // the exact horizontal squash here too;
+                // vertically the expanded height squashes down
+                // to the collapsed height.
+                let anchorY = min(max((handleMidY - expanded.minY) / expanded.height, 0), 1)
                 self.setDockAnchorPoint(CGPoint(x: anchorX, y: anchorY), for: view)
                 view.transform = CGAffineTransform(
                     scaleX: self.handleSquashScale,
@@ -941,16 +882,15 @@ class AppInfoProvider {
 
     @objc public func hideDockToSide() {
         DispatchQueue.main.async {
-            // Hiding is a collapsed-orb state (Ann 2026-11-25):
-            // an expanded dock shoved out of the way collapses
-            // first. The orb then squashes flat into the handle
-            // (Ann 2026-11-25, later): same height, squeezed
-            // width, pinned to its own edge — one object changing
-            // shape, not a swap for a different part. Only once
-            // the squash lands does the dock take its off-screen
-            // hidden frame and the handle take its place.
+            // Collapsing IS hiding (Ann 2026-11-25, later):
+            // the handle is the dock's only collapsed form, so
+            // every collapse — from whichever state the dock is
+            // in — squashes the dock flat against its own edge
+            // and parks it off-screen, and the handle takes its
+            // place. One object changing shape, not a swap for
+            // a different part. Only once the squash lands does
+            // the dock take its off-screen hidden frame.
             self.isCollapsed = true
-            self.collapsedFormIsHandle = true
             guard self.isVisible, !self.isDockHidden,
                   let view = self.hostingController?.view else {
                 self.isDockHidden = true
@@ -959,8 +899,23 @@ class AppInfoProvider {
             }
             let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
             self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
+            // The two-axis squash: expandDockFromHidden's
+            // growth run backwards. From a frame already at
+            // the collapsed height the vertical scale is
+            // exactly 1; from the expanded pill it also
+            // shrinks the height down to the handle's, in the
+            // same motion.
+            let scaleY = view.frame.height > 0
+                ? self.collapsedDockHeight(for: self.dockWidth) / view.frame.height
+                : 1
+            UIView.animate(
+                withDuration: Constants.morphSpringResponse,
+                delay: 0,
+                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .curveEaseOut]
+            ) {
+                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: scaleY)
             } completion: { _ in
                 // Never set a frame while a transform is live
                 // (device bug, Ann 2026-11-25: the frame setter
@@ -1032,7 +987,6 @@ class AppInfoProvider {
     // it passes that icon's frame in window coordinates and the window
     // grows out of it, iOS-style (Ann 2026-11-23).
     func bringMultitaskViewToFront(uuid: String, from sourceRect: CGRect? = nil) -> Bool {
-        noteDockInteraction()
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             return false
         }
@@ -1171,7 +1125,6 @@ class AppInfoProvider {
         let appModel = DockAppModel(appName: appName, appUUID: appUUID, appInfo: appInfo, view: view)
         
         DispatchQueue.main.async {
-            self.noteDockInteraction()
             self.apps.append(appModel)
             
             if self.apps.count == 1 {
@@ -1188,9 +1141,9 @@ class AppInfoProvider {
     /// the iOS-style entrance and shrinks into the dock), and where
     /// a window with no icon source — a previous-app jump, a
     /// model-level launch — grows out of.
-    /// Collapsed, the dock's frame IS the orb's frame. Expanded, aim
-    /// at the square at the capsule's center — where the orb sits
-    /// when collapsed. Zero when the dock isn't up, so minimize
+    /// Collapsed, that square IS the dock's frame. Expanded, aim
+    /// at the square at the capsule's center — where the collapsed
+    /// dock sits. Zero when the dock isn't up, so minimize
     /// falls back to the old shrink-in-place animation.
     @objc func dockHomeRect() -> CGRect {
         guard isVisible, let dockView = hostingController?.view, keyWindow != nil else {
@@ -1205,7 +1158,6 @@ class AppInfoProvider {
     }
     
     @objc public func minimizeAllWindows(except: DecoratedAppSceneViewController? = nil) {
-        noteDockInteraction()
         DispatchQueue.main.async {
             self.apps.forEach { app in
                 if let vc = app.view?._viewDelegate() as? DecoratedAppSceneViewController,
@@ -1218,19 +1170,21 @@ class AppInfoProvider {
     }
     
     @objc public func toggleDockCollapse() {
-        noteDockInteraction()
         DispatchQueue.main.async {
-            self.isCollapsed.toggle()
-            // Collapsing a dock whose collapsed form is the
-            // handle (it was expanded straight from the handle)
-            // goes all the way back to the handle (Ann
-            // 2026-11-25): the frame morph shrinks it to orb
-            // height while it slides out, and the handle takes
-            // its place at the same height.
-            if self.isCollapsed, self.collapsedFormIsHandle {
-                self.isDockHidden = true
+            if self.isCollapsed {
+                // Collapsed rests on the handle: expanding
+                // grows out of it. (A collapsed-but-visible
+                // dock is only a mid-animation state now; a
+                // call landing there simply expands in place.)
+                if self.isDockHidden {
+                    self.expandDockFromHidden()
+                } else {
+                    self.isCollapsed = false
+                    self.updateDockFrame()
+                }
+            } else {
+                self.hideDockToSide()
             }
-            self.updateDockFrame()
         }
     }
 
@@ -1281,12 +1235,33 @@ class AppInfoProvider {
             }
         }
         if frontAppUUID != frontUUID {
+            // Whoever just left the front becomes the
+            // "previous app" for the handle's long press —
+            // including going home: the app just left is
+            // where the jump goes.
+            if let leaving = frontAppUUID {
+                previousAppUUID = leaving
+            }
             frontAppUUID = frontUUID
         }
         if hide != statusBarFixApplied,
            LCStatusBarManager.lc_setOverridingStatusBarHidden(hide) {
             statusBarFixApplied = hide
         }
+    }
+
+    /// Handle long press: jump back to the app that was in
+    /// front before the current one. Returns whether a jump
+    /// happened, so the caller ticks only on a real switch.
+    @discardableResult
+    @objc public func switchToPreviousApp() -> Bool {
+        guard let prev = previousAppUUID, prev != frontAppUUID,
+              apps.contains(where: { $0.appUUID == prev }) else { return false }
+        // From the handle, the window grows out of the
+        // handle's own frame at the edge; otherwise out of
+        // the dock's home rect.
+        let from = isDockHidden ? (hiddenHandle?.frame ?? dockHomeRect()) : dockHomeRect()
+        return bringMultitaskViewToFront(uuid: prev, from: from)
     }
 
     /// Toggle a window between maximized and windowed, through the
@@ -1321,13 +1296,12 @@ public struct MultitaskDockSwiftView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isMoving: Bool = false
     @State private var homeLongPressTriggered = false
-    @State private var collapsedLongPressTriggered = false
     @State private var showCloseAllConfirm = false
 
     /// Morph progress for the collapse/expand animation: 0 is
-    /// the orb, 1 the full capsule. A single spring-animated
-    /// value drives the icons' travel, the end padding and the
-    /// glyph fade, so the morph is one motion (Ann 2026-11-24).
+    /// collapsed, 1 the full capsule. A single spring-animated
+    /// value drives the icons' travel and the end padding, so
+    /// the morph is one motion (Ann 2026-11-24).
     /// isCollapsed stays the logical state (frame size, hit
     /// testing); this is its animated shadow.
     @State private var morphProgress: CGFloat = 0
@@ -1337,7 +1311,7 @@ public struct MultitaskDockSwiftView: View {
     }
 
     /// Offset that pulls an expanded element back onto the
-    /// stack's center (the orb's seat) at morphProgress 0; as
+    /// stack's center (the collapsed seat) at morphProgress 0; as
     /// the spring runs, every element rides it out to its own
     /// slot — past it, briefly, when the jelly spring
     /// overshoots.
@@ -1358,11 +1332,11 @@ public struct MultitaskDockSwiftView: View {
     public var body: some View {
         GeometryReader { g in
             // One stack, always in the tree (Ann 2026-11-24):
-            // the morph is the icons travelling from the orb's
-            // seat out to their slots on a single spring (see
-            // morphProgress / morphOffset), with the glyph
-            // fading on the same value — no content swap, no
-            // per-element transitions, no stagger delays left.
+            // the morph is the icons travelling from the
+            // collapsed seat out to their slots on a single
+            // spring (see morphProgress / morphOffset) — no
+            // content swap, no per-element transitions, no
+            // stagger delays left.
             ZStack {
                 VStack(spacing: 8) {
                     ForEach(Array(dockManager.apps.enumerated()), id: \.element.id) { pair in
@@ -1404,75 +1378,20 @@ public struct MultitaskDockSwiftView: View {
                 // The stack must not size the dock while it is
                 // collapsed: the glass hugs the container, so a
                 // full-height stack in the tree stretched the
-                // orb into a pill (Ann 2026-11-24, first jelly
-                // build). Its layout height rides the morph —
-                // zero at the orb (the glyph alone sizes the
-                // container, exactly the pre-morph geometry),
-                // full at the capsule — while the icons
-                // themselves overflow the small layout frame on
-                // their offsets and are revealed by the capsule
-                // clip as it grows.
+                // collapsed dock into a pill (Ann 2026-11-24,
+                // first jelly build). Its layout height rides
+                // the morph — zero while collapsed, full at the
+                // capsule — while the icons themselves overflow
+                // the small layout frame on their offsets and
+                // are revealed by the capsule clip as it grows.
                 .frame(height: (CGFloat(dockManager.apps.count + 1) * dockManager.adaptiveIconSize + CGFloat(dockManager.apps.count) * 8) * morphProgress)
-                // Staggered fades (Ann 2026-11-25, optimized morph):
-                // the icons reach full opacity early (progress 0.2,
-                // while they are still near the orb and the growing
-                // glass clips their travel), and the glyph below
-                // only starts fading once the icons are solid. The
-                // old curves crossed mid-fade (icons full at 0.45,
-                // glyph gone at 0.4) and the whole dock read as
-                // transparent for an instant; now some element is
-                // solid at every point of the morph, both ways —
-                // the same functions of progress run in reverse on
-                // collapse.
+                // The icons reach full opacity early in the
+                // morph (progress 0.2, while they are still near
+                // the collapsed spot and the growing glass clips
+                // their travel); the same function of progress
+                // runs in reverse on collapse.
                 .opacity(Double(min(1, morphProgress * 5)))
                 .allowsHitTesting(!dockManager.isCollapsed)
-
-                // Two gestures on the floating button (Ann
-                // 2026-11-23, plan A — the old mapping was
-                // top-heavy: the lightest gesture did the
-                // heaviest thing): single tap expands — the
-                // most-used, zero-risk action, and instant now
-                // that no double tap has to be waited out.
-                // Long press switches the collapsed form to
-                // the handle (Ann 2026-11-25; it jumped back to
-                // the previous app until tonight — that switch
-                // and its tracking are removed with the remap).
-                // Double tap (blind cycling) is gone: switching
-                // happens in the expanded dock, where the
-                // target is visible. The long press's flag
-                // keeps its release from also firing the tap.
-                CollapsedDockView()
-                    // Delayed fade (see the icons' note above): the
-                    // glyph holds until progress 0.15 — the icons
-                    // are solid by then — and is gone by 0.4.
-                    .opacity(Double(1 - min(1, max(0, (morphProgress - 0.15) * 4))))
-                    .allowsHitTesting(dockManager.isCollapsed)
-                    .onTapGesture {
-                        if collapsedLongPressTriggered {
-                            collapsedLongPressTriggered = false
-                            return
-                        }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        dockManager.toggleDockCollapse()
-                    }
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.5)
-                            // Fire on recognition, not on
-                            // release (Ann 2026-11-25: a light
-                            // tick the moment the switch happens,
-                            // finger still down — the handle's
-                            // recognizer fires at the same point).
-                            // The flag does double duty: it keeps
-                            // the release from also firing the tap,
-                            // and it keeps a held press from
-                            // firing twice.
-                            .onChanged { _ in
-                                guard !collapsedLongPressTriggered else { return }
-                                collapsedLongPressTriggered = true
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                dockManager.hideDockToSide()
-                            }
-                    )
             }
             .onChange(of: dockManager.isCollapsed) { collapsed in
                 withAnimation(morphSpring) {
@@ -1485,7 +1404,7 @@ public struct MultitaskDockSwiftView: View {
             .padding(.horizontal, dynamicPadding)
             // Expanded, the pill's curved ends need extra room at
             // the top and bottom so the end icons stay inside the
-            // glass (see dockEndExtra); collapsed stays a circle.
+            // glass (see dockEndExtra); collapsed there is none.
             // The morph progress interpolates it, so the ends
             // grow out with the same spring as everything else.
             .padding(.vertical, dynamicPadding + dockManager.dockEndExtra(for: dockManager.dockWidth) * morphProgress)
@@ -1496,9 +1415,9 @@ public struct MultitaskDockSwiftView: View {
                 }
             }
             // Pill-shaped dock (Ann 2026-11-22): a capsule reads as
-            // one floating control, not a panel — collapsed it is a
-            // plain circle around the orb glyph, expanded a vertical
-            // capsule around the icons.
+            // one floating control, not a panel. (This tree only
+            // renders while expanded or mid-morph; the collapsed
+            // resting visual is the handle.)
             .modifier { content in
                 if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
                     content.glassEffect(.regular, in: .capsule)
@@ -1519,15 +1438,8 @@ public struct MultitaskDockSwiftView: View {
             // of icons poking out of the glass (Ann 2026-11-23).
             .clipShape(Capsule())
             .scaleEffect(dockManager.isVisible ? 1.0 : 0.8)
-            // Collapsed button: 60% opacity, dimming to 20% after 3s
-            // idle. Expanded dock: fully opaque. (A hidden dock is
-            // fully off-screen now; its handle carries the visual.)
-            .opacity(dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.3 : 0.6) : 1.0)
-            .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
-            // The remaining isCollapsed-keyed values (the root
-            // opacity above) ride the morph spring like
-            // everything else in the collapse change — they used
-            // to run on two other curves besides (Ann 2026-11-24).
+            // isCollapsed-keyed values ride the morph spring
+            // like everything else in the collapse change.
             .animation(morphSpring, value: dockManager.isCollapsed)
             .offset(dragOffset)
             .position(x: g.size.width / 2, y: g.size.height / 2)
@@ -1539,7 +1451,6 @@ public struct MultitaskDockSwiftView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
             .onChanged { value in
-                dockManager.noteDockInteraction()
                 self.isMoving = true
                 // The drag only moves the dock (Ann 2026-11-25,
                 // later: the finger-scrubbed squeeze that shared
@@ -1647,149 +1558,6 @@ public struct MultitaskDockSwiftView: View {
     public init() {}
 }
 
-// MARK: - Collapsed Dock View
-@available(iOS 16.0, *)
-struct CollapsedDockView: View {
-    @EnvironmentObject var dockManager: MultitaskDockManager
-    @AppStorage("LCBreathingLightColor", store: LCUtils.appGroupUserDefault) var breathingLightColorRaw: String = LCBreathingLightColor.standard.rawValue
-
-    var body: some View {
-        ZStack {
-            // The glyph breathes the way Weizhu's orb line does
-            // (FMApplyOrbLineAnimation): a CABasicAnimation
-            // committed to the glyph's layer — see
-            // BreathingGlyphView for why it lives there.
-            BreathingGlyphView(
-                // Sized off the dock width, not adaptiveIconSize:
-                // the orb keeps its exact pre-0.68 glyph size
-                // (0.375 x width) — only the expanded icons shrank.
-                pointSize: dockManager.dockWidth * 0.375,
-                tint: (LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).uiColor ?? .label
-            )
-        }
-        .frame(width: dockManager.dockWidth * 0.75, height: dockManager.dockWidth * 0.75)
-        // No tile of its own (Ann 2026-11-22): the glyph sits
-        // directly on the dock's glass, like a system toolbar
-        // glyph. The glyph is slightly larger than the tiled
-        // version to keep its optical weight in the slot.
-        .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
-        .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
-    }
-}
-
-/// The orb's glyph with Weizhu's breathing mechanism
-/// (FMApplyOrbLineAnimation in the module this fork replaces):
-/// a CABasicAnimation on the layer's opacity — 0.38 <-> 1,
-/// 1.15s ease-in-out, autoreversing, forever. The mechanism is
-/// the lesson (Ann 2026-11-25: two SwiftUI attempts still
-/// flashed). A layer animation runs in the render server: it
-/// interpolates at full frame rate no matter what the app
-/// thread is busy with, and no SwiftUI re-render of the dock
-/// (front-app changes, morph state, published updates) can
-/// restart it mid-cycle or drop its frames — both things a
-/// view-level `.animation` pulse and a TimelineView pulse
-/// visibly suffered from.
-private struct BreathingGlyphView: UIViewRepresentable {
-    var pointSize: CGFloat
-    var tint: UIColor
-
-    func makeUIView(context: Context) -> BreathingGlyphUIView {
-        BreathingGlyphUIView()
-    }
-
-    func updateUIView(_ uiView: BreathingGlyphUIView, context: Context) {
-        uiView.apply(pointSize: pointSize, tint: tint)
-    }
-}
-
-private final class BreathingGlyphUIView: UIView {
-    private let imageView = UIImageView()
-    private var pointSize: CGFloat = 0
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        imageView.contentMode = .center
-        imageView.isUserInteractionEnabled = false
-        addSubview(imageView)
-        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    /// While the app sits in the background, iOS snapshots it
-    /// and the snapshot drops layer animations; nothing in the
-    /// passive re-assert points (apply / layout / window /
-    /// superview) runs on a plain foreground return, so the
-    /// orb sat frozen until a tap forced a re-render — and the
-    /// handle, left showing, froze the same way (Ann
-    /// 2026-11-25, both verified on device). On activation,
-    /// rebuild the pulse outright instead of trusting the
-    /// alive-check: the same rebuild-on-appearance the handle
-    /// has always done in fadeIn.
-    @objc private func appDidBecomeActive() {
-        layer.removeAnimation(forKey: "breathing")
-        startPulseIfNeeded()
-    }
-
-    func apply(pointSize: CGFloat, tint: UIColor) {
-        imageView.tintColor = tint
-        if self.pointSize != pointSize {
-            self.pointSize = pointSize
-            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
-            imageView.image = UIImage(systemName: "square.grid.2x2.fill", withConfiguration: config)?
-                .withRenderingMode(.alwaysTemplate)
-        }
-        setNeedsLayout()
-        startPulseIfNeeded()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        imageView.frame = bounds
-        // Layout passes are the most frequent lifecycle the
-        // dock guarantees (every morph step runs one), so the
-        // pulse is re-asserted here too — the guard keeps it a
-        // no-op while the animation is alive.
-        startPulseIfNeeded()
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        startPulseIfNeeded()
-    }
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        startPulseIfNeeded()
-    }
-
-    /// The pulse lives on this container's layer, not the
-    /// image view's (device finding, Ann 2026-11-25: with the
-    /// pulse on the UIImageView's layer and started only from
-    /// didMoveToWindow, the orb sat still while the handle —
-    /// whose pulse sits on a plain container view and is
-    /// re-applied every time it appears — breathed fine).
-    /// Same structure as the handle's grip, and the start is
-    /// re-asserted from apply(), which SwiftUI calls on every
-    /// update while the dock is on screen; the guard keeps it
-    /// a no-op while the animation is alive.
-    private func startPulseIfNeeded() {
-        guard layer.animation(forKey: "breathing") == nil else { return }
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 0.38
-        pulse.toValue = 1.0
-        pulse.duration = 1.15
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(pulse, forKey: "breathing")
-    }
-}
 
 // MARK: - Home Button View
 @available(iOS 16.0, *)
@@ -2130,12 +1898,12 @@ struct LoadingIconView: View {
 }
 
 /// Breathing-light color presets (Ann 2026-11-25): one setting
-/// tints every breathing light the dock has — the collapsed
-/// orb's glyph and the hidden handle's grip — so the dock's two
-/// states share one "I am here" signal, in a color picked from
-/// a few presets chosen to stay distinguishable on any
-/// background. Stored by raw value under LCBreathingLightColor
-/// in the app-group defaults.
+/// tints the dock's breathing light — the hidden handle's
+/// grip, its "I am here" signal while the dock rests on the
+/// handle — in a color picked from a few presets chosen to
+/// stay distinguishable on any background. Stored by raw
+/// value under LCBreathingLightColor in the app-group
+/// defaults.
 enum LCBreathingLightColor: String, CaseIterable {
     case standard, red, orange, green, blue, purple, pink
 
@@ -2143,9 +1911,8 @@ enum LCBreathingLightColor: String, CaseIterable {
         LCBreathingLightColor(rawValue: LCUtils.appGroupUserDefault.string(forKey: "LCBreathingLightColor") ?? "") ?? .standard
     }
 
-    /// nil for the standard preset: each surface then keeps its
-    /// platform default (the orb glyph is Color.primary; the
-    /// handle's grip is the dark line drawn for its light bar).
+    /// nil for the standard preset: the grip then keeps its
+    /// platform default (the dark line drawn for its light bar).
     var uiColor: UIColor? {
         switch self {
         case .standard: return nil
@@ -2169,36 +1936,41 @@ enum LCBreathingLightColor: String, CaseIterable {
 
 /// The handle a hidden dock leaves on the screen edge (Ann
 /// 2026-11-25, replacing the slid-out sliver and the window-level
-/// edge-swipe recognizers): a thin frosted bar in the dock's own
+/// edge-swipe recognizers): a thin glass bar in the dock's own
 /// top layer, so it stays touchable even while a guest app fills
 /// the screen — guest touches are routed straight to the guest
 /// process and never reached the old window recognizers anywhere
 /// except on the sliver itself. Since later the same day it is
-/// the orb's second collapsed form, not a separate part: the
-/// orb squashes flat into it (same height, squeezed width), a
-/// tap expands the dock directly, a long press switches it
-/// back into the orb, and a drag moves it freely — on
+/// the dock's only collapsed form (the orb is deleted): the
+/// dock squashes flat into it (collapsed height, squeezed
+/// width), a tap expands the dock directly, a long press jumps
+/// back to the previous app, and a drag moves it freely — on
 /// release it snaps to the nearest screen edge, taking the
-/// hidden dock with it. It dims when idle and brightens under the
-/// finger, like the orb itself.
+/// hidden dock with it. It dims when idle and brightens under
+/// the finger. Its material matches the expanded dock's:
+/// liquid glass where the dock uses it, the frosted blur
+/// otherwise (Ann 2026-11-25, later: the two read as different
+/// materials side by side).
 private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
-    /// The handle's width is a fixed share of the orb's width
-    /// (Ann 2026-11-25): resize the orb and the handle follows
-    /// — and the hide squash, which compresses the orb to
-    /// exactly this width, lands on it at any orb size.
+    /// The handle's width is a fixed share of the dock's width
+    /// (Ann 2026-11-25): resize the dock and the handle follows
+    /// — and the collapse squash, which compresses the dock to
+    /// exactly this width, lands on it at any dock size.
     static let handleWidthRatio: CGFloat = 16.0 / 90.0
-    static func handleWidth(forOrbWidth orbWidth: CGFloat) -> CGFloat {
-        min(max(orbWidth * handleWidthRatio, 12), 26)
+    static func handleWidth(forDockWidth dockWidth: CGFloat) -> CGFloat {
+        min(max(dockWidth * handleWidthRatio, 12), 26)
     }
     // No fixed height: the manager sizes the handle to the
-    // collapsed orb's height — the handle IS the orb squashed
-    // flat (Ann 2026-11-25), so the two collapsed forms share
-    // one height and one center line.
+    // dock's collapsed height — the handle IS the dock squashed
+    // flat (Ann 2026-11-25), so the two states share one
+    // height and one center line.
 
     /// A tap: expand the dock directly from the handle.
     var onExpand: (() -> Void)?
-    /// A long press: switch back to the orb form.
-    var onLongPress: (() -> Void)?
+    /// A long press: jump back to the previous app. Reports
+    /// whether a jump happened, so the tick fires only on a
+    /// real switch.
+    var onLongPress: (() -> Bool)?
     /// The handle was dropped and snapped: it rests at this
     /// center Y, on this side of the screen.
     var onMoveEnd: ((CGFloat, Bool) -> Void)?
@@ -2213,12 +1985,40 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         didSet { setNeedsLayout() }
     }
 
-    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+    /// Whether the dock renders in liquid glass, fed by the
+    /// manager (this view predates the multitask availability
+    /// boundary — same arrangement as dragVerticalMargin).
+    var useLiquidGlass = false {
+        didSet { if useLiquidGlass != oldValue { applyMaterial() } }
+    }
+
+    /// True while a drag has the handle off its edge: all
+    /// four corners round then (Ann 2026-11-25, later: the
+    /// flat edge side read as a harsh cut while the handle
+    /// was moving); it squares off again when the snap lands.
+    private var isFloating = false {
+        didSet { if isFloating != oldValue { setNeedsLayout() } }
+    }
+
+    private let blurView = UIVisualEffectView()
     private let tintView = UIView()
-    /// The grip is the orb's 2×2 glyph squashed with the orb:
-    /// the two columns merge into one, the two rows stay two —
-    /// two short segments in a column, breathing together
-    /// inside this container (Ann 2026-11-25).
+
+    /// The handle's material, matching the expanded dock's:
+    /// liquid glass with the grid ribbon's dark tint where
+    /// the dock uses glass, the frosted blur otherwise.
+    private func applyMaterial() {
+        if #available(iOS 26.0, *), useLiquidGlass {
+            blurView.effect = UIGlassEffect(style: .regular)
+            tintView.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        } else {
+            blurView.effect = UIBlurEffect(style: .systemUltraThinMaterialLight)
+            tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        }
+    }
+    /// The grip: two short segments in a column, breathing
+    /// together inside this container (Ann 2026-11-25) — the
+    /// old orb glyph's two rows, its columns merged by the
+    /// squash.
     private let gripView = UIView()
     private let gripTopSegment = UIView()
     private let gripBottomSegment = UIView()
@@ -2234,7 +2034,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         layer.shadowRadius = 4
         layer.shadowOffset = CGSize(width: 0, height: 1)
 
-        tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        applyMaterial()
         blurView.contentView.addSubview(tintView)
         for segment in [gripTopSegment, gripBottomSegment] {
             segment.backgroundColor = UIColor.black.withAlphaComponent(0.4)
@@ -2247,14 +2047,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.delegate = self
         addGestureRecognizer(pan)
-        // Long press switches back to the orb (Ann 2026-11-25),
-        // mirroring the orb's long press the other way. The
-        // recognizer's default 10pt movement allowance keeps it
-        // a genuine press-and-hold: any real move fails it
-        // first (a move needs more travel than the allowance),
-        // so the two never overlap. The tap waits for it to
-        // fail, which a quick tap does at touch-up, so taps
-        // stay instant.
+        // Long press jumps back to the previous app (Ann
+        // 2026-11-25, later). The recognizer's default 10pt
+        // movement allowance keeps it a genuine press-and-hold:
+        // any real move fails it first (a move needs more
+        // travel than the allowance), so the two never overlap.
+        // The tap waits for it to fail, which a quick tap does
+        // at touch-up, so taps stay instant.
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         longPress.minimumPressDuration = 0.5
         addGestureRecognizer(longPress)
@@ -2263,11 +2062,10 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         tap.require(toFail: longPress)
         addGestureRecognizer(tap)
 
-        // Suspension strips layer animations (see the orb's
-        // glyph for the full story): rebuild the grip pulse
-        // when the app becomes active again. Off screen this
-        // changes nothing visible; fadeIn rebuilds it on
-        // appearance anyway.
+        // Suspension strips layer animations: rebuild the
+        // grip pulse when the app becomes active again. Off
+        // screen this changes nothing visible; fadeIn rebuilds
+        // it on appearance anyway.
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
 
         alpha = 0.85
@@ -2287,22 +2085,26 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     override func layoutSubviews() {
         super.layoutSubviews()
         blurView.frame = bounds
-        // Only the corners facing the screen's middle are round;
-        // the edge side sits flush against the screen edge.
+        // Docked, only the corners facing the screen's middle
+        // are round; the edge side sits flush against the
+        // screen edge. Mid-drag (isFloating) all four round.
         blurView.layer.cornerRadius = bounds.width / 2
-        blurView.layer.maskedCorners = isOnRightSide
-            ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-            : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        blurView.layer.maskedCorners = isFloating
+            ? [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            : (isOnRightSide
+                ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+                : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner])
         blurView.clipsToBounds = true
         tintView.frame = bounds
-        // The segments copy the orb glyph's own proportions
+        // The segments keep the old orb glyph's proportions
         // (device feedback, Ann 2026-11-25: the first cut —
         // 38pt span, 8pt gap, 5pt wide — read as two unrelated
-        // dashes, not as the glyph). The glyph spans 0.375 of
-        // the orb, its cells take 0.44 of that span each with a
-        // 0.12 gap between them; squashed, a cell keeps its
-        // height and shrinks to a slim 3.5pt-wide segment
-        // (scaled with the orb), ends fully rounded.
+        // dashes, not as the glyph). The glyph spanned 0.375
+        // of the orb's height, its cells took 0.44 of that
+        // span each with a 0.12 gap between them; squashed, a
+        // cell keeps its height and shrinks to a slim
+        // 3.5pt-wide segment (scaled with the dock size),
+        // ends fully rounded.
         let glyphSpan = bounds.height * 0.375
         let cellHeight = glyphSpan * 0.44
         let cellGap = glyphSpan * 0.12
@@ -2322,12 +2124,12 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         restartIdleTimer()
     }
 
-    /// The grip is a breathing light too (Ann 2026-11-25): the
-    /// shared breathing-light color, breathing with the orb's
-    /// own animation — the same layer-committed CABasicAnimation
-    /// Weizhu's orb line uses (see BreathingGlyphView).
-    /// Re-read every time the handle appears, so a color picked
-    /// in Settings applies the next time the dock hides.
+    /// The grip is a breathing light (Ann 2026-11-25): the
+    /// shared breathing-light color, on the same
+    /// layer-committed CABasicAnimation Weizhu's orb line
+    /// uses. Re-read every time the handle appears, so a
+    /// color picked in Settings applies the next time the
+    /// dock hides.
     private func applyGripStyle() {
         // The color lands on the two segments; the pulse itself
         // sits on their container, so both segments breathe as
@@ -2352,9 +2154,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private func restartIdleTimer() {
         idleTimer?.invalidate()
         // Idle fade (Ann 2026-11-25): 5 seconds untouched, then
-        // down to 0.45 — opacity +10 over the old 3s / 0.35, and
-        // in sync with the orb's own idle dim (same 5s wait in
-        // noteDockInteraction, likewise +10 there).
+        // down to 0.45 — opacity +10 over the old 3s / 0.35.
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
             guard let self else { return }
             UIView.animate(withDuration: 0.6) { self.alpha = 0.45 }
@@ -2389,8 +2189,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onLongPress?()
+        // The tick fires only when a jump actually happened
+        // (no previous app, no tick).
+        if onLongPress?() == true {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
     }
 
     /// The pan moves the handle freely (Ann 2026-11-25,
@@ -2410,6 +2213,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         case .changed:
             if dragMode == 0, hypot(translation.x, translation.y) > 8 {
                 dragMode = 2
+                isFloating = true
             }
             if dragMode == 2, let superview {
                 let margin = dragVerticalMargin
@@ -2436,10 +2240,10 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// 0.78): the handle flies to its edge and the hidden
     /// dock is planted there only once it has landed.
     private func snapToNearestEdge(_ gesture: UIPanGestureRecognizer) {
-        guard let superview else { return }
+        guard let superview else { isFloating = false; return }
         let toRight = center.x > superview.bounds.width / 2
-        // The rounded corners adopt the target edge at once,
-        // so the shape flies home already facing it.
+        // The flat side adopts the target edge at once, so it
+        // faces home the moment the landing squares it off.
         isOnRightSide = toRight
         let targetX = toRight ? superview.bounds.width - bounds.width / 2 : bounds.width / 2
         let distance = targetX - center.x
@@ -2451,6 +2255,8 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             // A new drag interrupting the snap owns the
             // handle now; only a landed snap reports.
             guard finished else { return }
+            // Landed: square the edge side off, then report.
+            self.isFloating = false
             self.onMoveEnd?(self.center.y, toRight)
         }
     }
