@@ -1386,22 +1386,31 @@ public struct MultitaskDockSwiftView: View {
 
         .ignoresSafeArea()
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 8)
             .onChanged { value in
                 self.isMoving = true
                 // The drag only moves the dock (Ann 2026-11-25,
                 // later: the finger-scrubbed squeeze that shared
-                // this drag is deleted — form switching is the
-                // long press's job now, both ways). It follows
-                // the finger 1:1 from the first point: the old
-                // 5pt minimum distance held the opening movement
-                // back and then delivered it in one lump (the
-                // orb ignored small drags, then jumped), and the
-                // old outward third-rate resistance went with
-                // the squeeze — repositioning is a free drag
-                // now, and the release snaps it back to its
-                // edge (the Weizhu bead's model).
-                self.dragOffset = value.translation
+                // this drag is deleted). The first 8pt belong
+                // to the tap: at minimumDistance 0 this drag
+                // recognized on the first jitter and cancelled
+                // the icons' UIKit touch tracking mid-tap, so
+                // switching apps from the expanded dock only
+                // landed after several tries (Ann 2026-11-26) —
+                // the same theft killed the orb's tap and long
+                // press on 2026-11-25. The dead zone is
+                // subtracted from the translation, so once the
+                // drag does engage the dock tracks the finger
+                // 1:1 with no lump, and the release snaps it
+                // back to its edge (the Weizhu bead's model).
+                let translation = value.translation
+                let distance = hypot(translation.width, translation.height)
+                if distance > 8 {
+                    let scale = (distance - 8) / distance
+                    self.dragOffset = CGSize(width: translation.width * scale, height: translation.height * scale)
+                } else {
+                    self.dragOffset = .zero
+                }
             }
             .onEnded { value in
                 self.isMoving = true
