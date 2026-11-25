@@ -690,7 +690,10 @@ struct LCSourcesView: View {
                 )
             }
         }
-        .searchable(text: $searchContext.query, placement: .navigationBarDrawer(displayMode: .always))
+        // 搜索栏用系统行为（Ann 2026-11-26）：上游的 .always 把它
+        // 钉死在导航栏下面永不折叠；.automatic 是系统标准行为——
+        // 停在顶部时展开，向下滚动时收起。
+        .searchable(text: $searchContext.query, placement: .navigationBarDrawer(displayMode: .automatic))
 
         // 页面可能在已经显示的状态下被重建（角标发布会让标签
         // 页重跑一遍并重建本页）：新实例的 onAppear 和标签切换
