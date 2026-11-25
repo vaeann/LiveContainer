@@ -640,6 +640,13 @@ struct LCSourcesView: View {
                     }
                 }
             }
+            // 搜索栏（Ann 2026-11-26）：和 App 页同款写法——
+            // 默认 placement、挂在导航页的内容上：平时藏着，
+            // 下拉才出现。之前挂在 NavigationView 外层、还写
+            // 死 drawer，先是 .always 永不收起，后改 .automatic
+            // 也不对：它成了整个导航栈的搜索栏，推进详情页
+            // 后点下载还会把搜索栏顶出来。
+            .searchable(text: $searchContext.query)
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .alert("lc.common.error".loc, isPresented: Binding<Bool>(
@@ -690,11 +697,6 @@ struct LCSourcesView: View {
                 )
             }
         }
-        // 搜索栏用系统行为（Ann 2026-11-26）：上游的 .always 把它
-        // 钉死在导航栏下面永不折叠；.automatic 是系统标准行为——
-        // 停在顶部时展开，向下滚动时收起。
-        .searchable(text: $searchContext.query, placement: .navigationBarDrawer(displayMode: .automatic))
-
         // 页面可能在已经显示的状态下被重建（角标发布会让标签
         // 页重跑一遍并重建本页）：新实例的 onAppear 和标签切换
         // 事件可能都已经错过，数据源就永远等不到加载、整页停
