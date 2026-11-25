@@ -19,6 +19,7 @@ struct LCSourceAppDetailView: View {
     let installVersionAction: (AltStoreSourceAppVersion) -> Void
 
     @State private var copied = false
+    @State private var headerTextHeight: CGFloat = 0
     @EnvironmentObject private var downloadHelper: DownloadHelper
     @AppStorage("dynamicColors") private var dynamicColors = true
 
@@ -27,6 +28,13 @@ struct LCSourceAppDetailView: View {
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
         return app.tintColor ?? source.tintColor ?? Color("FontColor")
+    }
+
+    /// 头部图标边长：跟文字栈一样高（Ann 2026-11-26：图标大小看
+    /// 情况缩放）——四行时随四行长高，行数少时回落，下限是原来的
+    /// 72、上限 108 防失控。
+    private var headerIconSize: CGFloat {
+        min(max(headerTextHeight, 72), 108)
     }
 
     private var descriptionText: String? {
@@ -44,8 +52,11 @@ struct LCSourceAppDetailView: View {
                 // 安装中时版本行让位给状态文字，和列表行同款逻辑。
                 HStack(alignment: .center, spacing: 14) {
                     SourceIconView(url: app.iconURL)
-                        .frame(width: 72, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .frame(width: headerIconSize, height: headerIconSize)
+                        .clipShape(RoundedRectangle(cornerRadius: headerIconSize * 16 / 72))
+                    // 头部四行（Ann 2026-11-26）：名字 / 开发者 / 版本
+                    // （安装中让位给状态文字）/ 大小。量出文字栈高度
+                    // 喂给图标，图标随行数缩放。
                     VStack(alignment: .leading, spacing: 4) {
                         Text(app.name)
                             .font(.headline)
@@ -60,11 +71,23 @@ struct LCSourceAppDetailView: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         } else if let latest = app.latestVersion {
-                            Text(versionLine(latest))
+                            Text(versionOnlyText(latest))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let size = app.latestVersion?.size {
+                            Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .onAppear { headerTextHeight = proxy.size.height }
+                                .onChange(of: proxy.size.height) { headerTextHeight = $0 }
+                        }
+                    )
                     Spacer()
                     Button {
                         copyAction()
@@ -171,15 +194,11 @@ struct LCSourceAppDetailView: View {
         // 顶部导航栏不显示 App 名字（Ann 2026-11-26）：名字在头部卡片里有
     }
 
-    private func versionLine(_ version: AltStoreSourceAppVersion) -> String {
-        var parts = ["\(version.version)"]
+    private func versionOnlyText(_ version: AltStoreSourceAppVersion) -> String {
         if let build = version.buildVersion, !build.isEmpty {
-            parts.append("(\(build))")
+            return "\(version.version) (\(build))"
         }
-        if let size = version.size {
-            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-        }
-        return parts.joined(separator: " • ")
+        return version.version
     }
 
     private func versionTitle(_ version: AltStoreSourceAppVersion) -> String {
