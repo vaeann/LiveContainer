@@ -139,7 +139,8 @@ class AppInfoProvider {
     @Published var settingsChanged: Bool = false
 
     /// The dock no longer hides off-screen: it stays visible at 60%
-    /// opacity and dims to 20% after 3 seconds without interaction.
+    /// opacity and dims to 30% after 5 seconds without interaction
+    /// (the hidden handle dims on the same 5-second clock).
     @Published var isDockIdleDimmed: Bool = false
 
     /// Whether the dock is currently slid to the screen edge
@@ -179,7 +180,10 @@ class AppInfoProvider {
         DispatchQueue.main.async {
             self.isDockIdleDimmed = false
             self.dockIdleTimer?.invalidate()
-            self.dockIdleTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            // 5 seconds, in sync with the hidden handle's idle
+            // fade (Ann 2026-11-25): the two collapsed forms are
+            // one object and dim on the same clock.
+            self.dockIdleTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
                 // Idle dimming applies to the collapsed button only; the
                 // expanded dock is always fully opaque.
                 if self.isCollapsed {
@@ -1542,7 +1546,7 @@ public struct MultitaskDockSwiftView: View {
             // Collapsed button: 60% opacity, dimming to 20% after 3s
             // idle. Expanded dock: fully opaque. (A hidden dock is
             // fully off-screen now; its handle carries the visual.)
-            .opacity(dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.2 : 0.6) : 1.0)
+            .opacity(dockManager.isCollapsed ? (dockManager.isDockIdleDimmed ? 0.3 : 0.6) : 1.0)
             .animation(.easeInOut(duration: 0.35), value: dockManager.isDockIdleDimmed)
             // The remaining isCollapsed-keyed values (the root
             // opacity above) ride the morph spring like
@@ -2280,10 +2284,12 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private func restartIdleTimer() {
         idleTimer?.invalidate()
         // Idle fade (Ann 2026-11-25): 5 seconds untouched, then
-        // down to 0.25 — a touch fainter than the old 3s / 0.35.
+        // down to 0.45 — opacity +10 over the old 3s / 0.35, and
+        // in sync with the orb's own idle dim (same 5s wait in
+        // noteDockInteraction, likewise +10 there).
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
             guard let self else { return }
-            UIView.animate(withDuration: 0.6) { self.alpha = 0.25 }
+            UIView.animate(withDuration: 0.6) { self.alpha = 0.45 }
         }
     }
 
