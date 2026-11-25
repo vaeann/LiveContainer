@@ -755,33 +755,6 @@ class AppInfoProvider {
         }
     }
 
-    /// Move a view's layer anchor point without letting the
-    /// view jump on screen (the standard compensation: shift the
-    /// position by the anchor delta, in transformed coordinates).
-    /// Used to pin the dock to its screen-edge side while it
-    /// squashes into — or grows out of — the hidden handle.
-    private func setDockAnchorPoint(_ point: CGPoint, for view: UIView) {
-        var newPoint = CGPoint(x: view.bounds.size.width * point.x,
-                               y: view.bounds.size.height * point.y)
-        var oldPoint = CGPoint(x: view.bounds.size.width * view.layer.anchorPoint.x,
-                               y: view.bounds.size.height * view.layer.anchorPoint.y)
-        newPoint = newPoint.applying(view.transform)
-        oldPoint = oldPoint.applying(view.transform)
-        var position = view.layer.position
-        position.x -= oldPoint.x
-        position.x += newPoint.x
-        position.y -= oldPoint.y
-        position.y += newPoint.y
-        view.layer.position = position
-        view.layer.anchorPoint = point
-    }
-
-    /// The hosting view's horizontal squash when it poses as the
-    /// handle: the handle's width over the dock's width.
-    private var handleSquashScale: CGFloat {
-        LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth) / max(dockWidth, 1)
-    }
-
     /// Where the handle sits inside the dock's own frame, in
     /// frame-local points: the morph's convergence point (Ann
     /// 2026-11-26). The icons used to gather at the pill's
@@ -789,8 +762,7 @@ class AppInfoProvider {
     /// handle now: horizontally the handle's center (half a
     /// handle's width in from the dock's edge), vertically the
     /// collapsed frame's center, which is where the handle is
-    /// centered. The UIKit squash anchors at the same spot,
-    /// so the content and the glass move as one object.
+    /// centered.
     func convergencePoint(in size: CGSize) -> CGPoint {
         guard let view = hostingController?.view else {
             return CGPoint(x: size.width / 2, y: size.height / 2)
@@ -838,111 +810,41 @@ class AppInfoProvider {
 
     /// Tapping the handle expands the dock directly (Ann
     /// 2026-11-25): the handle is the dock's collapsed form.
-    /// The growth is ONE continuous motion (Ann 2026-11-25,
-    /// later: an earlier two-stage version visibly paused at
-    /// the orb on its way out — a sequencing artifact of the
-    /// frame/transform fix, not the intent): the final
-    /// expanded frame is placed first, at identity, then a
-    /// two-axis squash about the handle's own spot makes it
-    /// LOOK like the handle, and a single spring back to
-    /// identity grows it straight into the expanded dock,
-    /// while the content runs its ordinary expand morph on
-    /// the same clock.
+    /// The motion is the collapse run backwards (Ann
+    /// 2026-11-26: sync the expand to the collapse's
+    /// animation): no transform squash — the frame morphs
+    /// from the hidden collapsed frame up to the expanded
+    /// frame on the morph spring while the content morph
+    /// runs in reverse and the icons emerge from the
+    /// handle's spot. One spring, both directions.
     @objc public func expandDockFromHidden() {
         DispatchQueue.main.async {
             guard self.isDockHidden, self.isVisible,
-                  let view = self.hostingController?.view else { return }
-            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
-            // The hidden frame's midY is the collapsed
-            // height's center; the handle is centered on it
-            // too.
-            let handleMidY = view.frame.midY
+                  self.hostingController?.view != nil else { return }
             self.isDockHidden = false
             self.isCollapsed = false
-            UIView.performWithoutAnimation {
-                self.updateDockFrame(animated: false)
-                let expanded = view.frame
-                guard expanded.height > 0 else { return }
-                // Anchor at the handle's spot inside the final
-                // frame: the edge horizontally, the collapsed
-                // center vertically. The dock's width is the
-                // same in both forms, so handleSquashScale is
-                // the exact horizontal squash here too;
-                // vertically the expanded height squashes down
-                // to the collapsed height.
-                let anchorY = min(max((handleMidY - expanded.minY) / expanded.height, 0), 1)
-                self.setDockAnchorPoint(CGPoint(x: anchorX, y: anchorY), for: view)
-                view.transform = CGAffineTransform(
-                    scaleX: self.handleSquashScale,
-                    y: self.collapsedDockHeight(for: self.dockWidth) / expanded.height
-                )
-            }
-            UIView.animate(
-                withDuration: Constants.morphSpringResponse,
-                delay: 0,
-                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .curveEaseOut]
-            ) {
-                view.transform = .identity
-            } completion: { _ in
-                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-            }
+            self.updateDockFrame()
         }
     }
 
     @objc public func hideDockToSide() {
         DispatchQueue.main.async {
             // Collapsing IS hiding (Ann 2026-11-25, later):
-            // the handle is the dock's only collapsed form, so
-            // every collapse — from whichever state the dock is
-            // in — squashes the dock flat against its own edge
-            // and parks it off-screen, and the handle takes its
-            // place. One object changing shape, not a swap for
-            // a different part. Only once the squash lands does
-            // the dock take its off-screen hidden frame.
+            // the handle is the dock's only collapsed form.
+            // The motion is the previous build's collapse,
+            // restored at Ann's word (2026-11-26: that one was
+            // perfect): NO transform squash — the frame morphs
+            // to the hidden collapsed frame on the morph
+            // spring while the content morph converges the
+            // icons onto the handle's spot, and the handle
+            // fades in where the dock lands. The two-axis
+            // squash the single-form build tried stacked a
+            // second, rubbery deformation on top of the morph
+            // and squashed toward the frame's center instead
+            // of the handle; it is gone.
             self.isCollapsed = true
-            guard self.isVisible, !self.isDockHidden,
-                  let view = self.hostingController?.view else {
-                self.isDockHidden = true
-                self.updateDockFrame()
-                return
-            }
-            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
-            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            // The two-axis squash: expandDockFromHidden's
-            // growth run backwards. From a frame already at
-            // the collapsed height the vertical scale is
-            // exactly 1; from the expanded pill it also
-            // shrinks the height down to the handle's, in the
-            // same motion.
-            let scaleY = view.frame.height > 0
-                ? self.collapsedDockHeight(for: self.dockWidth) / view.frame.height
-                : 1
-            UIView.animate(
-                withDuration: Constants.morphSpringResponse,
-                delay: 0,
-                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState, .curveEaseOut]
-            ) {
-                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: scaleY)
-            } completion: { _ in
-                // Never set a frame while a transform is live
-                // (device bug, Ann 2026-11-25: the frame setter
-                // bakes the squash into the bounds, and clearing
-                // the transform afterwards left a bloated orb
-                // sitting on screen after the dock had hidden).
-                // Restore identity and the center anchor first,
-                // then take the hidden frame — all in one
-                // unrendered pass, so nothing flashes.
-                UIView.performWithoutAnimation {
-                    view.transform = .identity
-                    self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-                    self.isDockHidden = true
-                    self.updateDockFrame(animated: false)
-                }
-            }
+            self.isDockHidden = true
+            self.updateDockFrame()
         }
     }
 
@@ -2030,18 +1932,87 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private let blurView = UIVisualEffectView()
     private let tintView = UIView()
 
-    /// The handle's material, matching the expanded dock's:
-    /// liquid glass with the grid ribbon's dark tint where
-    /// the dock uses glass, the frosted blur otherwise.
+    /// The outline's mask: a shape layer, not cornerRadius +
+    /// maskedCorners, so the outline can MORPH between its
+    /// two states — masked corners switch instantly, a path
+    /// interpolates (Ann 2026-11-26: the docked corners must
+    /// appear with an animation, melted into the pill).
+    private let shapeMask = CAShapeLayer()
+
+    /// The handle's material: the expanded dock's recipe,
+    /// exactly (Ann 2026-11-26) — where the dock uses liquid
+    /// glass it is plain .regular with NO tint; a black 0.3
+    /// tint borrowed from the grid ribbon made the handle
+    /// visibly darker than the dock and not like glass at
+    /// all. The frosted blur below is only the pre-glass
+    /// fallback.
     private func applyMaterial() {
         if #available(iOS 26.0, *), useLiquidGlass {
             blurView.effect = UIGlassEffect(style: .regular)
-            tintView.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+            tintView.backgroundColor = .clear
         } else {
             blurView.effect = UIBlurEffect(style: .systemUltraThinMaterialLight)
             tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
         }
     }
+    /// The handle's outline in a given state, built with a
+    /// FIXED command structure (line/arc × 4, in the same
+    /// order, zero-radius arcs collapsed to points) so Core
+    /// Animation can interpolate between states. Floating is
+    /// a pill: every corner at half the width. Docked melts
+    /// the edge side's corners to zero — flush with the
+    /// screen edge — while the inner corners keep the pill's
+    /// own curve: one continuous piece, not a pill with two
+    /// corners stuck on (Ann 2026-11-26). The shadow follows
+    /// the same path, so it cannot betray the pill's outline
+    /// around the docked shape either.
+    private func shapePath(in rect: CGRect, floating: Bool) -> CGPath {
+        let r = rect.width / 2
+        let edgeR: CGFloat = floating ? r : 0
+        let tl = isOnRightSide ? r : edgeR
+        let tr = isOnRightSide ? edgeR : r
+        let br = isOnRightSide ? edgeR : r
+        let bl = isOnRightSide ? r : edgeR
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+        path.addArc(center: CGPoint(x: rect.maxX - tr, y: rect.minY + tr), radius: tr,
+                    startAngle: -.pi / 2, endAngle: 0, clockwise: false)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        path.addArc(center: CGPoint(x: rect.maxX - br, y: rect.maxY - br), radius: br,
+                    startAngle: 0, endAngle: .pi / 2, clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        path.addArc(center: CGPoint(x: rect.minX + bl, y: rect.maxY - bl), radius: bl,
+                    startAngle: .pi / 2, endAngle: .pi, clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+        path.addArc(center: CGPoint(x: rect.minX + tl, y: rect.minY + tl), radius: tl,
+                    startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+
+    /// Morph the outline (mask + shadow together) to the
+    /// given state over the given duration.
+    private func animateShape(toFloating floating: Bool, duration: TimeInterval) {
+        guard bounds.width > 0 else { return }
+        let target = shapePath(in: bounds, floating: floating)
+        let timing = CAMediaTimingFunction(name: .easeOut)
+        let maskAnim = CABasicAnimation(keyPath: "path")
+        maskAnim.fromValue = (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path
+        maskAnim.toValue = target
+        maskAnim.duration = duration
+        maskAnim.timingFunction = timing
+        shapeMask.path = target
+        shapeMask.add(maskAnim, forKey: "cornerMorph")
+        let shadowAnim = CABasicAnimation(keyPath: "shadowPath")
+        shadowAnim.fromValue = layer.presentation()?.shadowPath ?? layer.shadowPath
+        shadowAnim.toValue = target
+        shadowAnim.duration = duration
+        shadowAnim.timingFunction = timing
+        layer.shadowPath = target
+        layer.add(shadowAnim, forKey: "cornerMorph")
+    }
+
     /// The grip: two short segments in a column, breathing
     /// together inside this container (Ann 2026-11-25) — the
     /// old orb glyph's two rows, its columns merged by the
@@ -2062,6 +2033,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         layer.shadowOffset = CGSize(width: 0, height: 1)
 
         applyMaterial()
+        blurView.layer.mask = shapeMask
         blurView.contentView.addSubview(tintView)
         for segment in [gripTopSegment, gripBottomSegment] {
             segment.backgroundColor = UIColor.black.withAlphaComponent(0.4)
@@ -2112,16 +2084,16 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     override func layoutSubviews() {
         super.layoutSubviews()
         blurView.frame = bounds
-        // Docked, only the corners facing the screen's middle
-        // are round; the edge side sits flush against the
-        // screen edge. Mid-drag (isFloating) all four round.
-        blurView.layer.cornerRadius = bounds.width / 2
-        blurView.layer.maskedCorners = isFloating
-            ? [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-            : (isOnRightSide
-                ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-                : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner])
-        blurView.clipsToBounds = true
+        // Keep the mask and the shadow on the current bounds
+        // in the current state; state CHANGES morph the path
+        // through animateShape instead of snapping it here.
+        shapeMask.frame = bounds
+        if shapeMask.animation(forKey: "cornerMorph") == nil {
+            shapeMask.path = shapePath(in: bounds, floating: isFloating)
+        }
+        if layer.animation(forKey: "cornerMorph") == nil {
+            layer.shadowPath = shapePath(in: bounds, floating: isFloating)
+        }
         tintView.frame = bounds
         // The segments keep the old orb glyph's proportions
         // (device feedback, Ann 2026-11-25: the first cut —
@@ -2141,7 +2113,6 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         gripBottomSegment.frame = CGRect(x: 0, y: cellHeight + cellGap, width: segmentWidth, height: cellHeight)
         gripTopSegment.layer.cornerRadius = segmentWidth / 2
         gripBottomSegment.layer.cornerRadius = segmentWidth / 2
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: bounds.width / 2).cgPath
     }
 
     func fadeIn() {
@@ -2149,6 +2120,9 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         // A fresh appearance is docked by definition: never
         // come back wearing the floating corners.
         isFloating = false
+        shapeMask.removeAnimation(forKey: "cornerMorph")
+        layer.removeAnimation(forKey: "cornerMorph")
+        setNeedsLayout()
         alpha = 0
         UIView.animate(withDuration: 0.25) { self.alpha = 0.85 }
         restartIdleTimer()
@@ -2244,6 +2218,8 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             if dragMode == 0, hypot(translation.x, translation.y) > 8 {
                 dragMode = 2
                 isFloating = true
+                // The flat edge melts back into the pill.
+                animateShape(toFloating: true, duration: 0.2)
             }
             if dragMode == 2, let superview {
                 let margin = dragVerticalMargin
@@ -2272,9 +2248,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private func snapToNearestEdge(_ gesture: UIPanGestureRecognizer) {
         guard let superview else { isFloating = false; return }
         let toRight = center.x > superview.bounds.width / 2
-        // The flat side adopts the target edge at once, so it
-        // faces home the moment the landing squares it off.
+        // The flat side adopts the target edge at once, and
+        // its two corners grow out of the pill over the
+        // flight, landing flush exactly when the snap does
+        // (Ann 2026-11-26: the corners appear WITH the
+        // animation, not as a pop).
         isOnRightSide = toRight
+        animateShape(toFloating: false, duration: 0.34)
         let targetX = toRight ? superview.bounds.width - bounds.width / 2 : bounds.width / 2
         let distance = targetX - center.x
         let velocityX = gesture.velocity(in: superview).x
