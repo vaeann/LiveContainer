@@ -640,13 +640,11 @@ struct LCSourcesView: View {
                     }
                 }
             }
-            // 搜索栏（Ann 2026-11-26）：和 App 页同款写法——
-            // 默认 placement、挂在导航页的内容上：平时藏着，
-            // 下拉才出现。之前挂在 NavigationView 外层、还写
-            // 死 drawer，先是 .always 永不收起，后改 .automatic
-            // 也不对：它成了整个导航栈的搜索栏，推进详情页
-            // 后点下载还会把搜索栏顶出来。
-            .searchable(text: $searchContext.query)
+            // No .searchable here: on this VStack the system
+            // never links the bar to a scroll view and pins
+            // it in place (Ann 2026-11-26, second report).
+            // It hangs on each segment's ScrollView itself
+            // instead — see sourcesContent / updatableContent.
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .alert("lc.common.error".loc, isPresented: Binding<Bool>(
@@ -819,6 +817,16 @@ struct LCSourcesView: View {
             }
             .padding(.vertical)
         }
+        // The search bar hangs on the scroll view itself
+        // (Ann 2026-11-26): that is what makes it hide
+        // until pulled down — the App page works because
+        // its .searchable sits on its root ScrollView the
+        // same way. On the page's outer VStack (the first
+        // attempt) the system found no scroll view to link
+        // to and pinned the bar; on the NavigationView's
+        // outside (the original) it belonged to the whole
+        // stack and surfaced on the detail page.
+        .searchable(text: $searchContext.query)
     }
 
     // MARK: - Updates tab
@@ -861,6 +869,7 @@ struct LCSourcesView: View {
             }
             .padding(.vertical)
         }
+        .searchable(text: $searchContext.query)
     }
 
     // MARK: - Row construction
