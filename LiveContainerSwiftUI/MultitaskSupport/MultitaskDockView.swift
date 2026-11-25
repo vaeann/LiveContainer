@@ -505,7 +505,7 @@ class AppInfoProvider {
                 self.collapsedFormIsHandle = false
                 self.showDockFromHidden()
             }
-            handle.onMoveEnd = { [weak self] centerY in self?.moveHiddenDock(centerY: centerY) }
+            handle.onMoveEnd = { [weak self] centerY, isOnRightSide in self?.moveHiddenDock(centerY: centerY, isOnRightSide: isOnRightSide) }
             hiddenHandle = handle
         }
         if handle.superview !== parent {
@@ -530,10 +530,20 @@ class AppInfoProvider {
     /// The handle was dragged vertically: move the hidden dock
     /// (and with it the handle, via the frame sync) so the orb
     /// returns at the new height.
-    private func moveHiddenDock(centerY: CGFloat) {
+    /// The handle was dropped and snapped to an edge: plant
+    /// the hidden dock at the dropped height on the dropped
+    /// side. updateDockFrame reads the side from the current
+    /// frame, so the frame is first planted on the target
+    /// half; it then normalizes x to that side's hidden
+    /// position and clamps y with the same margins the
+    /// handle dragged within, so the sync that follows
+    /// leaves the handle exactly where its snap landed it.
+    private func moveHiddenDock(centerY: CGFloat, isOnRightSide: Bool) {
         guard isDockHidden, let hostingController else { return }
         let frame = hostingController.view.frame
-        hostingController.view.frame = CGRect(x: frame.origin.x, y: centerY - frame.height / 2,
+        let screenWidth = keyWindow?.bounds.width ?? frame.width
+        let plantedX = isOnRightSide ? screenWidth - frame.width : 0
+        hostingController.view.frame = CGRect(x: plantedX, y: centerY - frame.height / 2,
                                               width: frame.width, height: frame.height)
         updateDockFrame()
     }
@@ -989,23 +999,6 @@ class AppInfoProvider {
         let newFrame = hostingController.view.frame.offsetBy(dx: finalOffset.width, dy: finalOffset.height)
         
         hostingController.view.frame = newFrame
-    }
-
-    /// The drag offset actually shown while dragging (Ann
-    /// 2026-11-25): movement AWAY from the screen's center — the
-    /// direction that would hide the dock — follows the finger at
-    /// only a third of the distance, so the dock feels stuck to
-    /// its edge and an accidental outward drift during a vertical
-    /// reposition barely moves it. Every other direction (inward
-    /// and vertical) follows 1:1.
-    func resistedDragTranslation(_ translation: CGSize) -> CGSize {
-        guard let originalFrame = hostingController?.view.frame,
-              let screenWidth = keyWindow?.bounds.width else { return translation }
-        let isOnRightSide = originalFrame.origin.x > screenWidth / 2
-        let outward = isOnRightSide ? translation.width : -translation.width
-        guard outward > 0 else { return translation }
-        let resisted = outward / 3
-        return CGSize(width: isOnRightSide ? resisted : -resisted, height: translation.height)
     }
 
     // Check if gesture is for cross-screen movement (left to right or vice versa)
@@ -1543,15 +1536,23 @@ public struct MultitaskDockSwiftView: View {
 
         .ignoresSafeArea()
         .gesture(
-            DragGesture(minimumDistance: 5)
+            DragGesture(minimumDistance: 0)
             .onChanged { value in
                 dockManager.noteDockInteraction()
                 self.isMoving = true
                 // The drag only moves the dock (Ann 2026-11-25,
                 // later: the finger-scrubbed squeeze that shared
                 // this drag is deleted — form switching is the
-                // long press's job now, both ways).
-                self.dragOffset = dockManager.resistedDragTranslation(value.translation)
+                // long press's job now, both ways). It follows
+                // the finger 1:1 from the first point: the old
+                // 5pt minimum distance held the opening movement
+                // back and then delivered it in one lump (the
+                // orb ignored small drags, then jumped), and the
+                // old outward third-rate resistance went with
+                // the squeeze — repositioning is a free drag
+                // now, and the release snaps it back to its
+                // edge (the Weizhu bead's model).
+                self.dragOffset = value.translation
             }
             .onEnded { value in
                 self.isMoving = true
@@ -1578,8 +1579,16 @@ public struct MultitaskDockSwiftView: View {
                     )
                     
                     let animationDuration = MultitaskDockManager.Constants.longAnimationDuration
-                    
-                    withAnimation(.spring(response: animationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping)) {
+
+                    // The magnetic snap (Ann 2026-11-25: clean
+                    // and crisp, Weizhu's orb snap as the
+                    // reference — its 0.34s / 0.78 damping,
+                    // taken a touch firmer): a short, nearly
+                    // critically damped spring, no float, no
+                    // wobble. The frame bake below keeps the
+                    // old longer deadline so it lands after
+                    // the spring's visible life.
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.85)) {
                         self.dragOffset = newOffset
                     }
                     
@@ -1613,8 +1622,10 @@ public struct MultitaskDockSwiftView: View {
                 )
                 
                 let animationDuration = MultitaskDockManager.Constants.longAnimationDuration
-                
-                withAnimation(.spring(response: animationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping)) {
+
+                // Same magnetic snap as the position-change
+                // branch above.
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.85)) {
                     self.dragOffset = newOffset
                 }
                 
@@ -2165,8 +2176,9 @@ enum LCBreathingLightColor: String, CaseIterable {
 /// the orb's second collapsed form, not a separate part: the
 /// orb squashes flat into it (same height, squeezed width), a
 /// tap expands the dock directly, a long press switches it
-/// back into the orb, and a vertical drag moves the hidden
-/// dock's height. It dims when idle and brightens under the
+/// back into the orb, and a drag moves it freely — on
+/// release it snaps to the nearest screen edge, taking the
+/// hidden dock with it. It dims when idle and brightens under the
 /// finger, like the orb itself.
 private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
     /// The handle's width is a fixed share of the orb's width
@@ -2186,8 +2198,9 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     var onExpand: (() -> Void)?
     /// A long press: switch back to the orb form.
     var onLongPress: (() -> Void)?
-    /// The handle finished a vertical drag at this center Y.
-    var onMoveEnd: ((CGFloat) -> Void)?
+    /// The handle was dropped and snapped: it rests at this
+    /// center Y, on this side of the screen.
+    var onMoveEnd: ((CGFloat, Bool) -> Void)?
 
     var isOnRightSide = true {
         didSet { setNeedsLayout() }
@@ -2203,7 +2216,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private let gripTopSegment = UIView()
     private let gripBottomSegment = UIView()
     private var idleTimer: Timer?
-    private var dragStartCenterY: CGFloat = 0
+    private var dragStartCenter: CGPoint = .zero
     private var dragMode: Int = 0 // 0 undecided, 2 move
 
     override init(frame: CGRect) {
@@ -2373,40 +2386,65 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         onLongPress?()
     }
 
-    /// The pan only moves the handle up and down (Ann
-    /// 2026-11-25, later: the inward pull that scrubbed it
-    /// back into the orb is deleted — switching forms is the
-    /// long press's job now). A mainly-vertical drag past 8pt
-    /// is a move; anything else is ignored, so a stray
-    /// horizontal wiggle never lifts the handle off its edge.
+    /// The pan moves the handle freely (Ann 2026-11-25,
+    /// later): with the inward pull gone, the handle follows
+    /// the finger in every direction, inside the same
+    /// vertical bounds the dock itself is clamped to — where
+    /// it can be dragged is exactly where it can land, so the
+    /// sync after the drop never shifts it. On release it
+    /// snaps magnetically to the nearest screen edge, and
+    /// only the landed snap is reported.
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let translation = gesture.translation(in: superview)
         switch gesture.state {
         case .began:
-            dragStartCenterY = center.y
+            dragStartCenter = center
             dragMode = 0
         case .changed:
-            if dragMode == 0, abs(translation.y) > 8, abs(translation.y) > abs(translation.x) {
+            if dragMode == 0, hypot(translation.x, translation.y) > 8 {
                 dragMode = 2
             }
             if dragMode == 2, let superview {
-                let minY = superview.safeAreaInsets.top + bounds.height / 2 + 8
-                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - bounds.height / 2 - 8
-                center.y = min(max(dragStartCenterY + translation.y, minY), maxY)
+                let margin = MultitaskDockManager.Constants.dockVerticalMargin
+                let minY = superview.safeAreaInsets.top + margin + bounds.height / 2
+                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - margin - bounds.height / 2
+                center = CGPoint(
+                    x: min(max(dragStartCenter.x + translation.x, bounds.width / 2), superview.bounds.width - bounds.width / 2),
+                    y: min(max(dragStartCenter.y + translation.y, minY), maxY)
+                )
             }
-        case .ended:
+        case .ended, .cancelled, .failed:
             if dragMode == 2 {
-                onMoveEnd?(center.y)
-            }
-            restartIdleTimer()
-        case .cancelled, .failed:
-            if dragMode == 2 {
-                // Settle back to the dock's own height.
-                onMoveEnd?(center.y)
+                snapToNearestEdge(gesture)
             }
             restartIdleTimer()
         default:
             break
+        }
+    }
+
+    /// The magnetic snap (Ann 2026-11-25: clean and crisp,
+    /// Weizhu's orb snap as the reference — its 0.34s and
+    /// release-velocity feed, damping taken firmer than its
+    /// 0.78): the handle flies to its edge and the hidden
+    /// dock is planted there only once it has landed.
+    private func snapToNearestEdge(_ gesture: UIPanGestureRecognizer) {
+        guard let superview else { return }
+        let toRight = center.x > superview.bounds.width / 2
+        // The rounded corners adopt the target edge at once,
+        // so the shape flies home already facing it.
+        isOnRightSide = toRight
+        let targetX = toRight ? superview.bounds.width - bounds.width / 2 : bounds.width / 2
+        let distance = targetX - center.x
+        let velocityX = gesture.velocity(in: superview).x
+        let springVelocity = distance != 0 ? min(max(velocityX / distance, -3), 3) : 0
+        UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: springVelocity, options: [.beginFromCurrentState, .curveEaseOut]) {
+            self.center.x = targetX
+        } completion: { finished in
+            // A new drag interrupting the snap owns the
+            // handle now; only a landed snap reports.
+            guard finished else { return }
+            self.onMoveEnd?(self.center.y, toRight)
         }
     }
 }
