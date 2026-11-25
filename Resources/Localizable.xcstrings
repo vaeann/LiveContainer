@@ -31128,6 +31128,29 @@
         }
       }
     },
+    "lc.sources.detail.bundleId" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundle ID"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundle ID"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bundle ID"
+          }
+        }
+      }
+    },
     "lc.sources.detail.copyDownloadURL" : {
       "extractionState" : "manual",
       "localizations" : {

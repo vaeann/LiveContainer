@@ -1472,15 +1472,33 @@ private struct LCSourceAppBanner: View {
         dynamicColors ? primaryColor.opacity(0.5) : Color("AppBannerBG")
     }
 
+    // 第二行 = 版本 • 更新日期 • 大小（Ann 2026-11-26）：三样都读
+    // 源的标准字段（versions 的 version/date/size），源文件可以
+    // 写回通用格式、副标题只写介绍。bundle ID 挪到详情页显示。
     private var metadataText: String {
         guard let latest = app.latestVersion else {
             return app.bundleIdentifier
         }
+        var parts: [String] = []
         if let build = latest.buildVersion, !build.isEmpty {
-            return "\(latest.version) (\(build)) • \(app.bundleIdentifier)"
+            parts.append("\(latest.version) (\(build))")
+        } else {
+            parts.append(latest.version)
         }
-        return "\(latest.version) • \(app.bundleIdentifier)"
+        if let date = latest.releaseDate {
+            parts.append(Self.metadataDateFormatter.string(from: date))
+        }
+        if let size = latest.size, size > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+        }
+        return parts.joined(separator: " • ")
     }
+
+    private static let metadataDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     private var subtitleText: String {
         if let subtitle = app.subtitle, !subtitle.isEmpty {

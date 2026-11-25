@@ -72,6 +72,16 @@ struct LCSourceAppDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                // bundle ID 从列表行挪到这里显示（Ann 2026-11-26）
+                HStack {
+                    Text("lc.sources.detail.bundleId".loc)
+                    Spacer()
+                    Text(app.bundleIdentifier)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
 
             if let descriptionText {
