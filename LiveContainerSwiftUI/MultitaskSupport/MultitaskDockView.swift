@@ -1463,7 +1463,17 @@ public struct MultitaskDockSwiftView: View {
                     }
                     .simultaneousGesture(
                         LongPressGesture(minimumDuration: 0.5)
-                            .onEnded { _ in
+                            // Fire on recognition, not on
+                            // release (Ann 2026-11-25: a light
+                            // tick the moment the switch happens,
+                            // finger still down — the handle's
+                            // recognizer fires at the same point).
+                            // The flag does double duty: it keeps
+                            // the release from also firing the tap,
+                            // and it keeps a held press from
+                            // firing twice.
+                            .onChanged { _ in
+                                guard !collapsedLongPressTriggered else { return }
                                 collapsedLongPressTriggered = true
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 dockManager.hideDockToSide()
