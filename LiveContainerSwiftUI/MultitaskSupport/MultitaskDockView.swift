@@ -507,14 +507,16 @@ class AppInfoProvider {
         }
         handle.isOnRightSide = isOnRightSide
         // The handle is the orb squashed flat (Ann 2026-11-25):
-        // same height as the orb, only the width is squeezed.
+        // same height as the orb, only the width is squeezed —
+        // and both follow the orb's size when it is resized.
         let handleHeight = collapsedDockHeight(for: dockWidth)
+        let handleWidth = LCHiddenDockHandleView.handleWidth(forOrbWidth: dockWidth)
         let screenBounds = keyWindow?.bounds ?? dockFrame
         let minY = safeAreaInsets.top + Constants.dockVerticalMargin
         let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - handleHeight
         let y = min(max(dockFrame.midY - handleHeight / 2, minY), maxY)
-        let x = isOnRightSide ? screenBounds.width - LCHiddenDockHandleView.handleWidth : 0
-        handle.frame = CGRect(x: x, y: y, width: LCHiddenDockHandleView.handleWidth, height: handleHeight)
+        let x = isOnRightSide ? screenBounds.width - handleWidth : 0
+        handle.frame = CGRect(x: x, y: y, width: handleWidth, height: handleHeight)
         handle.setNeedsLayout()
     }
 
@@ -811,7 +813,7 @@ class AppInfoProvider {
     /// The hosting view's horizontal squash when it poses as the
     /// handle: the handle's width over the orb's width.
     private var handleSquashScale: CGFloat {
-        LCHiddenDockHandleView.handleWidth / max(dockWidth, 1)
+        LCHiddenDockHandleView.handleWidth(forOrbWidth: dockWidth) / max(dockWidth, 1)
     }
 
     private func dockIsOnRightSide(_ view: UIView) -> Bool {
@@ -2148,7 +2150,14 @@ enum LCBreathingLightColor: String, CaseIterable {
 /// dock's height. It dims when idle and brightens under the
 /// finger, like the orb itself.
 private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
-    static let handleWidth: CGFloat = 16
+    /// The handle's width is a fixed share of the orb's width
+    /// (Ann 2026-11-25): resize the orb and the handle follows
+    /// — and the hide squash, which compresses the orb to
+    /// exactly this width, lands on it at any orb size.
+    static let handleWidthRatio: CGFloat = 16.0 / 90.0
+    static func handleWidth(forOrbWidth orbWidth: CGFloat) -> CGFloat {
+        min(max(orbWidth * handleWidthRatio, 12), 26)
+    }
     // No fixed height: the manager sizes the handle to the
     // collapsed orb's height — the handle IS the orb squashed
     // flat (Ann 2026-11-25), so the two collapsed forms share
@@ -2214,18 +2223,24 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         blurView.frame = bounds
         // Only the corners facing the screen's middle are round;
         // the edge side sits flush against the screen edge.
-        blurView.layer.cornerRadius = Self.handleWidth / 2
+        blurView.layer.cornerRadius = bounds.width / 2
         blurView.layer.maskedCorners = isOnRightSide
             ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
             : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
         blurView.clipsToBounds = true
         tintView.frame = bounds
-        // The squashed glyph keeps the old grip's 38pt span:
-        // two 15pt segments with an 8pt gap, centered.
-        gripView.frame = CGRect(x: (bounds.width - 5) / 2, y: (bounds.height - 38) / 2, width: 5, height: 38)
-        gripTopSegment.frame = CGRect(x: 0, y: 0, width: 5, height: 15)
-        gripBottomSegment.frame = CGRect(x: 0, y: 23, width: 5, height: 15)
-        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: Self.handleWidth / 2).cgPath
+        // The squashed glyph scales with the orb it came from:
+        // at the default 90pt orb it spans 38pt — two 15pt
+        // segments with an 8pt gap, centered.
+        let gripScale = min(max(bounds.height / 90, 0.7), 1.6)
+        let gripWidth = 5 * gripScale
+        let gripSpan = 38 * gripScale
+        gripView.frame = CGRect(x: (bounds.width - gripWidth) / 2, y: (bounds.height - gripSpan) / 2, width: gripWidth, height: gripSpan)
+        gripTopSegment.frame = CGRect(x: 0, y: 0, width: gripWidth, height: 15 * gripScale)
+        gripBottomSegment.frame = CGRect(x: 0, y: 23 * gripScale, width: gripWidth, height: 15 * gripScale)
+        gripTopSegment.layer.cornerRadius = 2.5 * gripScale
+        gripBottomSegment.layer.cornerRadius = 2.5 * gripScale
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: bounds.width / 2).cgPath
     }
 
     func fadeIn() {
@@ -2264,9 +2279,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     private func restartIdleTimer() {
         idleTimer?.invalidate()
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+        // Idle fade (Ann 2026-11-25): 5 seconds untouched, then
+        // down to 0.25 — a touch fainter than the old 3s / 0.35.
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
             guard let self else { return }
-            UIView.animate(withDuration: 0.6) { self.alpha = 0.35 }
+            UIView.animate(withDuration: 0.6) { self.alpha = 0.25 }
         }
     }
 
