@@ -147,6 +147,16 @@ class AppInfoProvider {
     /// methods that drive this state (showDockFromHidden,
     /// toggleDockVisibility, hideDockToSide) by name.
     @Published var isDockHidden: Bool = false
+
+    /// Which collapsed form the dock rests in (Ann 2026-11-25):
+    /// the orb, or the handle — the same orb squashed flat
+    /// against the screen edge, at the orb's own height. Hiding
+    /// the orb squashes it into the handle and sets this;
+    /// pulling the handle back out restores the orb and clears
+    /// it. Expanding straight from the handle keeps it set, so
+    /// the next collapse squashes back into the handle instead
+    /// of stopping at the orb (see toggleDockCollapse).
+    var collapsedFormIsHandle: Bool = false
     private var dockIdleTimer: Timer?
 
     /// Status bar fix state: whether the host status bar override is
@@ -487,6 +497,7 @@ class AppInfoProvider {
         } else {
             handle = LCHiddenDockHandleView()
             handle.onShow = { [weak self] in self?.showDockFromHidden() }
+            handle.onExpand = { [weak self] in self?.expandDockFromHidden() }
             handle.onMoveEnd = { [weak self] centerY in self?.moveHiddenDock(centerY: centerY) }
             hiddenHandle = handle
         }
@@ -495,12 +506,15 @@ class AppInfoProvider {
             handle.fadeIn()
         }
         handle.isOnRightSide = isOnRightSide
+        // The handle is the orb squashed flat (Ann 2026-11-25):
+        // same height as the orb, only the width is squeezed.
+        let handleHeight = collapsedDockHeight(for: dockWidth)
         let screenBounds = keyWindow?.bounds ?? dockFrame
         let minY = safeAreaInsets.top + Constants.dockVerticalMargin
-        let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - LCHiddenDockHandleView.handleHeight
-        let y = min(max(dockFrame.midY - LCHiddenDockHandleView.handleHeight / 2, minY), maxY)
+        let maxY = screenBounds.height - safeAreaInsets.bottom - Constants.dockVerticalMargin - handleHeight
+        let y = min(max(dockFrame.midY - handleHeight / 2, minY), maxY)
         let x = isOnRightSide ? screenBounds.width - LCHiddenDockHandleView.handleWidth : 0
-        handle.frame = CGRect(x: x, y: y, width: LCHiddenDockHandleView.handleWidth, height: LCHiddenDockHandleView.handleHeight)
+        handle.frame = CGRect(x: x, y: y, width: LCHiddenDockHandleView.handleWidth, height: handleHeight)
         handle.setNeedsLayout()
     }
 
@@ -705,6 +719,9 @@ class AppInfoProvider {
             // A fresh multitask session always starts from the collapsed
             // button, even if the previous session ended expanded.
             self.isCollapsed = true
+            // …and from the orb form, whatever form the last
+            // session ended in.
+            self.collapsedFormIsHandle = false
             self.noteDockInteraction()
 
             let screenBounds = keyWindow.bounds
@@ -759,6 +776,8 @@ class AppInfoProvider {
                 self.isVisible = false
                 // The next session starts collapsed again (see showDock).
                 self.isCollapsed = true
+                self.isDockHidden = false
+                self.collapsedFormIsHandle = false
                 hostingController.view.transform = .identity
                 self.syncTapOutsideScrim()
                 // A dismissed dock leaves no handle behind either.
@@ -768,20 +787,110 @@ class AppInfoProvider {
         }
     }
 
+    /// Move a view's layer anchor point without letting the
+    /// view jump on screen (the standard compensation: shift the
+    /// position by the anchor delta, in transformed coordinates).
+    /// Used to pin the dock to its screen-edge side while it
+    /// squashes into — or grows out of — the hidden handle.
+    private func setDockAnchorPoint(_ point: CGPoint, for view: UIView) {
+        var newPoint = CGPoint(x: view.bounds.size.width * point.x,
+                               y: view.bounds.size.height * point.y)
+        var oldPoint = CGPoint(x: view.bounds.size.width * view.layer.anchorPoint.x,
+                               y: view.bounds.size.height * view.layer.anchorPoint.y)
+        newPoint = newPoint.applying(view.transform)
+        oldPoint = oldPoint.applying(view.transform)
+        var position = view.layer.position
+        position.x -= oldPoint.x
+        position.x += newPoint.x
+        position.y -= oldPoint.y
+        position.y += newPoint.y
+        view.layer.position = position
+        view.layer.anchorPoint = point
+    }
+
+    /// The hosting view's horizontal squash when it poses as the
+    /// handle: the handle's width over the orb's width.
+    private var handleSquashScale: CGFloat {
+        LCHiddenDockHandleView.handleWidth / max(dockWidth, 1)
+    }
+
+    private func dockIsOnRightSide(_ view: UIView) -> Bool {
+        let screenWidth = view.superview?.bounds.width ?? view.frame.maxX * 2
+        return view.frame.midX > screenWidth / 2
+    }
+
     // Toggle dock hide/show state (hide-to-side). 微珠's multitask
     // takeover probes these @objc methods by name and hooks them;
     // their signatures must stay exactly as they are.
     @objc public func toggleDockVisibility() {
         DispatchQueue.main.async {
             self.isDockHidden.toggle()
+            self.collapsedFormIsHandle = self.isDockHidden
             self.updateDockFrame()
         }
     }
 
+    /// Pulling the handle back out restores the orb (Ann
+    /// 2026-11-25): the squashed dock is placed at the orb's
+    /// frame still wearing the handle's width, then springs
+    /// back to full width around its edge-side anchor — the
+    /// reverse of the hide squash in hideDockToSide.
     @objc public func showDockFromHidden() {
         DispatchQueue.main.async {
+            guard self.isDockHidden else {
+                self.updateDockFrame()
+                return
+            }
+            self.collapsedFormIsHandle = false
             self.isDockHidden = false
+            self.updateDockFrame(animated: false)
+            guard let view = self.hostingController?.view else { return }
+            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
+            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
+            view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
+            UIView.animate(
+                withDuration: Constants.morphSpringResponse,
+                delay: 0,
+                usingSpringWithDamping: 0.8,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .curveEaseOut]
+            ) {
+                view.transform = .identity
+            } completion: { _ in
+                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+            }
+        }
+    }
+
+    /// Tapping the handle expands the dock directly (Ann
+    /// 2026-11-25): orb and handle are two collapsed forms of
+    /// the same dock, and a tap on either one expands it. The
+    /// form memory stays on the handle (collapsedFormIsHandle),
+    /// so collapsing afterwards squashes back into the handle
+    /// rather than stopping at the orb. The growth starts from
+    /// the handle's own width around the edge-side anchor while
+    /// the frame runs the usual expand morph.
+    @objc public func expandDockFromHidden() {
+        DispatchQueue.main.async {
+            guard self.isDockHidden, self.isVisible,
+                  let view = self.hostingController?.view else { return }
+            self.isDockHidden = false
+            self.isCollapsed = false
+            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
+            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
+            view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
             self.updateDockFrame()
+            UIView.animate(
+                withDuration: Constants.morphSpringResponse,
+                delay: 0,
+                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState, .curveEaseOut]
+            ) {
+                view.transform = .identity
+            } completion: { _ in
+                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+            }
         }
     }
 
@@ -789,10 +898,30 @@ class AppInfoProvider {
         DispatchQueue.main.async {
             // Hiding is a collapsed-orb state (Ann 2026-11-25):
             // an expanded dock shoved out of the way collapses
-            // first, and the handle always brings the orb back.
+            // first. The orb then squashes flat into the handle
+            // (Ann 2026-11-25, later): same height, squeezed
+            // width, pinned to its own edge — one object changing
+            // shape, not a swap for a different part. Only once
+            // the squash lands does the dock take its off-screen
+            // hidden frame and the handle take its place.
             self.isCollapsed = true
-            self.isDockHidden = true
-            self.updateDockFrame()
+            self.collapsedFormIsHandle = true
+            guard self.isVisible, !self.isDockHidden,
+                  let view = self.hostingController?.view else {
+                self.isDockHidden = true
+                self.updateDockFrame()
+                return
+            }
+            let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
+            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
+            UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseIn) {
+                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
+            } completion: { _ in
+                self.isDockHidden = true
+                self.updateDockFrame(animated: false)
+                view.transform = .identity
+                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+            }
         }
     }
 
@@ -1094,6 +1223,15 @@ class AppInfoProvider {
         noteDockInteraction()
         DispatchQueue.main.async {
             self.isCollapsed.toggle()
+            // Collapsing a dock whose collapsed form is the
+            // handle (it was expanded straight from the handle)
+            // goes all the way back to the handle (Ann
+            // 2026-11-25): the frame morph shrinks it to orb
+            // height while it slides out, and the handle takes
+            // its place at the same height.
+            if self.isCollapsed, self.collapsedFormIsHandle {
+                self.isDockHidden = true
+            }
             self.updateDockFrame()
         }
     }
@@ -2002,15 +2140,24 @@ enum LCBreathingLightColor: String, CaseIterable {
 /// top layer, so it stays touchable even while a guest app fills
 /// the screen — guest touches are routed straight to the guest
 /// process and never reached the old window recognizers anywhere
-/// except on the sliver itself. Tap it, or drag it inward, to
-/// bring the orb back; drag it vertically to move the hidden
+/// except on the sliver itself. Since later the same day it is
+/// the orb's second collapsed form, not a separate part: the
+/// orb squashes flat into it (same height, squeezed width), a
+/// tap expands the dock directly, an inward drag pulls it back
+/// out into the orb, and a vertical drag moves the hidden
 /// dock's height. It dims when idle and brightens under the
 /// finger, like the orb itself.
 private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate {
-    static let handleWidth: CGFloat = 12
-    static let handleHeight: CGFloat = 72
+    static let handleWidth: CGFloat = 16
+    // No fixed height: the manager sizes the handle to the
+    // collapsed orb's height — the handle IS the orb squashed
+    // flat (Ann 2026-11-25), so the two collapsed forms share
+    // one height and one center line.
 
+    /// An inward drag: pull the handle back out into the orb.
     var onShow: (() -> Void)?
+    /// A tap: expand the dock directly from the handle.
+    var onExpand: (() -> Void)?
     /// The handle finished a vertical drag at this center Y.
     var onMoveEnd: ((CGFloat) -> Void)?
 
@@ -2020,7 +2167,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
     private let tintView = UIView()
+    /// The grip is the orb's 2×2 glyph squashed with the orb:
+    /// the two columns merge into one, the two rows stay two —
+    /// two short segments in a column, breathing together
+    /// inside this container (Ann 2026-11-25).
     private let gripView = UIView()
+    private let gripTopSegment = UIView()
+    private let gripBottomSegment = UIView()
     private var idleTimer: Timer?
     private var dragStartCenterY: CGFloat = 0
     private var dragMode: Int = 0 // 0 undecided, 1 show, 2 move
@@ -2035,8 +2188,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
         tintView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
         blurView.contentView.addSubview(tintView)
-        gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        gripView.layer.cornerRadius = 2
+        for segment in [gripTopSegment, gripBottomSegment] {
+            segment.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+            segment.layer.cornerRadius = 2.5
+            gripView.addSubview(segment)
+        }
         blurView.contentView.addSubview(gripView)
         addSubview(blurView)
 
@@ -2064,7 +2220,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
         blurView.clipsToBounds = true
         tintView.frame = bounds
-        gripView.frame = CGRect(x: (bounds.width - 4) / 2, y: (bounds.height - 38) / 2, width: 4, height: 38)
+        // The squashed glyph keeps the old grip's 38pt span:
+        // two 15pt segments with an 8pt gap, centered.
+        gripView.frame = CGRect(x: (bounds.width - 5) / 2, y: (bounds.height - 38) / 2, width: 5, height: 38)
+        gripTopSegment.frame = CGRect(x: 0, y: 0, width: 5, height: 15)
+        gripBottomSegment.frame = CGRect(x: 0, y: 23, width: 5, height: 15)
         layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: Self.handleWidth / 2).cgPath
     }
 
@@ -2082,11 +2242,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// Re-read every time the handle appears, so a color picked
     /// in Settings applies the next time the dock hides.
     private func applyGripStyle() {
-        if let color = LCBreathingLightColor.current.uiColor {
-            gripView.backgroundColor = color
-        } else {
-            gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        }
+        // The color lands on the two segments; the pulse itself
+        // sits on their container, so both segments breathe as
+        // one squashed glyph.
+        let gripColor = LCBreathingLightColor.current.uiColor
+            ?? UIColor.black.withAlphaComponent(0.4)
+        gripTopSegment.backgroundColor = gripColor
+        gripBottomSegment.backgroundColor = gripColor
         gripView.layer.removeAnimation(forKey: "breathing")
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 0.38
@@ -2131,7 +2293,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     // MARK: Gestures
 
     @objc private func handleTap() {
-        onShow?()
+        onExpand?()
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -2154,8 +2316,8 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
                 }
             }
             if dragMode == 2, let superview {
-                let minY = superview.safeAreaInsets.top + Self.handleHeight / 2 + 8
-                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - Self.handleHeight / 2 - 8
+                let minY = superview.safeAreaInsets.top + bounds.height / 2 + 8
+                let maxY = superview.bounds.height - superview.safeAreaInsets.bottom - bounds.height / 2 - 8
                 center.y = min(max(dragStartCenterY + translation.y, minY), maxY)
             }
         case .ended:
