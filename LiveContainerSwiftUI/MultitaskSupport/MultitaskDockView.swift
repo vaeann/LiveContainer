@@ -1909,10 +1909,30 @@ private final class BreathingGlyphUIView: UIView {
         imageView.contentMode = .center
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// While the app sits in the background, iOS snapshots it
+    /// and the snapshot drops layer animations; nothing in the
+    /// passive re-assert points (apply / layout / window /
+    /// superview) runs on a plain foreground return, so the
+    /// orb sat frozen until a tap forced a re-render — and the
+    /// handle, left showing, froze the same way (Ann
+    /// 2026-11-25, both verified on device). On activation,
+    /// rebuild the pulse outright instead of trusting the
+    /// alive-check: the same rebuild-on-appearance the handle
+    /// has always done in fadeIn.
+    @objc private func appDidBecomeActive() {
+        layer.removeAnimation(forKey: "breathing")
+        startPulseIfNeeded()
+    }
 
     func apply(pointSize: CGFloat, tint: UIColor) {
         imageView.tintColor = tint
@@ -2426,7 +2446,22 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         tap.require(toFail: pan)
         addGestureRecognizer(tap)
 
+        // Suspension strips layer animations (see the orb's
+        // glyph for the full story): rebuild the grip pulse
+        // when the app becomes active again. Off screen this
+        // changes nothing visible; fadeIn rebuilds it on
+        // appearance anyway.
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+
         alpha = 0.85
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func appDidBecomeActive() {
+        applyGripStyle()
     }
 
     @available(*, unavailable)
