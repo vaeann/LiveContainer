@@ -39,64 +39,50 @@ struct LCSourceAppDetailView: View {
     var body: some View {
         List {
             Section {
-                // 头部排版（Ann 2026-11-26）：图标行里排完名字信息 +
-                // 复制图标 + 与列表同款的安装按钮（不再用宽按钮那行），
-                // 安装中时版本行让位给状态文字，和列表行同款逻辑；
-                // 包名一行与图标行同属一个列表行、紧贴在下面（拆成
-                // 两个列表行会被行间距和分隔线拉得很开），标签和值
-                // 连在一起写，不要一个最左一个最右分开摆。
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .center, spacing: 14) {
-                        SourceIconView(url: app.iconURL)
-                            .frame(width: 72, height: 72)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(app.name)
-                                .font(.headline)
-                            if let developer = app.developerName, !developer.isEmpty {
-                                Text(developer)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
-                                Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            } else if let latest = app.latestVersion {
-                                Text(versionLine(latest))
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                // 头部一行排完（Ann 2026-11-26）：图标 + 名字信息 +
+                // 复制图标 + 与列表同款的安装按钮（不再用宽按钮那行）；
+                // 安装中时版本行让位给状态文字，和列表行同款逻辑。
+                HStack(alignment: .center, spacing: 14) {
+                    SourceIconView(url: app.iconURL)
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(app.name)
+                            .font(.headline)
+                        if let developer = app.developerName, !developer.isEmpty {
+                            Text(developer)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Button {
-                            copyAction()
-                            copied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                copied = false
-                            }
-                        } label: {
-                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                .frame(width: 36, height: 36)
+                        if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
+                            Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else if let latest = app.latestVersion {
+                            Text(versionLine(latest))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        LCSourceInstallButton(
-                            app: app,
-                            buttonState: buttonState,
-                            tint: primaryColor,
-                            action: action
-                        )
                     }
-
-                    HStack(spacing: 5) {
-                        Text("lc.sources.detail.bundleId".loc + ":")
-                        Text(app.bundleIdentifier)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer(minLength: 0)
+                    Spacer()
+                    Button {
+                        copyAction()
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            copied = false
+                        }
+                    } label: {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .frame(width: 36, height: 36)
                     }
+                    .buttonStyle(.plain)
+                    LCSourceInstallButton(
+                        app: app,
+                        buttonState: buttonState,
+                        tint: primaryColor,
+                        action: action
+                    )
                 }
                 .padding(.vertical, 4)
             }
@@ -108,6 +94,15 @@ struct LCSourceAppDetailView: View {
                 } header: {
                     Text("lc.sources.detail.description".loc)
                 }
+            }
+
+            // 包名单独一段放在介绍下面（Ann 2026-11-26 定版）：段标题
+            // 就是 Bundle ID，里面只写包名本身。在头部试过几版都
+            // 格格不入，这里最顺眼。
+            Section {
+                Text(app.bundleIdentifier)
+            } header: {
+                Text("lc.sources.detail.bundleId".loc)
             }
 
             if !app.screenshots.isEmpty {
