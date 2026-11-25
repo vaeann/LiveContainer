@@ -1467,6 +1467,14 @@ private struct LCSourceAppBanner: View {
     @EnvironmentObject private var downloadHelper: DownloadHelper
     @State private var showDetail = false
     @State private var copied = false
+    @State private var textHeight: CGFloat = 0
+
+    /// The icon grows with the text block (Ann 2026-11-26):
+    /// the four-line row is taller than the old three-line
+    /// one and the fixed 60pt icon looked small in it, so
+    /// the icon tracks the measured text height — never
+    /// below the old 60, capped at 88.
+    private var iconSize: CGFloat { min(max(textHeight, 60), 88) }
 
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
@@ -1483,26 +1491,28 @@ private struct LCSourceAppBanner: View {
         dynamicColors ? primaryColor.opacity(0.5) : Color("AppBannerBG")
     }
 
-    // 第二行 = 版本 • 更新日期 • 大小（Ann 2026-11-26）：三样都读
-    // 源的标准字段（versions 的 version/date/size），源文件可以
-    // 写回通用格式、副标题只写介绍。bundle ID 挪到详情页显示。
-    private var metadataText: String {
+    // 第二行 = 更新日期（Ann 2026-11-26，四行版式）：只读
+    // versions 的 date 标准字段。没有日期的行不占这一行。
+    private var dateText: String? {
+        guard let date = app.latestVersion?.releaseDate else { return nil }
+        return Self.metadataDateFormatter.string(from: date)
+    }
+
+    // 第三行 = 版本号 + 安装包大小（Ann 2026-11-26）：读
+    // versions 的 version/build/size 标准字段；源里没有
+    // 版本信息时回退到 bundle ID（详情页也有一份）。
+    private var versionSizeText: String {
         guard let latest = app.latestVersion else {
             return app.bundleIdentifier
         }
-        var parts: [String] = []
+        var text = latest.version
         if let build = latest.buildVersion, !build.isEmpty {
-            parts.append("\(latest.version) (\(build))")
-        } else {
-            parts.append(latest.version)
-        }
-        if let date = latest.releaseDate {
-            parts.append(Self.metadataDateFormatter.string(from: date))
+            text += " (\(build))"
         }
         if let size = latest.size, size > 0 {
-            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+            text += " • " + ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
         }
-        return parts.joined(separator: " • ")
+        return text
     }
 
     private static let metadataDateFormatter: DateFormatter = {
@@ -1525,8 +1535,8 @@ private struct LCSourceAppBanner: View {
         HStack {
             HStack(alignment: .center, spacing: 12) {
                 SourceIconView(url: app.iconURL)
-                    .frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .frame(width: iconSize, height: iconSize)
+                    .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Text(app.name)
@@ -1540,13 +1550,24 @@ private struct LCSourceAppBanner: View {
                                 .background(Capsule().fill(Color.orange))
                         }
                     }
+                    // Four lines (Ann 2026-11-26): name /
+                    // release date / version + size / intro.
+                    // While installing, the status text takes
+                    // the version line's place, as on the
+                    // detail page.
+                    if let dateText = dateText {
+                        Text(dateText)
+                            .font(.system(size: 12))
+                            .foregroundColor(textColor)
+                            .lineLimit(1)
+                    }
                     if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
                         Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
                             .font(.system(size: 12))
                             .foregroundColor(textColor)
                             .lineLimit(1)
                     } else {
-                        Text(metadataText)
+                        Text(versionSizeText)
                             .font(.system(size: 12))
                             .foregroundColor(textColor)
                             .lineLimit(1)
@@ -1558,6 +1579,11 @@ private struct LCSourceAppBanner: View {
                             .lineLimit(1)
                     }
                 }
+                .background(GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { textHeight = proxy.size.height }
+                        .onChange(of: proxy.size.height) { textHeight = $0 }
+                })
             }
             .allowsHitTesting(false)
             Spacer()
@@ -1582,7 +1608,6 @@ private struct LCSourceAppBanner: View {
             )
         }
         .padding()
-        .frame(height: 88)
         .background {
             RoundedRectangle(cornerSize: CGSize(width: 22, height: 22))
                 .fill(backgroundColor)
