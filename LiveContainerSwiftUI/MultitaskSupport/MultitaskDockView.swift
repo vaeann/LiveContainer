@@ -934,7 +934,7 @@ class AppInfoProvider {
             }
             let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
             self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseIn) {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
                 view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
             } completion: { _ in
                 // Never set a frame while a transform is live
@@ -1767,6 +1767,11 @@ private final class BreathingGlyphUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         imageView.frame = bounds
+        // Layout passes are the most frequent lifecycle the
+        // dock guarantees (every morph step runs one), so the
+        // pulse is re-asserted here too — the guard keeps it a
+        // no-op while the animation is alive.
+        startPulseIfNeeded()
     }
 
     override func didMoveToWindow() {
