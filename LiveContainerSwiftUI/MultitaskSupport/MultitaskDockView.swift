@@ -1523,23 +1523,17 @@ struct CollapsedDockView: View {
 
     var body: some View {
         ZStack {
-            // Breathing as a true sine wave (Ann 2026-11-25): the
-            // old pulse (Weizhu's parameters — 1.15s ease-in-out
-            // legs, autoreversing) had a catch where each leg
-            // joined the next, and at 2.3s a cycle it pulsed more
-            // like a beacon than a breath. A sinusoid has no legs
-            // and no joins, and a 4s cycle is a resting breathing
-            // rate (~15/min). Opacity range unchanged: 0.38 <-> 1.
-            TimelineView(.animation) { context in
-                let wave = 0.5 - 0.5 * cos(context.date.timeIntervalSinceReferenceDate * 2 * .pi / LCBreathingLightColor.cycleSeconds)
-                Image(systemName: "square.grid.2x2.fill")
-                    .foregroundStyle((LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).color)
-                    // Sized off the dock width, not adaptiveIconSize:
-                    // the orb keeps its exact pre-0.68 glyph size
-                    // (0.375 x width) — only the expanded icons shrank.
-                    .font(.system(size: dockManager.dockWidth * 0.375, weight: .bold))
-                    .opacity(0.38 + 0.62 * wave)
-            }
+            // The glyph breathes the way Weizhu's orb line does
+            // (FMApplyOrbLineAnimation): a CABasicAnimation
+            // committed to the glyph's layer — see
+            // BreathingGlyphView for why it lives there.
+            BreathingGlyphView(
+                // Sized off the dock width, not adaptiveIconSize:
+                // the orb keeps its exact pre-0.68 glyph size
+                // (0.375 x width) — only the expanded icons shrank.
+                pointSize: dockManager.dockWidth * 0.375,
+                tint: (LCBreathingLightColor(rawValue: breathingLightColorRaw) ?? .standard).uiColor ?? .label
+            )
         }
         .frame(width: dockManager.dockWidth * 0.75, height: dockManager.dockWidth * 0.75)
         // No tile of its own (Ann 2026-11-22): the glyph sits
@@ -1548,6 +1542,81 @@ struct CollapsedDockView: View {
         // version to keep its optical weight in the slot.
         .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 2)
         .animation(.spring(response: MultitaskDockManager.Constants.longAnimationDuration, dampingFraction: MultitaskDockManager.Constants.standardSpringDamping), value: dockManager.adaptiveIconSize)
+    }
+}
+
+/// The orb's glyph with Weizhu's breathing mechanism
+/// (FMApplyOrbLineAnimation in the module this fork replaces):
+/// a CABasicAnimation on the layer's opacity — 0.38 <-> 1,
+/// 1.15s ease-in-out, autoreversing, forever. The mechanism is
+/// the lesson (Ann 2026-11-25: two SwiftUI attempts still
+/// flashed). A layer animation runs in the render server: it
+/// interpolates at full frame rate no matter what the app
+/// thread is busy with, and no SwiftUI re-render of the dock
+/// (front-app changes, morph state, published updates) can
+/// restart it mid-cycle or drop its frames — both things a
+/// view-level `.animation` pulse and a TimelineView pulse
+/// visibly suffered from.
+private struct BreathingGlyphView: UIViewRepresentable {
+    var pointSize: CGFloat
+    var tint: UIColor
+
+    func makeUIView(context: Context) -> BreathingGlyphUIView {
+        BreathingGlyphUIView()
+    }
+
+    func updateUIView(_ uiView: BreathingGlyphUIView, context: Context) {
+        uiView.apply(pointSize: pointSize, tint: tint)
+    }
+}
+
+private final class BreathingGlyphUIView: UIView {
+    private let imageView = UIImageView()
+    private var pointSize: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        imageView.contentMode = .center
+        imageView.isUserInteractionEnabled = false
+        addSubview(imageView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(pointSize: CGFloat, tint: UIColor) {
+        imageView.tintColor = tint
+        if self.pointSize != pointSize {
+            self.pointSize = pointSize
+            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
+            imageView.image = UIImage(systemName: "square.grid.2x2.fill", withConfiguration: config)?
+                .withRenderingMode(.alwaysTemplate)
+        }
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView.frame = bounds
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startPulseIfNeeded()
+        }
+    }
+
+    private func startPulseIfNeeded() {
+        guard imageView.layer.animation(forKey: "breathing") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.38
+        pulse.toValue = 1.0
+        pulse.duration = 1.15
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        imageView.layer.add(pulse, forKey: "breathing")
     }
 }
 
@@ -1897,11 +1966,6 @@ struct LoadingIconView: View {
 /// background. Stored by raw value under LCBreathingLightColor
 /// in the app-group defaults.
 enum LCBreathingLightColor: String, CaseIterable {
-    /// One full breath (dim -> bright -> dim), in seconds —
-    /// shared by every surface the color tints, so the orb and
-    /// the hidden-dock handle always breathe at the same rate.
-    static let cycleSeconds: Double = 4.0
-
     case standard, red, orange, green, blue, purple, pink
 
     static var current: LCBreathingLightColor {
@@ -2013,11 +2077,10 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     /// The grip is a breathing light too (Ann 2026-11-25): the
     /// shared breathing-light color, breathing with the orb's
-    /// own sine wave (opacity 0.38 <-> 1 over a 4s cycle — a
-    /// keyframe-sampled sinusoid, so like the orb it has no
-    /// legs and no joins; Ann 2026-11-25). Re-read every time
-    /// the handle appears, so a color picked in Settings
-    /// applies the next time the dock hides.
+    /// own animation — the same layer-committed CABasicAnimation
+    /// Weizhu's orb line uses (see BreathingGlyphView).
+    /// Re-read every time the handle appears, so a color picked
+    /// in Settings applies the next time the dock hides.
     private func applyGripStyle() {
         if let color = LCBreathingLightColor.current.uiColor {
             gripView.backgroundColor = color
@@ -2025,14 +2088,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             gripView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         }
         gripView.layer.removeAnimation(forKey: "breathing")
-        let steps = 60
-        let pulse = CAKeyframeAnimation(keyPath: "opacity")
-        pulse.values = (0...steps).map { i in
-            0.38 + 0.62 * (0.5 - 0.5 * cos(Double(i) / Double(steps) * 2 * .pi))
-        }
-        pulse.duration = LCBreathingLightColor.cycleSeconds
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.38
+        pulse.toValue = 1.0
+        pulse.duration = 1.15
+        pulse.autoreverses = true
         pulse.repeatCount = .infinity
-        pulse.calculationMode = .linear
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         gripView.layer.add(pulse, forKey: "breathing")
     }
 
