@@ -873,29 +873,43 @@ class AppInfoProvider {
     /// the same dock, and a tap on either one expands it. The
     /// form memory stays on the handle (collapsedFormIsHandle),
     /// so collapsing afterwards squashes back into the handle
-    /// rather than stopping at the orb. The growth starts from
-    /// the handle's own width around the edge-side anchor while
-    /// the frame runs the usual expand morph.
+    /// rather than stopping at the orb. The handle first
+    /// unsquashes back into the orb, and the orb then runs the
+    /// ordinary expand morph.
     @objc public func expandDockFromHidden() {
         DispatchQueue.main.async {
             guard self.isDockHidden, self.isVisible,
                   let view = self.hostingController?.view else { return }
-            self.isDockHidden = false
-            self.isCollapsed = false
             let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
-            self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-            view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
-            self.updateDockFrame()
+            self.isDockHidden = false
+            self.isCollapsed = true
+            // Two clean stages, never mixing a live transform
+            // with a frame change (see hideDockToSide for the
+            // corruption that caused). Stage one: place the dock
+            // at the collapsed orb's frame in one unrendered
+            // pass, still wearing the handle's width — the
+            // sliver lands exactly where the handle sits. (The
+            // handle itself fades out inside updateDockFrame.)
+            UIView.performWithoutAnimation {
+                self.updateDockFrame(animated: false)
+                self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
+                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
+            }
+            // Stage two: spring back to full width — the handle
+            // becomes the orb again — then run the ordinary
+            // expand morph from there.
             UIView.animate(
                 withDuration: Constants.morphSpringResponse,
                 delay: 0,
-                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
+                usingSpringWithDamping: 0.8,
                 initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .curveEaseOut]
             ) {
                 view.transform = .identity
             } completion: { _ in
                 self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+                self.isCollapsed = false
+                self.updateDockFrame()
             }
         }
     }
@@ -923,10 +937,20 @@ class AppInfoProvider {
             UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseIn) {
                 view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
             } completion: { _ in
-                self.isDockHidden = true
-                self.updateDockFrame(animated: false)
-                view.transform = .identity
-                self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+                // Never set a frame while a transform is live
+                // (device bug, Ann 2026-11-25: the frame setter
+                // bakes the squash into the bounds, and clearing
+                // the transform afterwards left a bloated orb
+                // sitting on screen after the dock had hidden).
+                // Restore identity and the center anchor first,
+                // then take the hidden frame — all in one
+                // unrendered pass, so nothing flashes.
+                UIView.performWithoutAnimation {
+                    view.transform = .identity
+                    self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
+                    self.isDockHidden = true
+                    self.updateDockFrame(animated: false)
+                }
             }
         }
     }
@@ -1737,6 +1761,7 @@ private final class BreathingGlyphUIView: UIView {
                 .withRenderingMode(.alwaysTemplate)
         }
         setNeedsLayout()
+        startPulseIfNeeded()
     }
 
     override func layoutSubviews() {
@@ -1746,13 +1771,26 @@ private final class BreathingGlyphUIView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil {
-            startPulseIfNeeded()
-        }
+        startPulseIfNeeded()
     }
 
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        startPulseIfNeeded()
+    }
+
+    /// The pulse lives on this container's layer, not the
+    /// image view's (device finding, Ann 2026-11-25: with the
+    /// pulse on the UIImageView's layer and started only from
+    /// didMoveToWindow, the orb sat still while the handle —
+    /// whose pulse sits on a plain container view and is
+    /// re-applied every time it appears — breathed fine).
+    /// Same structure as the handle's grip, and the start is
+    /// re-asserted from apply(), which SwiftUI calls on every
+    /// update while the dock is on screen; the guard keeps it
+    /// a no-op while the animation is alive.
     private func startPulseIfNeeded() {
-        guard imageView.layer.animation(forKey: "breathing") == nil else { return }
+        guard layer.animation(forKey: "breathing") == nil else { return }
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 0.38
         pulse.toValue = 1.0
@@ -1760,7 +1798,7 @@ private final class BreathingGlyphUIView: UIView {
         pulse.autoreverses = true
         pulse.repeatCount = .infinity
         pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        imageView.layer.add(pulse, forKey: "breathing")
+        layer.add(pulse, forKey: "breathing")
     }
 }
 
@@ -2233,17 +2271,23 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
             : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
         blurView.clipsToBounds = true
         tintView.frame = bounds
-        // The squashed glyph scales with the orb it came from:
-        // at the default 90pt orb it spans 38pt — two 15pt
-        // segments with an 8pt gap, centered.
-        let gripScale = min(max(bounds.height / 90, 0.7), 1.6)
-        let gripWidth = 5 * gripScale
-        let gripSpan = 38 * gripScale
-        gripView.frame = CGRect(x: (bounds.width - gripWidth) / 2, y: (bounds.height - gripSpan) / 2, width: gripWidth, height: gripSpan)
-        gripTopSegment.frame = CGRect(x: 0, y: 0, width: gripWidth, height: 15 * gripScale)
-        gripBottomSegment.frame = CGRect(x: 0, y: 23 * gripScale, width: gripWidth, height: 15 * gripScale)
-        gripTopSegment.layer.cornerRadius = 2.5 * gripScale
-        gripBottomSegment.layer.cornerRadius = 2.5 * gripScale
+        // The segments copy the orb glyph's own proportions
+        // (device feedback, Ann 2026-11-25: the first cut —
+        // 38pt span, 8pt gap, 5pt wide — read as two unrelated
+        // dashes, not as the glyph). The glyph spans 0.375 of
+        // the orb, its cells take 0.44 of that span each with a
+        // 0.12 gap between them; squashed, a cell keeps its
+        // height and shrinks to a slim 3.5pt-wide segment
+        // (scaled with the orb), ends fully rounded.
+        let glyphSpan = bounds.height * 0.375
+        let cellHeight = glyphSpan * 0.44
+        let cellGap = glyphSpan * 0.12
+        let segmentWidth = min(max(3.5 * bounds.height / 90, 2.5), 5)
+        gripView.frame = CGRect(x: (bounds.width - segmentWidth) / 2, y: (bounds.height - glyphSpan) / 2, width: segmentWidth, height: glyphSpan)
+        gripTopSegment.frame = CGRect(x: 0, y: 0, width: segmentWidth, height: cellHeight)
+        gripBottomSegment.frame = CGRect(x: 0, y: cellHeight + cellGap, width: segmentWidth, height: cellHeight)
+        gripTopSegment.layer.cornerRadius = segmentWidth / 2
+        gripBottomSegment.layer.cornerRadius = segmentWidth / 2
         layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: bounds.width / 2).cgPath
     }
 
