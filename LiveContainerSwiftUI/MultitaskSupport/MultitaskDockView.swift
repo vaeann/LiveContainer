@@ -794,6 +794,29 @@ class AppInfoProvider {
         LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth) / max(dockWidth, 1)
     }
 
+    /// Where the handle sits inside the dock's own frame, in
+    /// frame-local points: the morph's convergence point (Ann
+    /// 2026-11-26). The icons used to gather at the pill's
+    /// center — the deleted orb's seat; they gather at the
+    /// handle now: horizontally the handle's center (half a
+    /// handle's width in from the dock's edge), vertically the
+    /// collapsed frame's center, which is where the handle is
+    /// centered. The UIKit squash anchors at the same spot,
+    /// so the content and the glass move as one object.
+    func convergencePoint(in size: CGSize) -> CGPoint {
+        guard let view = hostingController?.view else {
+            return CGPoint(x: size.width / 2, y: size.height / 2)
+        }
+        let frame = view.frame
+        let collapsedHeight = collapsedDockHeight(for: dockWidth)
+        let screenHeight = keyWindow?.bounds.height ?? frame.maxY
+        let collapsedMidY = calculateTargetY(for: frame, dockHeight: collapsedHeight, screenHeight: screenHeight)
+            + collapsedHeight / 2
+        let handleHalf = LCHiddenDockHandleView.handleWidth(forDockWidth: dockWidth) / 2
+        let x = dockIsOnRightSide(view) ? size.width - handleHalf : handleHalf
+        return CGPoint(x: x, y: collapsedMidY - frame.minY)
+    }
+
     private func dockIsOnRightSide(_ view: UIView) -> Bool {
         let screenWidth = view.superview?.bounds.width ?? view.frame.maxX * 2
         return view.frame.midX > screenWidth / 2
@@ -1311,14 +1334,29 @@ public struct MultitaskDockSwiftView: View {
     }
 
     /// Offset that pulls an expanded element back onto the
-    /// stack's center (the collapsed seat) at morphProgress 0; as
-    /// the spring runs, every element rides it out to its own
-    /// slot — past it, briefly, when the jelly spring
-    /// overshoots.
+    /// stack's center at morphProgress 0; as the spring runs,
+    /// every element rides it out to its own slot — past it,
+    /// briefly, when the jelly spring overshoots. The stack
+    /// itself is then shifted so that gathering center lands
+    /// on the handle (see convergenceShift).
     private func morphOffset(for index: Int, total: Int) -> CGFloat {
         let center = Double(total - 1) / 2
         let slot = (Double(index) - center) * Double(dockManager.adaptiveIconSize + 8)
         return CGFloat(-slot) * (1 - morphProgress)
+    }
+
+    /// The uniform shift that moves the morph's gathering
+    /// point from the frame's center to the handle's spot
+    /// (Ann 2026-11-26): at progress 0 every element sits
+    /// exactly on the handle; at 1 the shift is zero and
+    /// every slot is exact.
+    private func convergenceShift(in size: CGSize) -> CGSize {
+        let point = dockManager.convergencePoint(in: size)
+        let rest = 1 - morphProgress
+        return CGSize(
+            width: (point.x - size.width / 2) * rest,
+            height: (point.y - size.height / 2) * rest
+        )
     }
     
     // Calculate dynamic padding based on user settings
@@ -1392,6 +1430,7 @@ public struct MultitaskDockSwiftView: View {
                 // runs in reverse on collapse.
                 .opacity(Double(min(1, morphProgress * 5)))
                 .allowsHitTesting(!dockManager.isCollapsed)
+                .offset(convergenceShift(in: g.size))
             }
             .onChange(of: dockManager.isCollapsed) { collapsed in
                 withAnimation(morphSpring) {
