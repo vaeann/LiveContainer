@@ -504,11 +504,17 @@ class AppInfoProvider {
     /// position and clamps y with the same margins the
     /// handle dragged within, so the sync that follows
     /// leaves the handle exactly where its snap landed it.
+    /// The plant must use the PARKED x, never the on-screen
+    /// one: the hosting view stays at alpha 1 while hidden,
+    /// so planting it on-screen flashed the collapsed
+    /// content — a horizontal glass bar — at the handle's
+    /// landing spot for the beat it took updateDockFrame
+    /// to spring it back out (Ann 2026-11-26).
     private func moveHiddenDock(centerY: CGFloat, isOnRightSide: Bool) {
         guard isDockHidden, let hostingController else { return }
         let frame = hostingController.view.frame
         let screenWidth = keyWindow?.bounds.width ?? frame.width
-        let plantedX = isOnRightSide ? screenWidth - frame.width : 0
+        let plantedX = calculateTargetX(isDockHidden: true, isOnRightSide: isOnRightSide, dockWidth: frame.width, screenWidth: screenWidth)
         hostingController.view.frame = CGRect(x: plantedX, y: centerY - frame.height / 2,
                                               width: frame.width, height: frame.height)
         updateDockFrame()
