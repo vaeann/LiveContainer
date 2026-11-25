@@ -189,8 +189,6 @@ class AppInfoProvider {
         static let minAdaptiveDockWidth: CGFloat = 50.0
         static let minAdaptiveIconSize: CGFloat = 10.0
         static let maxIconSize: CGFloat = 100.0
-        static let minCollapsedButtonSize: CGFloat = 44.0
-        static let maxCollapsedButtonSize: CGFloat = 80.0
         static let initialDockShowHeight: CGFloat = 120.0
 
         // MARK: - Margins & Padding
@@ -207,7 +205,6 @@ class AppInfoProvider {
         // ~24% of the icon size, ~1.8x the 8 pt inter-icon spacing:
         // icons 61.2, margins 14.4 at the default width.
         static let iconToWidthRatio: CGFloat = 0.68
-        static let collapsedButtonToWidthRatio: CGFloat = 0.7
         static let maxHeightRatioOfAvailableArea: CGFloat = 0.85
         
         // MARK: - Animation & Interaction
@@ -219,14 +216,12 @@ class AppInfoProvider {
         static let standardSpringDamping: CGFloat = 0.8
         static let standardSpringVelocity: CGFloat = 0.3
 
-        // Show/hide (Ann 2026-11-23): a calm materialize, not a
-        // performance — the old entrance grew from 0.8 on a 0.7-
-        // damping spring and overshot, which read as a flash every
-        // time the first app of a session launched. Both directions
-        // now use the same small scale, plain ease curves, and the
-        // exit is a touch faster than the entrance.
+        // Hide (Ann 2026-11-23): a calm dematerialize, not a
+        // performance — the exit fades in place at a small
+        // scale on a plain ease curve. (The matching entrance
+        // animation is gone: a session now starts on the
+        // handle, whose own fadeIn is the entrance.)
         static let showHideScale: CGFloat = 0.92
-        static let showAnimationDuration: TimeInterval = 0.22
         static let hideAnimationDuration: TimeInterval = 0.18
 
         // Collapse/expand morph (Ann 2026-11-24): ONE physical
@@ -267,8 +262,7 @@ class AppInfoProvider {
         let requiredHeight = expandedDockHeight(for: userWidth, iconSize: iconSize)
         
         if requiredHeight > maxSafeHeight && !apps.isEmpty {
-            let buttonSize = calculateButtonSize(for: userWidth)
-            let baseHeight = expandedDockBaseHeight(for: userWidth, buttonSize: buttonSize)
+            let baseHeight = expandedDockBaseHeight(for: userWidth, iconSize: iconSize)
             let availableForIcons = maxSafeHeight - baseHeight
             let maxAllowedIconSize = availableForIcons / CGFloat(apps.count)
             
@@ -286,11 +280,6 @@ class AppInfoProvider {
     private func calculateIconSize(for width: CGFloat) -> CGFloat {
         let iconSize = width * Constants.iconToWidthRatio
         return max(Constants.minAdaptiveIconSize, min(Constants.maxIconSize, iconSize))
-    }
-
-    private func calculateButtonSize(for width: CGFloat) -> CGFloat {
-        let targetSize = width * Constants.collapsedButtonToWidthRatio
-        return max(Constants.minCollapsedButtonSize, min(Constants.maxCollapsedButtonSize, targetSize))
     }
 
     /// Extra end inset the pill shape needs beyond the side
@@ -313,33 +302,32 @@ class AppInfoProvider {
         return max(0, needed - 4) + 9
     }
 
-    private func expandedDockBaseHeight(for width: CGFloat, buttonSize: CGFloat) -> CGFloat {
-        // Expanded dock contents: the app icons and the home button
-        // at the bottom — (apps.count + 1) items, apps.count gaps
-        // between them, and one button-height allowance. (The
-        // collapse button that used to sit on top is gone: tapping
-        // outside the dock collapses it now, both on the LC home
-        // screen and from inside the front guest.) The pill's curved
-        // ends add their own allowance on top of the vertical
-        // padding, mirrored by the layout's vertical padding.
+    private func expandedDockBaseHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
+        // Expanded dock contents: (apps.count + 1) equal tiles —
+        // the app icons and the home tile at the bottom, which is
+        // icon-sized like the rest — with apps.count gaps between
+        // them. The pill's curved ends add their own allowance on
+        // top of the vertical padding, mirrored by the layout's
+        // vertical padding. (Until 2026-11-26 the home tile's
+        // allowance used the deleted collapse button's size
+        // formula — 0.7 ratio, 44–80 clamp — leaving up to ~10pt
+        // of phantom height at narrow dock widths.)
         let spacingCount = max(self.apps.count, 0)
         let totalSpacingHeight = CGFloat(spacingCount) * Constants.dockContentSpacing
-        return Constants.dockVerticalPadding + buttonSize + totalSpacingHeight + 2 * dockEndExtra(for: width)
+        return Constants.dockVerticalPadding + iconSize + totalSpacingHeight + 2 * dockEndExtra(for: width)
     }
 
     private func expandedDockHeight(for width: CGFloat, iconSize: CGFloat) -> CGFloat {
-        let buttonSize = calculateButtonSize(for: width)
-        let baseHeight = expandedDockBaseHeight(for: width, buttonSize: buttonSize)
+        let baseHeight = expandedDockBaseHeight(for: width, iconSize: iconSize)
         let iconHeight = CGFloat(self.apps.count) * iconSize
         return baseHeight + iconHeight
     }
 
     private func collapsedDockHeight(for width: CGFloat) -> CGFloat {
-        // 正圆（Ann 2026-11-23 定）：收起帧高直接等于宽，胶囊
-        // 在正方形帧里就是正圆，圆弧半径与展开坞的端弧同为
-        // 宽/2。旧公式（留白 30 + 按钮尺寸）是收起态还有按钮
-        // 瓷砖时代的遗留；现在收起态只有字形（0.75×宽）加小
-        // 留白，远小于宽，不会挤。
+        // 收起帧高直接等于宽（Ann 2026-11-23 定）：收起帧是个
+        // 正方形——把手取这个高度，展开/收起的压扁也以它为
+        // 纵向目标。旧公式（留白 30 + 按钮尺寸）是收起态还有
+        // 按钮瓷砖时代的遗留。
         return width
     }
     
@@ -2158,6 +2146,9 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
 
     func fadeIn() {
         applyGripStyle()
+        // A fresh appearance is docked by definition: never
+        // come back wearing the floating corners.
+        isFloating = false
         alpha = 0
         UIView.animate(withDuration: 0.25) { self.alpha = 0.85 }
         restartIdleTimer()
