@@ -8,6 +8,7 @@
 //  LCAppGridActions so both layouts share one implementation.
 //
 
+import Combine
 import SwiftUI
 import UIKit
 
