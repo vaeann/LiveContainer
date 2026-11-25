@@ -873,43 +873,54 @@ class AppInfoProvider {
     /// the same dock, and a tap on either one expands it. The
     /// form memory stays on the handle (collapsedFormIsHandle),
     /// so collapsing afterwards squashes back into the handle
-    /// rather than stopping at the orb. The handle first
-    /// unsquashes back into the orb, and the orb then runs the
-    /// ordinary expand morph.
+    /// rather than stopping at the orb. The growth is ONE
+    /// continuous motion (Ann 2026-11-25, later: an earlier
+    /// two-stage version visibly paused at the orb on its way
+    /// out — a sequencing artifact of the frame/transform fix,
+    /// not the intent): the final expanded frame is placed
+    /// first, at identity, then a two-axis squash about the
+    /// handle's own spot makes it LOOK like the handle, and a
+    /// single spring back to identity grows it straight into
+    /// the expanded dock — passing through the orb's shape
+    /// without stopping there — while the content runs its
+    /// ordinary expand morph on the same clock.
     @objc public func expandDockFromHidden() {
         DispatchQueue.main.async {
             guard self.isDockHidden, self.isVisible,
                   let view = self.hostingController?.view else { return }
             let anchorX: CGFloat = self.dockIsOnRightSide(view) ? 1 : 0
+            // The hidden frame's midY is the orb's center; the
+            // handle is centered on it too.
+            let orbMidY = view.frame.midY
             self.isDockHidden = false
-            self.isCollapsed = true
-            // Two clean stages, never mixing a live transform
-            // with a frame change (see hideDockToSide for the
-            // corruption that caused). Stage one: place the dock
-            // at the collapsed orb's frame in one unrendered
-            // pass, still wearing the handle's width — the
-            // sliver lands exactly where the handle sits. (The
-            // handle itself fades out inside updateDockFrame.)
+            self.isCollapsed = false
             UIView.performWithoutAnimation {
                 self.updateDockFrame(animated: false)
-                self.setDockAnchorPoint(CGPoint(x: anchorX, y: 0.5), for: view)
-                view.transform = CGAffineTransform(scaleX: self.handleSquashScale, y: 1)
+                let expanded = view.frame
+                guard expanded.height > 0 else { return }
+                // Anchor at the handle's spot inside the final
+                // frame: the edge horizontally, the orb's center
+                // vertically. The dock's width is the same in
+                // both forms, so handleSquashScale is the exact
+                // horizontal squash here too; vertically the
+                // expanded height squashes down to the orb's.
+                let anchorY = min(max((orbMidY - expanded.minY) / expanded.height, 0), 1)
+                self.setDockAnchorPoint(CGPoint(x: anchorX, y: anchorY), for: view)
+                view.transform = CGAffineTransform(
+                    scaleX: self.handleSquashScale,
+                    y: self.collapsedDockHeight(for: self.dockWidth) / expanded.height
+                )
             }
-            // Stage two: spring back to full width — the handle
-            // becomes the orb again — then run the ordinary
-            // expand morph from there.
             UIView.animate(
                 withDuration: Constants.morphSpringResponse,
                 delay: 0,
-                usingSpringWithDamping: 0.8,
+                usingSpringWithDamping: CGFloat(Constants.morphSpringDamping),
                 initialSpringVelocity: 0,
                 options: [.beginFromCurrentState, .curveEaseOut]
             ) {
                 view.transform = .identity
             } completion: { _ in
                 self.setDockAnchorPoint(CGPoint(x: 0.5, y: 0.5), for: view)
-                self.isCollapsed = false
-                self.updateDockFrame()
             }
         }
     }
