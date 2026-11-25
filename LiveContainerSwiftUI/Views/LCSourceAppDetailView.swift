@@ -78,14 +78,15 @@ struct LCSourceAppDetailView: View {
                 }
                 .padding(.vertical, 4)
 
-                // 包名放在图标行下面一行（Ann 2026-11-26）
-                HStack {
-                    Text("lc.sources.detail.bundleId".loc)
-                    Spacer()
+                // 包名放在图标行下面一行，标签和值连在一起写
+                // （Ann 2026-11-26：不要一个最左一个最右分开摆）
+                HStack(spacing: 5) {
+                    Text("lc.sources.detail.bundleId".loc + ":")
                     Text(app.bundleIdentifier)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    Spacer(minLength: 0)
                 }
             }
 
