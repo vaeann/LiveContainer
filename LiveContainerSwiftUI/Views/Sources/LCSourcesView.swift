@@ -15,7 +15,6 @@ import CryptoKit
 struct LCSourcesView: View {
     @StateObject private var viewModel = AltStoreSourcesViewModel()
     @State private var errorMessage: String?
-    @State private var sourcePendingRemoval: AltStoreSourcesViewModel.SourceItem?
     // Must be StateObjects, not ObservedObjects with default
     // instances: the tab view re-creates this view whenever the badge
     // count is published, and an ObservedObject gets swapped for the
@@ -105,26 +104,6 @@ struct LCSourcesView: View {
             Button("lc.common.ok".loc, role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
-        }
-        .alert("lc.sources.removeConfirmation.title".loc, isPresented: Binding(
-            get: { sourcePendingRemoval != nil },
-            set: { if !$0 { sourcePendingRemoval = nil } })
-        ) {
-            Button("lc.common.remove".loc, role: .destructive) {
-                if let sourcePendingRemoval {
-                    viewModel.removeSource(sourcePendingRemoval)
-                }
-                sourcePendingRemoval = nil
-            }
-            Button("lc.common.cancel".loc, role: .cancel) {
-                sourcePendingRemoval = nil
-            }
-        } message: {
-            if let name = sourcePendingRemoval?.displayName {
-                Text("lc.sources.removeConfirmation.message %@".localizeWithFormat(name))
-            } else {
-                Text("lc.sources.removeConfirmation.message %@".localizeWithFormat(""))
-            }
         }
         .sheet(isPresented: $isManagingSources) {
             if #available(iOS 16.0, *) {
@@ -311,11 +290,12 @@ struct LCSourcesView: View {
     /// all sources + one chip per source, scrolling
     /// sideways. The sort button rides at the row's end —
     /// editing the selected source's own mode, or the
-    /// flat list's mode while the all chip is active — and
-    /// a single selected source also gets its refresh /
-    /// remove menu here (they lived in the old section
-    /// headers). Global refresh and add-source stay in
-    /// the toolbar, as before.
+    /// flat list's mode while the all chip is active.
+    /// (A per-source refresh / remove menu briefly lived
+    /// here too; Ann removed it the same evening — refresh
+    /// is the toolbar's refresh-all, removal lives in
+    /// Manage Sources.) Global refresh and add-source
+    /// stay in the toolbar, as before.
     @ViewBuilder
     private var sourcesChipsRow: some View {
         HStack(spacing: 10) {
@@ -338,18 +318,6 @@ struct LCSourcesView: View {
                         sortMode: sortMode(for: item),
                         onSortModeChange: { setSortMode($0, for: item) }
                     )
-                    Menu {
-                        Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise") {
-                            Task { await viewModel.refreshSource(item) }
-                        }
-                        Button("lc.sources.removeSource".loc, systemImage: "trash", role: .destructive) {
-                            sourcePendingRemoval = item
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .imageScale(.large)
-                            .foregroundColor(.secondary)
-                    }
                 }
             } else {
                 LCSourceSortMenuButton(
