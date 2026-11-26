@@ -89,16 +89,23 @@ struct LCSourcesView: View {
                     }
                 }
             }
-            // No .searchable at this level, and no fixed
-            // picker above the segments (Ann 2026-11-26,
-            // settled after four attempts): each segment's
+            // No .searchable at this level. Each segment's
             // scroll view is the navigation view's direct
-            // content — the App page's geometry — with the
-            // picker as its first row and its own drawer
-            // search bar on the scroll view itself. Anything
-            // between the navigation view and the scroll view
-            // (a VStack, a fixed picker) breaks the link the
-            // drawer's hide mechanism needs and pins the bar.
+            // content — the App page's geometry — with its
+            // own drawer search bar on the scroll view
+            // itself, and the picker (plus the sources
+            // segment's chips) in the scroll view's top
+            // safe-area inset: fixed, shared by all three
+            // segments, and outside the scroll flow (Ann
+            // 2026-11-27 — her structure: one picker
+            // switching three pages, instead of a picker
+            // per page; it also takes the sort button out
+            // of the scroll flow, where iOS 26's menu
+            // dismissal made it drift). Nothing wraps the
+            // scroll view — a VStack or fixed view between
+            // it and the navigation view is what broke the
+            // drawer in the four 2026-11-26 attempts; the
+            // inset is the scroll view's own geometry.
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .alert("lc.common.error".loc, isPresented: Binding<Bool>(
@@ -184,8 +191,9 @@ struct LCSourcesView: View {
         }
     }
 
-    /// The segment picker, riding as the first row of
-    /// whichever segment is showing (see the note in body).
+    /// The segment picker: one view, riding in the
+    /// shell's fixed top inset for whichever segment is
+    /// showing (see the note in body).
     @ViewBuilder
     private var segmentPicker: some View {
         if !viewModel.sources.isEmpty || downloadStore.count > 0 {
@@ -228,12 +236,26 @@ struct LCSourcesView: View {
     /// card list, a source's chip shows only that source —
     /// and every card carries its source badge either way
     /// (Ann 2026-11-27: always, no exceptions). The
-    /// chips and rows are direct children of the
-    /// LazyVStack, so rows and icons load as they scroll
-    /// into view and there is no per-source app cap.
+    /// rows are direct children of the LazyVStack, so
+    /// they and their icons load as they scroll into
+    /// view and there is no per-source app cap; the
+    /// chips ride in the shell's fixed header instead
+    /// (Ann 2026-11-27, same day).
     private var sourcesScrollView: some View {
         LCSegmentShell(searchContext: sourcesSearchContext) {
-            segmentPicker
+            VStack(spacing: 0) {
+                segmentPicker
+                // The chips live in the fixed header with
+                // the picker (Ann 2026-11-27) — except
+                // while filtering, when the content below
+                // is the cross-source results and the
+                // chips have nothing to filter.
+                if !viewModel.sources.isEmpty, !viewModel.enabledSources.isEmpty,
+                   !isFiltering(sourcesSearchContext) {
+                    sourcesChipsRow
+                        .padding(.bottom, 8)
+                }
+            }
         } content: {
             if viewModel.sources.isEmpty {
                 emptySourcesView
@@ -248,7 +270,6 @@ struct LCSourcesView: View {
             } else if isFiltering(sourcesSearchContext) {
                 sourcesSearchResultsRows
             } else {
-                sourcesChipsRow
                 if let item = selectedChipItem {
                     sourceErrorCard(item: item)
                     if let source = item.source {
