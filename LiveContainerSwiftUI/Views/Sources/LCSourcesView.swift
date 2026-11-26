@@ -31,7 +31,15 @@ struct LCSourcesView: View {
     // state would go with it — the query must survive
     // segment switches.
     @StateObject private var sourcesSearchContext = SearchContext()
-    @State private var expandedSources: Set<URL> = []
+    /// The sources segment's filter chip (Ann 2026-11-26,
+    /// second redesign round): nil shows every source's
+    /// apps flat; a source's URL shows only that source.
+    /// Session-only — the segment opens on all sources.
+    @State private var selectedSourceChip: URL?
+    /// The all-sources flat list's own sort (the sort
+    /// button edits this while the all chip is active;
+    /// a single source's list uses its per-source mode).
+    @AppStorage("LCSourceAppSortAll") private var allSourcesSortRaw: String = LCSourceAppSort.sourceOrder.rawValue
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
@@ -153,11 +161,6 @@ struct LCSourcesView: View {
                 autoRefreshSourcesIfNeeded()
             }
             publishBadgeCount()
-            // Expansion state deliberately survives tab switches
-            // (Ann 2026-11-24: re-collapsing every source on each
-            // return to this page was a nuisance). Stale entries
-            // for removed sources are pruned by the sources
-            // onChange below.
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .sources, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
@@ -176,8 +179,11 @@ struct LCSourcesView: View {
             publishBadgeCount()
         }
         .onChange(of: viewModel.sources) { newSources in
-            let newSet = Set(newSources.map { $0.id })
-            expandedSources = expandedSources.intersection(newSet)
+            // A removed source's chip falls back to all.
+            if let selectedSourceChip,
+               !newSources.contains(where: { $0.id == selectedSourceChip }) {
+                self.selectedSourceChip = nil
+            }
         }
         .onChange(of: sharedModel.deepLink) { link in
             guard sharedModel.selectedTab == .sources, let link else { return }
@@ -224,9 +230,13 @@ struct LCSourcesView: View {
     /// four-attempt history behind them). While this
     /// segment's query is non-empty the rows swap to flat
     /// cross-source results — the same scroll view, so the
-    /// bar's geometry never changes. In browse mode the
-    /// section headers and app rows are direct children of
-    /// the LazyVStack, so rows and icons load as they scroll
+    /// bar's geometry never changes. Browsing is filtered
+    /// by the chips row (Ann 2026-11-26, second redesign
+    /// round): the all chip flattens every source into one
+    /// card list with source badges, a source's chip shows
+    /// only that source (no badge — the chip says it). The
+    /// chips and rows are direct children of the
+    /// LazyVStack, so rows and icons load as they scroll
     /// into view and there is no per-source app cap.
     private var sourcesScrollView: some View {
         LCSegmentShell(searchContext: sourcesSearchContext) {
@@ -238,40 +248,11 @@ struct LCSourcesView: View {
             } else if isFiltering(sourcesSearchContext) {
                 sourcesSearchResultsRows
             } else {
-                ForEach(viewModel.sources, id: \.id) { item in
-                    let apps = displayedApps(item.source?.apps ?? [], for: item)
-                    AltStoreSourceSectionHeaderView(
-                        item: item,
-                        isExpanded: expandedSources.contains(item.id),
-                        sortMode: sortMode(for: item),
-                        onSortModeChange: { setSortMode($0, for: item) },
-                        onRefresh: { Task { await viewModel.refreshSource(item) } },
-                        onRemove: { sourcePendingRemoval = item },
-                        toggleExpanded: { toggleExpansion(for: item.id) }
-                    )
-                    .padding(.horizontal)
-
-                    if let error = item.error {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("lc.sources.section.error".loc)
-                                .font(.subheadline)
-                                .bold()
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Button("lc.sources.refresh".loc) {
-                                Task { await viewModel.refreshSource(item) }
-                            }
-                            .font(.footnote)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(
-                            RoundedRectangle(cornerRadius: 18)
-                                .fill(Color(uiColor: UIColor.secondarySystemBackground))
-                        )
-                        .padding(.horizontal)
-                    } else if let source = item.source, expandedSources.contains(item.id) {
+                sourcesChipsRow
+                if let item = selectedChipItem {
+                    sourceErrorCard(item: item)
+                    if let source = item.source {
+                        let apps = displayedApps(source.apps, for: item)
                         if apps.isEmpty {
                             Text("lc.sources.section.noApps".loc)
                                 .font(.footnote)
@@ -280,28 +261,171 @@ struct LCSourcesView: View {
                                 .padding(.horizontal)
                         } else {
                             ForEach(apps) { app in
-                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
+                                sourceAppBanner(app: app, source: source, inUpdatesTab: false, cardLayout: true)
                                     .padding(.horizontal)
                             }
                         }
                     }
                     // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
                     // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
-                }
-
-                if totalSourceAppsCount == 0 {
-                    VStack(spacing: 8) {
-                        Text("lc.sources.section.noApps".loc)
-                            .foregroundStyle(.gray)
-                            .multilineTextAlignment(.center)
+                } else {
+                    ForEach(viewModel.sources, id: \.id) { item in
+                        sourceErrorCard(item: item)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 160, alignment: .center)
-                    .padding(.horizontal)
+                    ForEach(allSourcesApps, id: \.app.id) { pair in
+                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true, cardLayout: true)
+                            .padding(.horizontal)
+                    }
+                    if totalSourceAppsCount == 0 {
+                        VStack(spacing: 8) {
+                            Text("lc.sources.section.noApps".loc)
+                                .foregroundStyle(.gray)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 160, alignment: .center)
+                        .padding(.horizontal)
+                    }
                 }
             }
         }
     }
+
+    /// The filter chips (Ann 2026-11-26, second round):
+    /// all sources + one chip per source, scrolling
+    /// sideways. The sort button rides at the row's end —
+    /// editing the selected source's own mode, or the
+    /// flat list's mode while the all chip is active — and
+    /// a single selected source also gets its refresh /
+    /// remove menu here (they lived in the old section
+    /// headers). Global refresh and add-source stay in
+    /// the toolbar, as before.
+    @ViewBuilder
+    private var sourcesChipsRow: some View {
+        HStack(spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    sourceChip(title: "lc.sources.chip.allSources".loc, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
+                        selectedSourceChip = nil
+                    }
+                    ForEach(viewModel.sources, id: \.id) { item in
+                        sourceChip(title: item.source?.name ?? item.displayName, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
+                            selectedSourceChip = item.id
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            if let item = selectedChipItem {
+                if item.source != nil {
+                    LCSourceSortMenuButton(
+                        sortMode: sortMode(for: item),
+                        onSortModeChange: { setSortMode($0, for: item) }
+                    )
+                    Menu {
+                        Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise") {
+                            Task { await viewModel.refreshSource(item) }
+                        }
+                        Button("lc.sources.removeSource".loc, systemImage: "trash", role: .destructive) {
+                            sourcePendingRemoval = item
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .imageScale(.large)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                LCSourceSortMenuButton(
+                    sortMode: allSourcesSortMode,
+                    onSortModeChange: { allSourcesSortRaw = $0.rawValue }
+                )
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private func sourceChip(title: String, iconURL: URL?, systemImage: String?, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let iconURL {
+                    SourceIconView(url: iconURL)
+                        .frame(width: 18, height: 18)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                } else if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(isSelected ? Color.accentColor : Color(uiColor: UIColor.secondarySystemBackground)))
+            .foregroundColor(isSelected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The source behind the active chip, if any.
+    private var selectedChipItem: AltStoreSourcesViewModel.SourceItem? {
+        guard let selectedSourceChip else { return nil }
+        return viewModel.sources.first { $0.id == selectedSourceChip }
+    }
+
+    /// A failed source's error card, shown wherever its
+    /// apps would have been listed.
+    @ViewBuilder
+    private func sourceErrorCard(item: AltStoreSourcesViewModel.SourceItem) -> some View {
+        if let error = item.error {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("lc.sources.section.error".loc)
+                    .font(.subheadline)
+                    .bold()
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("lc.sources.refresh".loc) {
+                    Task { await viewModel.refreshSource(item) }
+                }
+                .font(.footnote)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color(uiColor: UIColor.secondarySystemBackground))
+            )
+            .padding(.horizontal)
+        }
+    }
+
+    /// Every loaded source's apps as one flat list, in
+    /// source order — or, when the flat list's sort says
+    /// so, everything interleaved by latest release date
+    /// (the sort is stable, so same-date apps keep source
+    /// order).
+    private var allSourcesApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
+        var pairs: [(source: AltStoreSource, app: AltStoreSourceApp)] = []
+        for item in viewModel.sources {
+            guard let source = item.source else { continue }
+            for app in source.apps {
+                pairs.append((source: source, app: app))
+            }
+        }
+        if allSourcesSortMode == .recentlyUpdated {
+            pairs.sort { a, b in
+                (a.app.latestVersion?.releaseDate ?? .distantPast) > (b.app.latestVersion?.releaseDate ?? .distantPast)
+            }
+        }
+        return pairs
+    }
+
+    private var allSourcesSortMode: LCSourceAppSort {
+        LCSourceAppSort(rawValue: allSourcesSortRaw) ?? .sourceOrder
+    }
+
 
     /// Flat cross-source results while the sources segment
     /// is filtering; each row is tagged with its source.
@@ -316,7 +440,7 @@ struct LCSourcesView: View {
                 .padding(.horizontal)
         } else {
             ForEach(results, id: \.app.id) { pair in
-                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
+                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true, cardLayout: true)
                     .padding(.horizontal)
             }
         }
@@ -373,7 +497,7 @@ struct LCSourcesView: View {
     // MARK: - Row construction
 
     @ViewBuilder
-    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false, cardLayout: Bool = false) -> some View {
         let installed = installedModel(for: app.bundleIdentifier)
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
@@ -382,6 +506,7 @@ struct LCSourcesView: View {
             app: app,
             source: source,
             showsSourceName: showsSourceName,
+            cardLayout: cardLayout,
             buttonState: state,
             action: {
                 switch state {
@@ -621,16 +746,6 @@ struct LCSourcesView: View {
             payload["version"] = versionString
         }
         NotificationCenter.default.post(name: NSNotification.InstallAppNotification, object: payload)
-    }
-    
-    private func toggleExpansion(for id: URL) {
-        withAnimation(.easeInOut) {
-            if expandedSources.contains(id) {
-                expandedSources.remove(id)
-            } else {
-                expandedSources.insert(id)
-            }
-        }
     }
     
     func handleURL(url : URL) {

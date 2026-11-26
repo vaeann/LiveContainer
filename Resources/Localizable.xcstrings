@@ -30717,6 +30717,29 @@
         }
       }
     },
+    "lc.sources.chip.allSources" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Sources"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部源"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部源"
+          }
+        }
+      }
+    },
     "lc.sources.sort.recent" : {
       "extractionState" : "manual",
       "localizations" : {
