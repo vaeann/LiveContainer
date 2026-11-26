@@ -745,6 +745,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         LCAppGridActions(
             onLaunch: { app, iconRect in gridLaunchApp(app, from: iconRect) },
             onLaunchMultitaskToggle: { app in gridLaunchApp(app, multitask: !(app.shouldLaunchInMultitaskMode)) },
+            onLaunchWindowed: { app in gridLaunchApp(app, multitask: true) },
             onOpenSettings: { app in
                 openNavigationView(view: AnyView(LCAppSettingsView(model: app)))
             },

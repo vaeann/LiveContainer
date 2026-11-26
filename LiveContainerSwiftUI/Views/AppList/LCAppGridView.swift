@@ -17,6 +17,12 @@ struct LCAppGridActions {
     // a running app's window grows out of it (iOS-style entrance).
     let onLaunch: (LCAppModel, CGRect?) -> Void
     let onLaunchMultitaskToggle: (LCAppModel) -> Void
+    /// Double-tap: always launch windowed (Ann 2026-11-27,
+    /// replacing double-tap-opens-settings in both the
+    /// grid and the list; settings stays in the long-press
+    /// menu). Not the toggle above — the gesture means
+    /// "windowed", whatever the app's default mode is.
+    let onLaunchWindowed: (LCAppModel) -> Void
     let onOpenSettings: (LCAppModel) -> Void
     let onOpenDataFolder: (LCAppModel) -> Void
     let onCopyLaunchUrl: (LCAppModel) -> Void
@@ -190,7 +196,7 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     private var launchSink: AnyCancellable?
 
     private var onLaunch: ((CGRect?) -> Void)?
-    private var onOpenSettings: (() -> Void)?
+    private var onLaunchWindowed: (() -> Void)?
     private var onClose: (() -> Void)?
     private var menuProvider: (() -> UIMenu)?
 
@@ -253,11 +259,11 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     func configure(icon: UIImage, iconSize: CGFloat, showBadge: Bool, ribbon: RibbonSpec,
                    isLaunching: Bool, app: LCAppModel,
                    onLaunch: @escaping (CGRect?) -> Void,
-                   onOpenSettings: @escaping () -> Void,
+                   onLaunchWindowed: @escaping () -> Void,
                    onClose: @escaping () -> Void,
                    menuProvider: @escaping () -> UIMenu) {
         self.onLaunch = onLaunch
-        self.onOpenSettings = onOpenSettings
+        self.onLaunchWindowed = onLaunchWindowed
         self.onClose = onClose
         self.menuProvider = menuProvider
         updateModelLaunching(isLaunching)
@@ -465,17 +471,17 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         return true
     }
 
-    @objc private func handleSingleTap() {
-        // Latch the launch dim NOW, before the launch flow
-        // starts: the model's flag only engages halfway
-        // through runApp, and the press dim's linger may
-        // already be spent by the time it does — the gap
-        // between them was the flash (Ann 2026-11-27). The
-        // latch hands over when the flag engages (see
-        // updateModelLaunching); the 2s safety release
-        // covers taps that never engage it (the app was
-        // already on stage, auth was declined, the
-        // run-anyway alert was dismissed).
+    /// Latch the launch dim NOW, before the launch flow
+    /// starts: the model's flag only engages halfway
+    /// through runApp, and the press dim's linger may
+    /// already be spent by the time it does — the gap
+    /// between them was the flash (Ann 2026-11-27). The
+    /// latch hands over when the flag engages (see
+    /// updateModelLaunching); the 2s safety release
+    /// covers launches that never engage it (the app was
+    /// already on stage, auth was declined, the
+    /// run-anyway alert was dismissed).
+    private func latchLaunchDim() {
         optimisticLaunch = true
         applyDim()
         optimisticWorkItem?.cancel()
@@ -486,6 +492,10 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         }
         optimisticWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+    }
+
+    @objc private func handleSingleTap() {
+        latchLaunchDim()
         // The tapped icon's frame in window coordinates: a running
         // app's window grows out of it (iOS-style entrance).
         let rect = iconContainer.convert(iconContainer.bounds, to: nil)
@@ -493,7 +503,12 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     }
 
     @objc private func handleDoubleTap() {
-        onOpenSettings?()
+        // Double-tap launches windowed (Ann 2026-11-27;
+        // it opened settings in the upstream banner this
+        // grid's interactions were copied from — settings
+        // stays in the long-press menu).
+        latchLaunchDim()
+        onLaunchWindowed?()
     }
 
     @objc private func handleBadgeTap() {
@@ -578,7 +593,7 @@ private struct LCGridIconHost: UIViewRepresentable {
             isLaunching: app.isAppRunning,
             app: app,
             onLaunch: { rect in actions.onLaunch(app, rect) },
-            onOpenSettings: { actions.onOpenSettings(app) },
+            onLaunchWindowed: { actions.onLaunchWindowed(app) },
             onClose: { actions.onCloseRunning(app) },
             menuProvider: { Self.buildMenu(app: app, actions: actions, onUninstall: onUninstall) }
         )

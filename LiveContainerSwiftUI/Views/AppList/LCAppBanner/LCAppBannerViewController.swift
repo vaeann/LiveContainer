@@ -125,7 +125,17 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
         guard !bannerView.runControl.bounds.contains(location) else {
             return
         }
-        openSettings()
+        // Double-tap launches windowed (Ann 2026-11-27,
+        // both list and grid; upstream had it open
+        // settings — settings stays in the long-press
+        // menu). runApp falls back gracefully where
+        // windowed mode cannot apply (classic-mode apps
+        // force classic inside runApp; pre-iOS 16 takes
+        // the classic path), and an already-windowed app
+        // is brought to the front by runApp's own check.
+        Task { [weak self] in
+            await self?.runApp(multitask: true)
+        }
     }
 
     @objc private func runButtonTapped() {
