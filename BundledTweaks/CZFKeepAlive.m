@@ -331,9 +331,8 @@ static void CZFStopKeepAlive(NSString *reason) {
         [gLimitTimer invalidate];
         gLimitTimer = nil;
         [gPlayer pause];
-        [[AVAudioSession sharedInstance] setActive:NO
-                                       withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                                             error:nil];
+        // 不关音频会话：会话是游客 App 自己的，关掉会打断它正在放的声音；
+        // 保活停播只暂停自己的静音播放器，会话开关留给 App 管。
         CZFWriteState();
     } @catch (__unused NSException *e) {}
 }
