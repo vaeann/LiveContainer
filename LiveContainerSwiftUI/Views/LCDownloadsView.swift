@@ -10,10 +10,17 @@
 //  tap an interrupted download to resume it.
 //
 //  Search (Ann 2026-11-26): like the other two segments, this
-//  segment's list is the navigation view's direct content
-//  with the segment picker as its first row and its own
-//  drawer search bar, filtering only this library by app
-//  name / bundle id and keeping its own query.
+//  segment rides the shared segment shell (LCSegmentShell) —
+//  the picker as first row, its own drawer search bar,
+//  filtering only this library by app name / bundle id and
+//  keeping its own query. Until the 2026-11-26 stage-3
+//  refactor this segment was a List while the others were
+//  scroll views, which put its picker lower and narrower
+//  than theirs; on the shell all three are the same
+//  geometry by construction. The List's inset-grouped card
+//  is reproduced by hand below, and swipe-to-delete by
+//  LCSwipeToDeleteRow (List-only .swipeActions does not
+//  exist on a scroll view).
 //
 
 import SwiftUI
@@ -37,7 +44,9 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     @EnvironmentObject private var downloadHelper: DownloadHelper
     @State private var showClearAllConfirm = false
     @State private var packageToShare: LCDownloadedPackage?
-    @State private var listViewportHeight: CGFloat = 0
+    /// The one row whose delete action is currently
+    /// revealed; opening one row closes the others.
+    @State private var openRowID: LCDownloadedPackage.ID?
 
     init(searchContext: SearchContext, @ViewBuilder segmentPicker: () -> SegmentPicker) {
         self.searchContext = searchContext
@@ -65,95 +74,68 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         }
     }
 
-    /// The drawer search bar can only hide when the list can
-    /// scroll — the same physics as the sources page. A short
-    /// library leaves the list shorter than the screen, so a
-    /// clear tail row pads the content to a hair past the
-    /// viewport. The estimate must err LOW: the spacer tops
-    /// the content up by (viewport + 1 − estimate), so an
-    /// estimate higher than the real content (rows run about
-    /// 60pt, the picker and headers about 100) still leaves
-    /// the list short of the screen and the bar pinned, while
-    /// a low estimate only adds invisible tail.
-    private var tailSpacerHeight: CGFloat {
-        let estimatedContent = 60 + CGFloat(filteredPackages.count) * 56
-        return max(0, listViewportHeight + 1 - estimatedContent)
-    }
-
     var body: some View {
-        Group {
+        LCSegmentShell(searchContext: searchContext) {
+            segmentPicker
+        } content: {
             if store.packages.isEmpty {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        segmentPicker
-                        VStack(spacing: 12) {
-                            Image(systemName: "arrow.down.doc")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text("lc.downloads.empty".loc)
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding()
-                        .padding(.top, 48)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    }
+                VStack(spacing: 12) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("lc.downloads.empty".loc)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
                 }
+                .padding()
+                .padding(.top, 48)
+                .frame(maxWidth: .infinity, alignment: .center)
+            } else if isFiltering && filteredPackages.isEmpty {
+                Text("lc.sources.search.noResults".loc)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                    .padding(.horizontal)
             } else {
-                List {
-                    Section {
-                        segmentPicker
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
+                VStack(spacing: 8) {
+                    // Total size and clear-all describe the
+                    // whole library; over a filtered list they
+                    // would mislead, so the header steps aside
+                    // while filtering.
+                    if !isFiltering {
+                        HStack {
+                            Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("lc.downloads.clearAll".loc) {
+                                showClearAllConfirm = true
+                            }
+                            .foregroundStyle(.red)
+                        }
+                        .font(.footnote)
+                        .padding(.horizontal)
                     }
 
-                    if isFiltering && filteredPackages.isEmpty {
-                        Section {
-                            Text("lc.sources.search.noResults".loc)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        Section {
-                            ForEach(filteredPackages) { record in
+                    // The inset-grouped card, by hand: one
+                    // rounded stack, dividers inset past the
+                    // icons, rows sliding over it to delete.
+                    VStack(spacing: 0) {
+                        ForEach(filteredPackages) { record in
+                            if record.id != filteredPackages.first?.id {
+                                Divider()
+                                    .padding(.leading, 68)
+                            }
+                            LCSwipeToDeleteRow(rowID: record.id, openRowID: $openRowID, onDelete: {
+                                store.remove(record)
+                            }) {
                                 row(for: record)
                             }
-                        } header: {
-                            // Total size and clear-all describe
-                            // the whole library; over a filtered
-                            // list they would mislead, so the
-                            // header steps aside while filtering.
-                            if !isFiltering {
-                                HStack {
-                                    Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
-                                    Spacer()
-                                    Button("lc.downloads.clearAll".loc) {
-                                        showClearAllConfirm = true
-                                    }
-                                    .font(.footnote)
-                                    .textCase(nil)
-                                }
-                            }
                         }
                     }
-
-                    if tailSpacerHeight > 0 {
-                        Section {
-                            Color.clear
-                                .frame(height: tailSpacerHeight)
-                                .listRowInsets(EdgeInsets())
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        }
-                    }
+                    .background(RoundedRectangle(cornerRadius: 18).fill(Color(uiColor: UIColor.secondarySystemBackground)))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .padding(.horizontal)
                 }
-                .listStyle(.insetGrouped)
-                .searchable(text: $searchContext.query)
-                .background(GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { listViewportHeight = proxy.size.height }
-                        .onChange(of: proxy.size.height) { listViewportHeight = $0 }
-                })
             }
         }
         .alert("lc.downloads.clearAll".loc, isPresented: $showClearAllConfirm) {
@@ -221,17 +203,14 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 .buttonStyle(.plain)
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .onTapGesture {
             if record.isComplete {
                 NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
             } else {
                 downloadHelper.resumeDownload(record: record)
-            }
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button("lc.downloads.delete".loc, role: .destructive) {
-                store.remove(record)
             }
         }
         .contextMenu {
@@ -297,5 +276,111 @@ struct LCDownloadsView<SegmentPicker: View>: View {
 
     static func formatSize(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+/// A downloads row that reveals a destructive delete
+/// button on a left swipe — the scroll-view stand-in for
+/// List's .swipeActions (stage-3 refactor, Ann approved
+/// the plan 2026-11-26). The drag claims the row only
+/// when it is clearly horizontal (width past 1.5× the
+/// height), so vertical scrolling keeps the row; past
+/// the button's width the row stays open, a hard swipe
+/// (180pt) deletes outright like a full swipe in a List,
+/// and tapping an open row closes it instead of acting.
+private struct LCSwipeToDeleteRow<Content: View>: View {
+    let rowID: LCDownloadedPackage.ID
+    @Binding var openRowID: LCDownloadedPackage.ID?
+    let onDelete: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var dragOffset: CGFloat = 0
+    @State private var dragIsHorizontal: Bool?
+    /// Offset the current drag started from (0 or
+    /// -actionWidth), captured when the drag is claimed:
+    /// openRowID — and with it isOpen — only settles when
+    /// the drag ends, so the live offset must be computed
+    /// from this, not from isOpen.
+    @State private var dragBase: CGFloat = 0
+
+    private let actionWidth: CGFloat = 78
+
+    private var isOpen: Bool {
+        openRowID == rowID
+    }
+
+    private var displayOffset: CGFloat {
+        if dragIsHorizontal == true {
+            return dragBase + dragOffset
+        }
+        return isOpen ? -actionWidth : 0
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.body)
+                    .foregroundStyle(.white)
+                    .frame(width: actionWidth)
+                    .frame(maxHeight: .infinity)
+            }
+            .background(Color.red)
+
+            ZStack {
+                content()
+                if isOpen {
+                    // An open row's next tap closes it; it
+                    // must not fall through to the row's own
+                    // install / resume action.
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture { close() }
+                }
+            }
+            .background(Color(uiColor: UIColor.secondarySystemBackground))
+            .offset(x: displayOffset)
+            .gesture(rowDrag)
+        }
+        .clipped()
+    }
+
+    private func close() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            openRowID = nil
+        }
+    }
+
+    private var rowDrag: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                if dragIsHorizontal == nil {
+                    let w = abs(value.translation.width)
+                    let h = abs(value.translation.height)
+                    if w > h * 1.5 && w > 8 {
+                        dragIsHorizontal = true
+                        dragBase = isOpen ? -actionWidth : 0
+                    } else if h > 12 {
+                        dragIsHorizontal = false
+                    }
+                }
+                guard dragIsHorizontal == true else { return }
+                let total = dragBase + value.translation.width
+                dragOffset = min(max(total, -actionWidth - 24), 0) - dragBase
+            }
+            .onEnded { value in
+                defer { dragIsHorizontal = nil }
+                guard dragIsHorizontal == true else { return }
+                let total = dragBase + value.translation.width
+                if value.translation.width < -180 {
+                    onDelete()
+                    return
+                }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    dragOffset = 0
+                    openRowID = total < -actionWidth / 2 ? rowID : nil
+                }
+            }
     }
 }
