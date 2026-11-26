@@ -215,15 +215,36 @@ struct LCSourceAppBanner: View {
 
     private var sourceTag: some View {
         // The badge wears the source's own assigned color
-        // (Ann 2026-11-26): light fill, full-strength
-        // text — the manage sheet's built-in badge style.
-        Text(source.name)
+        // as a SOLID fill (Ann 2026-11-27, her pick over a
+        // neutral chip and a deepened light fill): the
+        // earlier light fill + full-strength text was
+        // mixed for the manage sheet's neutral ground and
+        // washed out on the cards' tinted wash whenever
+        // the badge and card hues came close. A solid fill
+        // carries its own contrast — the text is black or
+        // white by the fill's own luminance — so the
+        // badge reads the same on every card color, and
+        // the source keeps its full color identity.
+        let fill = source.badgeColor ?? Color.primary
+        return Text(source.name)
             .font(.system(size: 9, weight: .semibold))
-            .foregroundColor(source.badgeColor ?? textColor)
+            .foregroundColor(Self.badgeTextColor(for: fill))
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(Capsule().fill((source.badgeColor ?? Color.primary).opacity(source.badgeColor == nil ? 0.08 : 0.15)))
+            .background(Capsule().fill(fill))
+    }
+
+    /// Black on luminous fills, white on the rest — the
+    /// badge palette (twelve hues at saturation 0.62,
+    /// lightness 0.42) splits cleanly at this line: the
+    /// golds and greens take black, the blues, purples
+    /// and reds take white.
+    private static func badgeTextColor(for color: Color) -> Color {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luminance > 0.45 ? .black : .white
     }
 
     private var betaBadge: some View {
