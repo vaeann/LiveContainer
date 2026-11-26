@@ -150,6 +150,12 @@ final class SourceIconCache: ObservableObject {
 struct SourceIconView: View {
     let url: URL?
     @State private var image: UIImage?
+    /// The URL the currently shown image belongs to: a
+    /// retry-generation bump re-runs the load for the SAME
+    /// url, and the old image stays up until the new load
+    /// lands — clearing it would blink every visible icon
+    /// to the placeholder on each manual refresh.
+    @State private var loadedURL: URL?
     @ObservedObject private var cache = SourceIconCache.shared
 
     /// The load task's identity: the URL, plus the cache's
@@ -171,9 +177,15 @@ struct SourceIconView: View {
             }
         }
         .task(id: LoadID(url: url, generation: cache.retryGeneration)) {
-            image = nil
-            guard let url else { return }
+            if loadedURL != url {
+                image = nil
+            }
+            guard let url else {
+                loadedURL = nil
+                return
+            }
             image = await SourceIconCache.shared.image(for: url)
+            loadedURL = url
         }
     }
 
