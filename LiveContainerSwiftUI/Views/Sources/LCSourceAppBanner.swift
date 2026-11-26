@@ -16,8 +16,6 @@ struct AltStoreSourceSectionHeaderView: View {
     let isExpanded: Bool
     let sortMode: LCSourceAppSort
     let onSortModeChange: (LCSourceAppSort) -> Void
-    let todayFilterOn: Bool
-    let onToggleTodayFilter: () -> Void
     let onRefresh: () -> Void
     let onRemove: () -> Void
     let toggleExpanded: () -> Void
@@ -45,9 +43,7 @@ struct AltStoreSourceSectionHeaderView: View {
                         if item.source != nil {
                             LCSourceSortMenuButton(
                                 sortMode: sortMode,
-                                onSortModeChange: onSortModeChange,
-                                todayFilterOn: todayFilterOn,
-                                onToggleTodayFilter: onToggleTodayFilter
+                                onSortModeChange: onSortModeChange
                             )
                         }
                         Menu {

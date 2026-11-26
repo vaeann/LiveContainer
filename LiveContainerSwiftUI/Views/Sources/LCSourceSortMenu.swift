@@ -11,28 +11,23 @@
 import Foundation
 import SwiftUI
 
-/// Sort + today-filter popover for one source.
-///
-/// - The four sorts are a radio group: each row leads
-///   with a 20pt ring — stroked and empty when
-///   unselected, solid accent with NO check when
-///   selected. Unselected rows keep the ring slot, so
-///   the text never shifts sideways.
-/// - "Today's updates" below the divider is a toggle,
-///   not a radio: its ring fills WITH a white check
-///   when on, so on/off and single-select read
-///   differently at a glance.
+/// Sort popover for one source: the four sorts as a
+/// radio group. Each row leads with a 20pt ring —
+/// stroked and empty when unselected, solid accent
+/// with NO check when selected. Unselected rows keep
+/// the ring slot, so the text never shifts sideways.
+/// (A "today's updates" filter briefly shared this
+/// card; Ann removed it the same day — a filter does
+/// not belong inside a sort menu.)
 ///
 /// Behavior is unchanged from the Menu it replaces:
-/// the sort persists per source, the today filter is
-/// session-only (both live in LCSourcesView), and the
-/// popover supplies what the Menu used to — outside-tap
+/// the sort persists per source (storage lives in
+/// LCSourcesView / LCSourceAppSort), and the popover
+/// supplies what the Menu used to — outside-tap
 /// dismissal and the presentation animation.
 struct LCSourceSortMenuButton: View {
     let sortMode: LCSourceAppSort
     let onSortModeChange: (LCSourceAppSort) -> Void
-    let todayFilterOn: Bool
-    let onToggleTodayFilter: () -> Void
 
     @State private var isPresented = false
 
@@ -40,7 +35,10 @@ struct LCSourceSortMenuButton: View {
         Button {
             isPresented = true
         } label: {
-            Image(systemName: "arrow.up.arrow.down.circle")
+            // Same glyph as the App page's sort menu
+            // (top-right), so sorting reads the same
+            // across the app.
+            Image(systemName: "line.3.horizontal.decrease.circle")
                 .imageScale(.large)
                 .foregroundColor(.secondary)
         }
@@ -59,12 +57,6 @@ struct LCSourceSortMenuButton: View {
                     isPresented = false
                 }
             }
-            Divider()
-                .padding(.vertical, 5)
-            row(title: "lc.sources.filter.today".loc, ring: todayFilterOn ? .checked : .empty) {
-                onToggleTodayFilter()
-                isPresented = false
-            }
         }
         .padding(8)
         .frame(width: 224)
@@ -73,7 +65,6 @@ struct LCSourceSortMenuButton: View {
     private enum Ring {
         case empty
         case filled
-        case checked
     }
 
     private func row(title: String, ring: Ring, action: @escaping () -> Void) -> some View {
@@ -87,12 +78,6 @@ struct LCSourceSortMenuButton: View {
                     case .filled:
                         Circle()
                             .fill(Color.accentColor)
-                    case .checked:
-                        Circle()
-                            .fill(Color.accentColor)
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
                     }
                 }
                 .frame(width: 20, height: 20)
