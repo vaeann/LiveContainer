@@ -125,7 +125,7 @@ struct LCSourceAppBanner: View {
                         .frame(width: 70)
                 }
             }
-            .alignmentGuide(.center) { _ in 16 }
+            .alignmentGuide(VerticalAlignment.center) { _ in 16 }
         }
         .padding(12)
         .background {
