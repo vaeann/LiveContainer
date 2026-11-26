@@ -94,11 +94,12 @@ struct LCMultitaskSettingView: View {
                 Text("lc.settings.dock.gestureGuide".loc)
                     .font(.footnote)
                     .foregroundColor(.secondary)
-                // The color opens a sheet of handle-scene
-                // cards instead of a plain list (Ann
-                // 2026-11-27: the list was ugly, and she
-                // wanted every color previewed as the
-                // handle itself). Picking writes through
+                // The color opens a sheet of round
+                // swatches instead of a plain list (Ann
+                // 2026-11-27: the list was ugly; a
+                // handle-scene card grid was drawn and
+                // tried first, then she settled on the
+                // round swatches). Picking writes through
                 // at once — the resting handle recolors
                 // immediately (see the manager's defaults
                 // observer), so there is no preview strip
@@ -132,34 +133,29 @@ struct LCMultitaskSettingView: View {
 }
 
 /// The breathing-light color sheet (Ann 2026-11-27): a
-/// grid of handle-scene cards — a dark tile, a glass
-/// handle flush on its right edge, the grip in the
-/// preset's color — instead of a list of names. Tapping
-/// a card writes the choice through immediately (the
-/// resting handle recolors on the spot via the dock
-/// manager's defaults observer); the sheet stays open
-/// so colors can be tried one after another, and the
-/// selected card's grip breathes like the real one.
+/// grid of round swatches — the iOS color-picker idiom —
+/// with the name under each; the selected swatch wears
+/// a ring in its own color. Tapping writes the choice
+/// through immediately (the resting handle recolors on
+/// the spot via the dock manager's defaults observer);
+/// the sheet stays open so colors can be tried one
+/// after another. (A handle-scene card grid was built
+/// first the same night; she picked the swatches.)
 private struct LCBreathingLightColorSheet: View {
     @Binding var selection: String
     @Environment(\.dismiss) private var dismiss
-    @State private var pulseOn = false
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-    ]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
 
     var body: some View {
         NavigationView {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 10) {
+                LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(LCBreathingLightColor.allCases, id: \.rawValue) { preset in
                         Button {
                             selection = preset.rawValue
                         } label: {
-                            card(preset)
+                            swatch(preset)
                         }
                         .buttonStyle(.plain)
                     }
@@ -176,65 +172,40 @@ private struct LCBreathingLightColorSheet: View {
                 }
             }
         }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.15).repeatForever(autoreverses: true)) {
-                pulseOn = true
-            }
-        }
     }
 
-    private func card(_ preset: LCBreathingLightColor) -> some View {
+    private func swatch(_ preset: LCBreathingLightColor) -> some View {
         let selected = selection == preset.rawValue
-        let gripColor = preset.uiColor.map { Color($0) } ?? Color.black.opacity(0.4)
-        return ZStack(alignment: .bottomLeading) {
-            Color(red: 0.09, green: 0.095, blue: 0.11)
-            // The mini handle, flush with the tile's
-            // right edge.
-            HStack {
-                Spacer()
-                ZStack {
-                    LCHandlePreviewShape()
-                        .fill(Color.white.opacity(0.14))
-                    LCHandlePreviewShape()
-                        .stroke(Color.white.opacity(0.25), lineWidth: 1)
-                    Capsule()
-                        .fill(gripColor)
-                        .frame(width: 4, height: 20)
-                        .opacity(selected ? (pulseOn ? 1 : 0.38) : 1)
+        return VStack(spacing: 5) {
+            ZStack {
+                if preset == .standard {
+                    // No color of its own: a pale disc
+                    // standing for the platform default.
+                    Circle()
+                        .fill(LinearGradient(colors: [Color.white, Color.gray.opacity(0.55)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                } else {
+                    Circle()
+                        .fill(preset.color)
                 }
-                .frame(width: 15, height: 44)
             }
+            .frame(width: 36, height: 36)
+            .overlay(
+                Circle()
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .overlay(
+                // The selection ring sits a breath
+                // outside the disc, in the swatch's own
+                // color (a neutral ring for standard).
+                Circle()
+                    .stroke(preset == .standard ? Color.primary : preset.color, lineWidth: 2)
+                    .padding(-4)
+                    .opacity(selected ? 1 : 0)
+            )
             Text(preset.labelKey.loc)
                 .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                .foregroundColor(selected ? .white : Color.white.opacity(0.75))
-                .padding(.leading, 8)
-                .padding(.bottom, 5)
+                .foregroundColor(selected ? .primary : .secondary)
         }
-        .frame(height: 58)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(selected ? (preset == .standard ? Color.white.opacity(0.85) : gripColor) : Color.clear, lineWidth: 2)
-        )
-    }
-}
-
-/// A handle silhouette for the picker cards: square on
-/// the right (it sits flush with the tile's edge),
-/// rounded on the left.
-private struct LCHandlePreviewShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let r: CGFloat = 6
-        var path = Path()
-        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX + r, y: rect.minY))
-        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.minY + r),
-                          control: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - r))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.maxY),
-                          control: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.closeSubpath()
-        return path
     }
 }
