@@ -172,6 +172,7 @@ private struct LCBreathingLightColorSheet: View {
                 }
             }
         }
+        .modifier(LCBreathingSheetHeight())
     }
 
     private func swatch(_ preset: LCBreathingLightColor) -> some View {
@@ -206,6 +207,25 @@ private struct LCBreathingLightColorSheet: View {
             Text(preset.labelKey.loc)
                 .font(.system(size: 11, weight: selected ? .semibold : .regular))
                 .foregroundColor(selected ? .primary : .secondary)
+        }
+    }
+}
+
+/// Fit the color sheet to its content (Ann 2026-11-27:
+/// the full-height sheet left most of the bottom
+/// empty). The grid is fixed — fifteen swatches, five
+/// across, three rows — so the height is a constant:
+/// nav bar + three rows of disc + name + padding.
+/// Detents are iOS 16+; on 15 the sheet stays
+/// full-height, as sheets were.
+private struct LCBreathingSheetHeight: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
+        } else {
+            content
         }
     }
 }
