@@ -13,7 +13,13 @@ import UIKit
 struct LCSourceAppDetailView: View {
     let app: AltStoreSourceApp
     let source: AltStoreSource
-    let buttonState: LCSourceAppButtonState
+    /// Asked fresh on every render — the button state
+    /// from when this page was opened goes stale the
+    /// moment the app is installed from here (it kept
+    /// saying Get, and tapping installed it again).
+    /// Observing the shared model below is what makes
+    /// the page re-render when an install lands.
+    let stateProvider: () -> LCSourceAppButtonState
     let action: () -> Void
     let copyAction: () -> Void
     let installVersionAction: (AltStoreSourceAppVersion) -> Void
@@ -21,7 +27,12 @@ struct LCSourceAppDetailView: View {
     @State private var copied = false
     @State private var headerTextHeight: CGFloat = 0
     @EnvironmentObject private var downloadHelper: DownloadHelper
+    @EnvironmentObject private var sharedModel: SharedModel
     @AppStorage("dynamicColors") private var dynamicColors = true
+
+    private var liveButtonState: LCSourceAppButtonState {
+        stateProvider()
+    }
 
     /// 与列表行完全同款的按钮颜色（Ann 2026-11-26）：列表用 App 的
     /// 主题色，详情页之前写死 FontColor，同一个按钮两个颜色不协调。
@@ -103,7 +114,7 @@ struct LCSourceAppDetailView: View {
                     .buttonStyle(.plain)
                     LCSourceInstallButton(
                         app: app,
-                        buttonState: buttonState,
+                        buttonState: liveButtonState,
                         tint: primaryColor,
                         action: action
                     )

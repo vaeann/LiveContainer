@@ -23,6 +23,12 @@ struct LCSourceAppBanner: View {
     /// via the chip.
     var showsSourceName: Bool = false
     let buttonState: LCSourceAppButtonState
+    /// Re-asks for the button state whenever the detail
+    /// page renders: the row's own button uses the value
+    /// above (the list re-renders often enough), but the
+    /// pushed detail page would otherwise keep the state
+    /// from the moment it was opened.
+    let liveState: () -> LCSourceAppButtonState
     let action: () -> Void
     let copyAction: () -> Void
     let ignoreAction: (() -> Void)?
@@ -168,7 +174,7 @@ struct LCSourceAppBanner: View {
                 LCSourceAppDetailView(
                     app: app,
                     source: source,
-                    buttonState: buttonState,
+                    stateProvider: liveState,
                     action: action,
                     copyAction: copyAction,
                     installVersionAction: installVersionAction

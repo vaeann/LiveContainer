@@ -505,19 +505,32 @@ struct LCSourcesView: View {
 
     // MARK: - Row construction
 
-    @ViewBuilder
-    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
+    /// The button state for an app, computed fresh on
+    /// every call: the detail page asks again each time
+    /// it renders (and again when its button is tapped),
+    /// so installing from the detail page flips its
+    /// button to Open instead of leaving the snapshot
+    /// taken when the page was opened (Ann 2026-11-26
+    /// audit).
+    private func currentButtonState(for app: AltStoreSourceApp, inUpdatesTab: Bool) -> LCSourceAppButtonState {
         let installed = installedModel(for: app.bundleIdentifier)
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
-        let state: LCSourceAppButtonState = installed == nil ? .get : (update && (inUpdatesTab || !ignored) ? .update : .open)
+        return installed == nil ? .get : (update && (inUpdatesTab || !ignored) ? .update : .open)
+    }
+
+    @ViewBuilder
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
+        let update = hasUpdate(for: app)
+        let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
         LCSourceAppBanner(
             app: app,
             source: source,
             showsSourceName: showsSourceName,
-            buttonState: state,
+            buttonState: currentButtonState(for: app, inUpdatesTab: inUpdatesTab),
+            liveState: { currentButtonState(for: app, inUpdatesTab: inUpdatesTab) },
             action: {
-                switch state {
+                switch currentButtonState(for: app, inUpdatesTab: inUpdatesTab) {
                 case .open:
                     launchInstalledApp(app)
                 case .get, .update:
