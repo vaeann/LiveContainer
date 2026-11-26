@@ -2,10 +2,12 @@
 //  LCSourceSortMenu.swift
 //  LiveContainerSwiftUI
 //
-//  The source section header's sort control (Ann
-//  2026-11-26): a system Menu + Picker exactly like
-//  the App page's top-right sort menu — rows carry an
-//  icon and the selection takes the system check.
+//  The sources page's sort control (Ann 2026-11-26;
+//  moved into the toolbar's glass pill beside the add
+//  button 2026-11-27): a system Menu + Picker exactly
+//  like the App page's top-right sort menu — rows
+//  carry an icon and the selection takes the system
+//  check.
 //  (A custom ring popover briefly replaced the system
 //  menu; Ann then asked for the App page's own menu
 //  style, and for the name/size sorts to go, leaving

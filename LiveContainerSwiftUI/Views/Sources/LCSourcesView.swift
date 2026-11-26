@@ -84,8 +84,27 @@ struct LCSourcesView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("lc.sources.addSource".loc, systemImage: "plus") {
-                        isManagingSources = true
+                    // One liquid-glass pill, two buttons
+                    // (Ann 2026-11-27, her placement): the
+                    // sort menu on the left, add-source on
+                    // the right. The toolbar never scrolls,
+                    // so the menu's anchor stays out of the
+                    // scroll flow — the drift that two
+                    // in-content fixes could not cure (the
+                    // iOS 26 menu-dismissal snapshot lagging
+                    // a scrolling anchor) cannot happen up
+                    // here, exactly like the App page's sort
+                    // menu. The sort half only exists on the
+                    // sources segment: updates and downloads
+                    // have nothing to sort, and their pill
+                    // shrinks to the add button alone.
+                    HStack(spacing: 0) {
+                        if selectedSegment == 0, !viewModel.enabledSources.isEmpty {
+                            sortMenuButton
+                        }
+                        Button("lc.sources.addSource".loc, systemImage: "plus") {
+                            isManagingSources = true
+                        }
                     }
                 }
             }
@@ -291,46 +310,53 @@ struct LCSourcesView: View {
         }
     }
 
-    /// The filter chips (Ann 2026-11-26, second round):
-    /// all sources + one chip per source, scrolling
-    /// sideways. The sort button rides at the row's end —
-    /// editing the selected source's own mode, or the
-    /// flat list's mode while the all chip is active.
-    /// (A per-source refresh / remove menu briefly lived
-    /// here too; Ann removed it the same evening — removal
-    /// lives in Manage Sources, and the toolbar refresh
-    /// turns single-source while a chip is selected.)
-    /// Global refresh and add-source stay in the toolbar,
-    /// as before.
+    /// The toolbar's sort menu: edits the selected
+    /// chip's source, or the flat list's mode while the
+    /// all chip is active — the same wiring the button
+    /// used in the chips row before it moved up (Ann
+    /// 2026-11-27). A selected source that has not
+    /// loaded (or failed) offers no sort, as before.
     @ViewBuilder
-    private var sourcesChipsRow: some View {
-        HStack(spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    sourceChip(title: "lc.sources.chip.allSources".loc, count: totalSourceAppsCount, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
-                        selectedSourceChip = nil
-                    }
-                    ForEach(viewModel.enabledSources, id: \.id) { item in
-                        sourceChip(title: item.source?.name ?? item.displayName, count: item.source?.apps.count ?? 0, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
-                            selectedSourceChip = item.id
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            if let item = selectedChipItem {
-                if item.source != nil {
-                    LCSourceSortMenuButton(
-                        sortMode: sortMode(for: item),
-                        onSortModeChange: { setSortMode($0, for: item) }
-                    )
-                }
-            } else {
+    private var sortMenuButton: some View {
+        if let item = selectedChipItem {
+            if item.source != nil {
                 LCSourceSortMenuButton(
-                    sortMode: allSourcesSortMode,
-                    onSortModeChange: { allSourcesSortRaw = $0.rawValue }
+                    sortMode: sortMode(for: item),
+                    onSortModeChange: { setSortMode($0, for: item) }
                 )
             }
+        } else {
+            LCSourceSortMenuButton(
+                sortMode: allSourcesSortMode,
+                onSortModeChange: { allSourcesSortRaw = $0.rawValue }
+            )
+        }
+    }
+
+    /// The filter chips (Ann 2026-11-26, second round):
+    /// all sources + one chip per source, scrolling
+    /// sideways, the whole row theirs since the sort
+    /// button moved into the toolbar's glass pill (Ann
+    /// 2026-11-27). (A per-source refresh / remove menu
+    /// briefly lived here too; Ann removed it the same
+    /// evening — removal lives in Manage Sources, and
+    /// the toolbar refresh turns single-source while a
+    /// chip is selected.) Global refresh and add-source
+    /// stay in the toolbar, as before.
+    @ViewBuilder
+    private var sourcesChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                sourceChip(title: "lc.sources.chip.allSources".loc, count: totalSourceAppsCount, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
+                    selectedSourceChip = nil
+                }
+                ForEach(viewModel.enabledSources, id: \.id) { item in
+                    sourceChip(title: item.source?.name ?? item.displayName, count: item.source?.apps.count ?? 0, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
+                        selectedSourceChip = item.id
+                    }
+                }
+            }
+            .padding(.vertical, 2)
         }
         .padding(.horizontal)
     }
