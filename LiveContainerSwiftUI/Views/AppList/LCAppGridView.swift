@@ -166,6 +166,24 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     private var lastIcon: UIImage?
     private var isPressed = false
     private var isLaunching = false
+    /// The launch dim, latched optimistically the moment a
+    /// single tap fires (Ann 2026-11-27, on device: the
+    /// icon flashed back to full brightness between the
+    /// press dim lifting and the model's isAppRunning
+    /// engaging — the flag is only set halfway through
+    /// runApp, after its pre-checks, while the press dim's
+    /// linger had already run out). The latch bridges from
+    /// the tap to the model's flag taking over; see
+    /// updateModelLaunching for the handover, and the
+    /// safety release in handleSingleTap for the paths
+    /// that never engage the flag (already on stage, auth
+    /// declined, alert dismissed).
+    private var optimisticLaunch = false
+    /// True once the model's flag has been seen on during
+    /// this launch, so its later off is recognised as the
+    /// launch ending rather than background noise.
+    private var modelEngaged = false
+    private var optimisticWorkItem: DispatchWorkItem?
     private var inMenu = false
     private var clearWorkItem: DispatchWorkItem?
     private weak var observedApp: LCAppModel?
@@ -242,13 +260,17 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         self.onOpenSettings = onOpenSettings
         self.onClose = onClose
         self.menuProvider = menuProvider
-        self.isLaunching = isLaunching
+        updateModelLaunching(isLaunching)
         if observedApp !== app {
             // A recycled host starts clean for its new app.
             observedApp = app
             clearWorkItem?.cancel()
             clearWorkItem = nil
             isPressed = false
+            optimisticWorkItem?.cancel()
+            optimisticWorkItem = nil
+            optimisticLaunch = false
+            modelEngaged = false
             // The launch flag's last change can be swallowed
             // while the launched app covers the grid — SwiftUI
             // then never re-runs configure, and the dim outlives
@@ -261,9 +283,7 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
             launchSink = app.$isAppRunning
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] running in
-                    guard let self, self.isLaunching != running else { return }
-                    self.isLaunching = running
-                    self.applyDim()
+                    self?.updateModelLaunching(running)
                 }
         }
         if self.iconSize != iconSize {
@@ -383,13 +403,16 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         // The single tap only fires once the double tap has failed
-        // (~0.3s after the finger lifts), and only then does the
-        // launch state take over the dimming. Hold the press dim
-        // for that disambiguation window so a quick tap flows
-        // straight from press dim into launch dim with no gap.
+        // (a good 0.3s+ after the finger lifts), and only then
+        // does the launch latch take over the dimming (see
+        // handleSingleTap). Hold the press dim across that
+        // disambiguation window so a quick tap flows straight
+        // from press dim into launch dim with no gap; 0.5s
+        // covers the recogniser's failure window with margin
+        // (the latch covers everything after the tap fires).
         let work = DispatchWorkItem { [weak self] in self?.setPressed(false) }
         clearWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
         super.touchesEnded(touches, with: event)
     }
 
@@ -407,8 +430,26 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         applyDim()
     }
 
+    /// The model's launch flag, from configure or from the
+    /// direct subscription — the handover point for the
+    /// optimistic latch. When the flag comes on, the model
+    /// owns the dim and the latch steps aside; when it goes
+    /// off again after having been on, the launch is over.
+    private func updateModelLaunching(_ running: Bool) {
+        if running {
+            modelEngaged = true
+            optimisticWorkItem?.cancel()
+            optimisticWorkItem = nil
+            optimisticLaunch = false
+        } else if modelEngaged {
+            modelEngaged = false
+        }
+        isLaunching = running
+        applyDim()
+    }
+
     private func applyDim() {
-        let dimmed = (isPressed || isLaunching) && !inMenu
+        let dimmed = (isPressed || isLaunching || optimisticLaunch) && !inMenu
         dimOverlay.alpha = dimmed ? 0.3 : 0
         badgeButton.alpha = dimmed ? 0.7 : 1
     }
@@ -425,6 +466,26 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     }
 
     @objc private func handleSingleTap() {
+        // Latch the launch dim NOW, before the launch flow
+        // starts: the model's flag only engages halfway
+        // through runApp, and the press dim's linger may
+        // already be spent by the time it does — the gap
+        // between them was the flash (Ann 2026-11-27). The
+        // latch hands over when the flag engages (see
+        // updateModelLaunching); the 2s safety release
+        // covers taps that never engage it (the app was
+        // already on stage, auth was declined, the
+        // run-anyway alert was dismissed).
+        optimisticLaunch = true
+        applyDim()
+        optimisticWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.optimisticLaunch = false
+            self.applyDim()
+        }
+        optimisticWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
         // The tapped icon's frame in window coordinates: a running
         // app's window grows out of it (iOS-style entrance).
         let rect = iconContainer.convert(iconContainer.bounds, to: nil)
