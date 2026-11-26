@@ -442,13 +442,8 @@ enum AltStoreSourceLoader {
         decoder.dateDecodingStrategy = .custom({ decoder in
             let container = try decoder.singleValueContainer()
             let rawValue = try container.decode(String.self)
-            if let isoDate = ISO8601DateFormatter().date(from: rawValue) {
-                return isoDate
-            }
-            let shortFormatter = DateFormatter()
-            shortFormatter.dateFormat = "yyyy-MM-dd"
-            if let shortDate = shortFormatter.date(from: rawValue) {
-                return shortDate
+            if let date = parseDateValue(rawValue) {
+                return date
             }
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date format: \(rawValue)")
         })
@@ -539,12 +534,33 @@ enum AltStoreSourceLoader {
     
     private static func parseDate(_ value: String?) -> Date? {
         guard let value else { return nil }
-        if let isoDate = ISO8601DateFormatter().date(from: value) {
+        return parseDateValue(value)
+    }
+
+    /// The date spellings sources actually use: plain
+    /// dates, ISO timestamps, ISO timestamps with
+    /// fractional seconds (the plain ISO8601 formatter
+    /// rejects those, and the date — and with it the
+    /// recently-updated sort — used to just vanish),
+    /// and space-separated datetimes.
+    private static func parseDateValue(_ rawValue: String) -> Date? {
+        if let isoDate = ISO8601DateFormatter().date(from: rawValue) {
             return isoDate
         }
-        let shortFormatter = DateFormatter()
-        shortFormatter.dateFormat = "yyyy-MM-dd"
-        return shortFormatter.date(from: value)
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let isoDate = fractional.date(from: rawValue) {
+            return isoDate
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        for format in ["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: rawValue) {
+                return date
+            }
+        }
+        return nil
     }
     
     private static func url(for string: String?, baseURL: URL) -> URL? {
