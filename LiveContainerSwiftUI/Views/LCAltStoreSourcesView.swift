@@ -566,22 +566,30 @@ struct LCSourcesView: View {
     @StateObject private var viewModel = AltStoreSourcesViewModel()
     @State private var errorMessage: String?
     @State private var sourcePendingRemoval: AltStoreSourcesViewModel.SourceItem?
-    // Must be a StateObject, not an ObservedObject with a default
-    // instance: the tab view re-creates this view whenever the badge
+    // Must be StateObjects, not ObservedObjects with default
+    // instances: the tab view re-creates this view whenever the badge
     // count is published, and an ObservedObject gets swapped for the
     // fresh instance each time — which reset the search query to ""
     // while typing (device report 2026-11-22). A StateObject is
     // created once per view identity and ignores later initializers.
-    @StateObject private var searchContext = SearchContext()
+    // One context per segment (Ann 2026-11-26): each segment's
+    // search filters only its own list and keeps its own query.
+    // They live here rather than in the segment views because a
+    // segment view is destroyed when another segment shows, and
+    // its state would go with it — the queries must survive
+    // segment switches.
+    @StateObject private var sourcesSearchContext = SearchContext()
+    @StateObject private var updatesSearchContext = SearchContext()
+    @StateObject private var downloadsSearchContext = SearchContext()
     @State private var expandedSources: Set<URL> = []
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
-    /// Height of the segment area below the picker, measured
-    /// by the segments' scroll views (see sourcesContent):
-    /// their content is kept a hair taller than this so the
-    /// scroll view always has travel — the drawer search
-    /// bar can only hide when the scroll view can scroll.
+    /// Height of the active segment's scroll view, measured
+    /// by its background: the sources and updates contents
+    /// are kept a hair taller than this so their scroll view
+    /// always has travel — the drawer search bar can only
+    /// hide when the scroll view can scroll.
     @State private var segmentViewportHeight: CGFloat = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
@@ -596,37 +604,15 @@ struct LCSourcesView: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                if !viewModel.sources.isEmpty || downloadStore.count > 0 {
-                    Picker("lc.sources.segment".loc, selection: $selectedSegment) {
-                        Text("lc.sources.segment.sourcesWithCount".localizeWithFormat(totalSourceAppsCount)).tag(0)
-                        Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
-                        Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(downloadStore.count)).tag(2)
+            Group {
+                if selectedSegment == 2 {
+                    LCDownloadsView(searchContext: downloadsSearchContext) {
+                        segmentPicker
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                }
-
-                Group {
-                    if selectedSegment == 2 {
-                        LCDownloadsView()
-                    } else if viewModel.sources.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "link.badge.plus")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text("lc.sources.empty".loc)
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    } else if selectedSegment == 1 {
-                        updatableContent
-                    } else {
-                        sourcesContent
-                    }
+                } else if selectedSegment == 1 {
+                    updatesScrollView
+                } else {
+                    sourcesScrollView
                 }
             }
             .navigationTitle("lc.tabView.sources".loc)
@@ -646,11 +632,16 @@ struct LCSourcesView: View {
                     }
                 }
             }
-            // No .searchable here: on this VStack the system
-            // never links the bar to a scroll view and pins
-            // it in place (Ann 2026-11-26, second report).
-            // It hangs on each segment's ScrollView itself
-            // instead — see sourcesContent / updatableContent.
+            // No .searchable at this level, and no fixed
+            // picker above the segments (Ann 2026-11-26,
+            // settled after four attempts): each segment's
+            // scroll view is the navigation view's direct
+            // content — the App page's geometry — with the
+            // picker as its first row and its own drawer
+            // search bar on the scroll view itself. Anything
+            // between the navigation view and the scroll view
+            // (a VStack, a fixed picker) breaks the link the
+            // drawer's hide mechanism needs and pins the bar.
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .alert("lc.common.error".loc, isPresented: Binding<Bool>(
@@ -751,98 +742,141 @@ struct LCSourcesView: View {
         }
     }
 
+    /// The segment picker, riding as the first row of
+    /// whichever segment is showing (see the note in body).
+    @ViewBuilder
+    private var segmentPicker: some View {
+        if !viewModel.sources.isEmpty || downloadStore.count > 0 {
+            Picker("lc.sources.segment".loc, selection: $selectedSegment) {
+                Text("lc.sources.segment.sourcesWithCount".localizeWithFormat(totalSourceAppsCount)).tag(0)
+                Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
+                Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(downloadStore.count)).tag(2)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+    }
+
+    /// Shown in the sources and updates segments when no
+    /// source has been added yet.
+    private var emptySourcesView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "link.badge.plus")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            Text("lc.sources.empty".loc)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
     // MARK: - Sources tab (flattened, lazily loaded)
 
-    /// Section headers and app rows are direct children of one LazyVStack,
-    /// so rows and icons load as they scroll into view and there is no
-    /// per-source app cap.
-    private var sourcesContent: some View {
+    /// The sources segment (Ann 2026-11-26, search settled
+    /// after four attempts): one ScrollView as the navigation
+    /// view's direct content — the App page's geometry — with
+    /// the picker as its first row and this segment's own
+    /// drawer search bar on the scroll view itself. Every
+    /// earlier placement failed structurally: outside the
+    /// NavigationView the bar belonged to the whole stack and
+    /// surfaced on the detail page; on the page VStack, or
+    /// below a fixed picker, the scroll view never scrolls
+    /// under the navigation bar and the drawer's hide
+    /// mechanism never engages; and with the sources
+    /// collapsed the content is too short to scroll at all,
+    /// which the min-height below covers. While this
+    /// segment's query is non-empty the rows swap to flat
+    /// cross-source results — the same scroll view, so the
+    /// bar's geometry never changes. In browse mode the
+    /// section headers and app rows are direct children of
+    /// the LazyVStack, so rows and icons load as they scroll
+    /// into view and there is no per-source app cap.
+    private var sourcesScrollView: some View {
         ScrollView {
             LazyVStack(spacing: 16) {
-                ForEach(viewModel.sources, id: \.id) { item in
-                    let apps = filteredApps(for: item)
-                    AltStoreSourceSectionHeaderView(
-                        item: item,
-                        isExpanded: expandedSources.contains(item.id),
-                        onRefresh: { Task { await viewModel.refreshSource(item) } },
-                        onRemove: { sourcePendingRemoval = item },
-                        toggleExpanded: { toggleExpansion(for: item.id) }
-                    )
-                    .padding(.horizontal)
-
-                    if let error = item.error {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("lc.sources.section.error".loc)
-                                .font(.subheadline)
-                                .bold()
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Button("lc.sources.refresh".loc) {
-                                Task { await viewModel.refreshSource(item) }
-                            }
-                            .font(.footnote)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(
-                            RoundedRectangle(cornerRadius: 18)
-                                .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                segmentPicker
+                if viewModel.sources.isEmpty {
+                    emptySourcesView
+                        .padding(.top, 48)
+                } else if isFiltering(sourcesSearchContext) {
+                    sourcesSearchResultsRows
+                } else {
+                    ForEach(viewModel.sources, id: \.id) { item in
+                        let apps = item.source?.apps ?? []
+                        AltStoreSourceSectionHeaderView(
+                            item: item,
+                            isExpanded: expandedSources.contains(item.id),
+                            onRefresh: { Task { await viewModel.refreshSource(item) } },
+                            onRemove: { sourcePendingRemoval = item },
+                            toggleExpanded: { toggleExpansion(for: item.id) }
                         )
                         .padding(.horizontal)
-                    } else if let source = item.source, expandedSources.contains(item.id) || isFiltering {
-                        if apps.isEmpty {
-                            if source.apps.isEmpty || isFiltering {
-                                Text("lc.sources.section.noApps".loc)
+
+                        if let error = item.error {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("lc.sources.section.error".loc)
+                                    .font(.subheadline)
+                                    .bold()
+                                Text(error)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal)
+                                Button("lc.sources.refresh".loc) {
+                                    Task { await viewModel.refreshSource(item) }
+                                }
+                                .font(.footnote)
                             }
-                        } else {
-                            ForEach(apps) { app in
-                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
-                                    .padding(.horizontal)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                            )
+                            .padding(.horizontal)
+                        } else if let source = item.source, expandedSources.contains(item.id) {
+                            if apps.isEmpty {
+                                if source.apps.isEmpty {
+                                    Text("lc.sources.section.noApps".loc)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal)
+                                }
+                            } else {
+                                ForEach(apps) { app in
+                                    sourceAppBanner(app: app, source: source, inUpdatesTab: false)
+                                        .padding(.horizontal)
+                                }
                             }
                         }
+                        // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
+                        // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
                     }
-                    // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
-                    // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
-                }
 
-                if totalFilteredAppCount == 0 {
-                    VStack(spacing: 8) {
-                        Text("lc.sources.section.noApps".loc)
-                            .foregroundStyle(.gray)
-                            .multilineTextAlignment(.center)
+                    if totalSourceAppsCount == 0 {
+                        VStack(spacing: 8) {
+                            Text("lc.sources.section.noApps".loc)
+                                .foregroundStyle(.gray)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 160, alignment: .center)
+                        .padding(.horizontal)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: 160, alignment: .center)
-                    .padding(.horizontal)
                 }
             }
             .padding(.vertical)
-            // Always a hair taller than the viewport (Ann
-            // 2026-11-26, the stubborn part): with the
-            // sources collapsed this content is far shorter
-            // than the screen, the scroll view cannot scroll
-            // at all, and a drawer search bar with no scroll
-            // travel has nowhere to hide — it stays pinned
-            // no matter what the .searchable hangs on. The
-            // App page never hits this because its list is
-            // always tall.
+            // Always a hair taller than the viewport: with
+            // the sources collapsed this content can be far
+            // shorter than the screen, and a scroll view that
+            // cannot scroll gives the drawer search bar no
+            // travel to hide with — it stays pinned (the App
+            // page never hits this; its list is always tall).
             .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
-        // The search bar hangs on the scroll view itself
-        // (Ann 2026-11-26): that is what makes it hide
-        // until pulled down — the App page works because
-        // its .searchable sits on its root ScrollView the
-        // same way. On the page's outer VStack (the first
-        // attempt) the system found no scroll view to link
-        // to and pinned the bar; on the NavigationView's
-        // outside (the original) it belonged to the whole
-        // stack and surfaced on the detail page.
-        .searchable(text: $searchContext.query)
+        .searchable(text: $sourcesSearchContext.query)
         .background(GeometryReader { proxy in
             Color.clear
                 .onAppear { segmentViewportHeight = proxy.size.height }
@@ -850,39 +884,76 @@ struct LCSourcesView: View {
         })
     }
 
+    /// Flat cross-source results while the sources segment
+    /// is filtering; each row is tagged with its source.
+    @ViewBuilder
+    private var sourcesSearchResultsRows: some View {
+        let results = sourcesSearchResults
+        if results.isEmpty {
+            Text("lc.sources.search.noResults".loc)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+                .padding(.horizontal)
+        } else {
+            ForEach(results, id: \.app.id) { pair in
+                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
+                    .padding(.horizontal)
+            }
+        }
+    }
+
     // MARK: - Updates tab
 
-    private var updatableContent: some View {
+    /// The updates segment: same shape as the sources
+    /// segment — its own scroll view as the navigation
+    /// view's direct content, the picker as its first row,
+    /// its own drawer search bar filtering only this list
+    /// (Ann 2026-11-26). The update-all button hides while
+    /// filtering: it acts on the whole list, and over a
+    /// filtered list it would read as "update only these".
+    private var updatesScrollView: some View {
         ScrollView {
             LazyVStack(spacing: 16) {
-                if updatableApps.isEmpty {
+                segmentPicker
+                if viewModel.sources.isEmpty {
+                    emptySourcesView
+                        .padding(.top, 48)
+                } else if isFiltering(updatesSearchContext) && filteredUpdatableApps.isEmpty {
+                    Text("lc.sources.search.noResults".loc)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
+                } else if updatableApps.isEmpty {
                     Text("lc.sources.updates.empty".loc)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 40)
                 } else {
-                    Button {
-                        updateAll()
-                    } label: {
-                        Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
-                            .bold()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 40)
-                            .modifier { content in
-                                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                                    content
-                                        .glassEffect(.regular.interactive(true), in: .capsule)
-                                } else {
-                                    content
-                                        .foregroundColor(.white)
-                                        .background(Capsule().fill(Color("FontColor")))
+                    if !isFiltering(updatesSearchContext) {
+                        Button {
+                            updateAll()
+                        } label: {
+                            Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
+                                .bold()
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 40)
+                                .modifier { content in
+                                    if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                                        content
+                                            .glassEffect(.regular.interactive(true), in: .capsule)
+                                    } else {
+                                        content
+                                            .foregroundColor(.white)
+                                            .background(Capsule().fill(Color("FontColor")))
+                                    }
                                 }
-                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal)
 
-                    ForEach(updatableApps, id: \.app.id) { pair in
+                    ForEach(filteredUpdatableApps, id: \.app.id) { pair in
                         sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
                             .padding(.horizontal)
                     }
@@ -891,7 +962,7 @@ struct LCSourcesView: View {
             .padding(.vertical)
             .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
-        .searchable(text: $searchContext.query)
+        .searchable(text: $updatesSearchContext.query)
         .background(GeometryReader { proxy in
             Color.clear
                 .onAppear { segmentViewportHeight = proxy.size.height }
@@ -902,7 +973,7 @@ struct LCSourcesView: View {
     // MARK: - Row construction
 
     @ViewBuilder
-    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool) -> some View {
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
         let installed = installedModel(for: app.bundleIdentifier)
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
@@ -910,6 +981,7 @@ struct LCSourcesView: View {
         LCSourceAppBanner(
             app: app,
             source: source,
+            showsSourceName: showsSourceName,
             buttonState: state,
             action: {
                 switch state {
@@ -944,13 +1016,16 @@ struct LCSourcesView: View {
     /// Installed apps whose source offers a newer version, across all
     /// sources. One entry per bundle id (the newest offer wins), in
     /// first-appearance order. Ignored versions stay in this list.
+    /// Deliberately unfiltered: the badge count and update-all act
+    /// on the whole list — the updates segment filters its own copy
+    /// for display (filteredUpdatableApps).
     var updatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         _ = ignoreTick
         var bestByBundle: [String: (source: AltStoreSource, app: AltStoreSourceApp)] = [:]
         var order: [String] = []
         for item in viewModel.sources {
             guard let source = item.source else { continue }
-            for app in filteredApps(for: item) {
+            for app in source.apps {
                 guard hasUpdate(for: app), let latest = app.latestVersion else { continue }
                 if let existing = bestByBundle[app.bundleIdentifier],
                    let existingLatest = existing.app.latestVersion {
@@ -1037,38 +1112,57 @@ struct LCSourcesView: View {
         UserDefaults.standard.set(count, forKey: "LCSourceUpdateBadgeCount")
     }
 
-    private var isFiltering: Bool {
-        !searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    // MARK: - Search filtering
+
+    /// Whether the given segment's search is active (its own
+    /// query, debounced — Ann 2026-11-26: each segment
+    /// searches only itself and keeps its own query).
+    private func isFiltering(_ context: SearchContext) -> Bool {
+        !context.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    
-    private var totalFilteredAppCount: Int {
-        viewModel.sources.reduce(0) { partialResult, item in
-            partialResult + filteredApps(for: item).count
+
+    private func appMatches(_ app: AltStoreSourceApp, lowercasedQuery: String) -> Bool {
+        if app.name.lowercased().contains(lowercasedQuery) {
+            return true
         }
+        if app.bundleIdentifier.lowercased().contains(lowercasedQuery) {
+            return true
+        }
+        if let developer = app.developerName?.lowercased(), developer.contains(lowercasedQuery) {
+            return true
+        }
+        if let subtitle = app.subtitle?.lowercased(), subtitle.contains(lowercasedQuery) {
+            return true
+        }
+        return false
     }
-    
-    private func filteredApps(for item: AltStoreSourcesViewModel.SourceItem) -> [AltStoreSourceApp] {
-        guard let source = item.source else { return [] }
-        let query = searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    private func appsMatching(_ apps: [AltStoreSourceApp], context: SearchContext) -> [AltStoreSourceApp] {
+        let query = context.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            return source.apps
+            return apps
         }
-        return source.apps.filter { app in
-            let lower = query.lowercased()
-            if app.name.lowercased().contains(lower) {
-                return true
-            }
-            if app.bundleIdentifier.lowercased().contains(lower) {
-                return true
-            }
-            if let developer = app.developerName?.lowercased(), developer.contains(lower) {
-                return true
-            }
-            if let subtitle = app.subtitle?.lowercased(), subtitle.contains(lower) {
-                return true
-            }
-            return false
+        let lower = query.lowercased()
+        return apps.filter { appMatches($0, lowercasedQuery: lower) }
+    }
+
+    /// Flat cross-source results for the sources segment's
+    /// search, in source order.
+    private var sourcesSearchResults: [(source: AltStoreSource, app: AltStoreSourceApp)] {
+        viewModel.sources.flatMap { item in
+            guard let source = item.source else { return [] }
+            return appsMatching(source.apps, context: sourcesSearchContext).map { (source: source, app: $0) }
         }
+    }
+
+    /// The updates list under the updates segment's own
+    /// query (the canonical updatableApps stays unfiltered).
+    private var filteredUpdatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
+        let query = updatesSearchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return updatableApps
+        }
+        return updatableApps.filter { appMatches($0.app, lowercasedQuery: query) }
     }
     
     @MainActor
@@ -1483,6 +1577,11 @@ struct LCSourceInstallButton: View {
 private struct LCSourceAppBanner: View {
     let app: AltStoreSourceApp
     let source: AltStoreSource
+    /// Search results are flat across sources, so the row
+    /// carries its source's name next to the app name
+    /// (Ann 2026-11-26); grouped browsing already shows it
+    /// in the section header.
+    var showsSourceName: Bool = false
     let buttonState: LCSourceAppButtonState
     let action: () -> Void
     let copyAction: () -> Void
@@ -1568,6 +1667,16 @@ private struct LCSourceAppBanner: View {
                     HStack(spacing: 6) {
                         Text(app.name)
                             .font(.system(size: 16)).bold()
+                            .lineLimit(1)
+                        if showsSourceName {
+                            Text(source.name)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(textColor)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.primary.opacity(0.08)))
+                        }
                         if app.isBeta {
                             Text("lc.sources.badge.beta".loc.uppercased())
                                 .font(.system(size: 9, weight: .heavy))

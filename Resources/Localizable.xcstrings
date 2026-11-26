@@ -32556,6 +32556,29 @@
         }
       }
     },
+    "lc.sources.search.noResults" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No results found"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有找到"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有找到"
+          }
+        }
+      }
+    },
     "lc.sources.section.error" : {
       "extractionState" : "stale",
       "localizations" : {

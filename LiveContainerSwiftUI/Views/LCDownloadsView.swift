@@ -9,48 +9,138 @@
 //  overwritten), swipe or long-press to share/delete it, and
 //  tap an interrupted download to resume it.
 //
+//  Search (Ann 2026-11-26): like the other two segments, this
+//  segment's list is the navigation view's direct content
+//  with the segment picker as its first row and its own
+//  drawer search bar, filtering only this library by app
+//  name / bundle id and keeping its own query.
+//
 
 import SwiftUI
 
-struct LCDownloadsView: View {
+struct LCDownloadsView<SegmentPicker: View>: View {
+    @ObservedObject var searchContext: SearchContext
+    private let segmentPicker: SegmentPicker
+
     @ObservedObject private var store = LCDownloadStore.shared
     @EnvironmentObject private var sharedModel: SharedModel
     @EnvironmentObject private var downloadHelper: DownloadHelper
     @State private var showClearAllConfirm = false
     @State private var packageToShare: LCDownloadedPackage?
+    @State private var listViewportHeight: CGFloat = 0
+
+    init(searchContext: SearchContext, @ViewBuilder segmentPicker: () -> SegmentPicker) {
+        self.searchContext = searchContext
+        self.segmentPicker = segmentPicker()
+    }
+
+    private var isFiltering: Bool {
+        !searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var filteredPackages: [LCDownloadedPackage] {
+        let query = searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return store.packages
+        }
+        let lower = query.lowercased()
+        return store.packages.filter { record in
+            if record.appName.lowercased().contains(lower) {
+                return true
+            }
+            if let bundleID = record.bundleID, bundleID.lowercased().contains(lower) {
+                return true
+            }
+            return false
+        }
+    }
+
+    /// The drawer search bar can only hide when the list can
+    /// scroll — the same physics as the sources page. A short
+    /// library leaves the list shorter than the screen, so a
+    /// clear tail row pads the content to a hair past the
+    /// viewport. The estimate only has to be rough: overshooting
+    /// is harmless (a long list needs no padding), and the
+    /// picker/header allowance below errs on the high side.
+    private var tailSpacerHeight: CGFloat {
+        let estimatedContent = 140 + CGFloat(filteredPackages.count) * 66
+        return max(0, listViewportHeight + 1 - estimatedContent)
+    }
 
     var body: some View {
         Group {
             if store.packages.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "arrow.down.doc")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("lc.downloads.empty".loc)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        segmentPicker
+                        VStack(spacing: 12) {
+                            Image(systemName: "arrow.down.doc")
+                                .font(.system(size: 48))
+                                .foregroundColor(.secondary)
+                            Text("lc.downloads.empty".loc)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding()
+                        .padding(.top, 48)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    }
                 }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
                 List {
                     Section {
-                        ForEach(store.packages) { record in
-                            row(for: record)
+                        segmentPicker
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    }
+
+                    if isFiltering && filteredPackages.isEmpty {
+                        Section {
+                            Text("lc.sources.search.noResults".loc)
+                                .foregroundStyle(.secondary)
                         }
-                    } header: {
-                        HStack {
-                            Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
-                            Spacer()
-                            Button("lc.downloads.clearAll".loc) {
-                                showClearAllConfirm = true
+                    } else {
+                        Section {
+                            ForEach(filteredPackages) { record in
+                                row(for: record)
                             }
-                            .font(.footnote)
-                            .textCase(nil)
+                        } header: {
+                            // Total size and clear-all describe
+                            // the whole library; over a filtered
+                            // list they would mislead, so the
+                            // header steps aside while filtering.
+                            if !isFiltering {
+                                HStack {
+                                    Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
+                                    Spacer()
+                                    Button("lc.downloads.clearAll".loc) {
+                                        showClearAllConfirm = true
+                                    }
+                                    .font(.footnote)
+                                    .textCase(nil)
+                                }
+                            }
+                        }
+                    }
+
+                    if tailSpacerHeight > 0 {
+                        Section {
+                            Color.clear
+                                .frame(height: tailSpacerHeight)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                         }
                     }
                 }
                 .listStyle(.insetGrouped)
+                .searchable(text: $searchContext.query)
+                .background(GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { listViewportHeight = proxy.size.height }
+                        .onChange(of: proxy.size.height) { listViewportHeight = $0 }
+                })
             }
         }
         .alert("lc.downloads.clearAll".loc, isPresented: $showClearAllConfirm) {
