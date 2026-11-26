@@ -190,7 +190,7 @@ struct LCSourcesView: View {
     private var segmentPicker: some View {
         if !viewModel.sources.isEmpty || downloadStore.count > 0 {
             Picker("lc.sources.segment".loc, selection: $selectedSegment) {
-                Text("lc.sources.segment.sourcesWithCount".localizeWithFormat(totalSourceAppsCount)).tag(0)
+                Text("lc.sources.segment.software".loc).tag(0)
                 Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
                 Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(downloadStore.count)).tag(2)
             }
@@ -306,11 +306,11 @@ struct LCSourcesView: View {
         HStack(spacing: 10) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    sourceChip(title: "lc.sources.chip.allSources".loc, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
+                    sourceChip(title: "lc.sources.chip.allSources".loc, count: totalSourceAppsCount, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
                         selectedSourceChip = nil
                     }
                     ForEach(viewModel.enabledSources, id: \.id) { item in
-                        sourceChip(title: item.source?.name ?? item.displayName, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
+                        sourceChip(title: item.source?.name ?? item.displayName, count: item.source?.apps.count ?? 0, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
                             selectedSourceChip = item.id
                         }
                     }
@@ -334,7 +334,7 @@ struct LCSourcesView: View {
         .padding(.horizontal)
     }
 
-    private func sourceChip(title: String, iconURL: URL?, systemImage: String?, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private func sourceChip(title: String, count: Int, iconURL: URL?, systemImage: String?, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let iconURL {
@@ -347,6 +347,15 @@ struct LCSourcesView: View {
                 }
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                // The count moved here from the segment
+                // button (Ann 2026-11-26): each chip
+                // carries its own number — the all-sources
+                // chip the grand total, a source's chip
+                // that source's app count.
+                Text("(\(count))")
+                    .font(.system(size: 13))
+                    .opacity(0.7)
                     .lineLimit(1)
             }
             .padding(.horizontal, 12)

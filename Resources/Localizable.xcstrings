@@ -33082,6 +33082,29 @@
         }
       }
     },
+    "lc.sources.segment.software" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Software"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "软件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "軟體"
+          }
+        }
+      }
+    },
     "lc.sources.segment.sourcesWithCount" : {
       "extractionState" : "manual",
       "localizations" : {
