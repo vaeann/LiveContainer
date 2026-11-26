@@ -90,6 +90,32 @@ enum LCSourceUpdateIgnore {
     }
 }
 
+/// Per-source app ordering, chosen from the sort menu in
+/// the source's section header (Ann 2026-11-26). Stored
+/// per source URL, mirroring LCSourceUpdateIgnore above;
+/// unstored means the source's own order. "Recently
+/// updated" keys on each app's latest version date —
+/// every app in a well-formed source carries one.
+enum LCSourceAppSort: String {
+    case sourceOrder
+    case recentlyUpdated
+
+    private static func key(for sourceURL: URL) -> String {
+        "LCSourceAppSort-\(sourceURL.absoluteString)"
+    }
+
+    static func storedMode(for sourceURL: URL) -> LCSourceAppSort {
+        guard let raw = UserDefaults.standard.string(forKey: key(for: sourceURL)) else {
+            return .sourceOrder
+        }
+        return LCSourceAppSort(rawValue: raw) ?? .sourceOrder
+    }
+
+    static func storeMode(_ mode: LCSourceAppSort, for sourceURL: URL) {
+        UserDefaults.standard.set(mode.rawValue, forKey: key(for: sourceURL))
+    }
+}
+
 /// What the single action button on a source app row offers.
 enum LCSourceAppButtonState {
     case get
@@ -805,10 +831,12 @@ struct LCSourcesView: View {
                     sourcesSearchResultsRows
                 } else {
                     ForEach(viewModel.sources, id: \.id) { item in
-                        let apps = item.source?.apps ?? []
+                        let apps = displayedApps(item.source?.apps ?? [], for: item)
                         AltStoreSourceSectionHeaderView(
                             item: item,
                             isExpanded: expandedSources.contains(item.id),
+                            sortMode: sortMode(for: item),
+                            onSortModeChange: { setSortMode($0, for: item) },
                             onRefresh: { Task { await viewModel.refreshSource(item) } },
                             onRemove: { sourcePendingRemoval = item },
                             toggleExpanded: { toggleExpansion(for: item.id) }
@@ -1110,6 +1138,35 @@ struct LCSourcesView: View {
         UserDefaults.standard.set(count, forKey: "LCSourceUpdateBadgeCount")
     }
 
+    // MARK: - Per-source sort
+
+    /// Session overrides for the per-source sort modes;
+    /// the persisted values live in LCSourceAppSort.
+    @State private var sourceSortModes: [String: LCSourceAppSort] = [:]
+
+    private func sortMode(for item: AltStoreSourcesViewModel.SourceItem) -> LCSourceAppSort {
+        sourceSortModes[item.url.absoluteString] ?? LCSourceAppSort.storedMode(for: item.url)
+    }
+
+    private func setSortMode(_ mode: LCSourceAppSort, for item: AltStoreSourcesViewModel.SourceItem) {
+        sourceSortModes[item.url.absoluteString] = mode
+        LCSourceAppSort.storeMode(mode, for: item.url)
+    }
+
+    /// A source's apps in the order its header's sort menu
+    /// currently asks for. The sort is stable, so apps
+    /// sharing a date (or missing one) keep source order.
+    private func displayedApps(_ apps: [AltStoreSourceApp], for item: AltStoreSourcesViewModel.SourceItem) -> [AltStoreSourceApp] {
+        switch sortMode(for: item) {
+        case .sourceOrder:
+            return apps
+        case .recentlyUpdated:
+            return apps.sorted { a, b in
+                (a.latestVersion?.releaseDate ?? .distantPast) > (b.latestVersion?.releaseDate ?? .distantPast)
+            }
+        }
+    }
+
     // MARK: - Search filtering
 
     /// Whether the given segment's search is active (its own
@@ -1364,6 +1421,8 @@ private struct ManageSourcesSheet: View {
 private struct AltStoreSourceSectionHeaderView: View {
     let item: AltStoreSourcesViewModel.SourceItem
     let isExpanded: Bool
+    let sortMode: LCSourceAppSort
+    let onSortModeChange: (LCSourceAppSort) -> Void
     let onRefresh: () -> Void
     let onRemove: () -> Void
     let toggleExpanded: () -> Void
@@ -1387,13 +1446,37 @@ private struct AltStoreSourceSectionHeaderView: View {
                 if item.isLoading {
                     ProgressView()
                 } else {
-                    Menu {
-                        Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise", action: onRefresh)
-                        Button("lc.sources.removeSource".loc, systemImage: "trash", role: .destructive, action: onRemove)
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .imageScale(.large)
-                            .foregroundColor(.secondary)
+                    HStack(spacing: 14) {
+                        if item.source != nil {
+                            Menu {
+                                Button(action: { onSortModeChange(.sourceOrder) }) {
+                                    if sortMode == .sourceOrder {
+                                        Label("lc.sources.sort.sourceOrder".loc, systemImage: "checkmark")
+                                    } else {
+                                        Text("lc.sources.sort.sourceOrder".loc)
+                                    }
+                                }
+                                Button(action: { onSortModeChange(.recentlyUpdated) }) {
+                                    if sortMode == .recentlyUpdated {
+                                        Label("lc.sources.sort.recent".loc, systemImage: "checkmark")
+                                    } else {
+                                        Text("lc.sources.sort.recent".loc)
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "arrow.up.arrow.down.circle")
+                                    .imageScale(.large)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Menu {
+                            Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise", action: onRefresh)
+                            Button("lc.sources.removeSource".loc, systemImage: "trash", role: .destructive, action: onRemove)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .imageScale(.large)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
