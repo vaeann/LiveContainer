@@ -71,8 +71,12 @@ struct LCSourcesView: View {
             .navigationTitle("lc.tabView.sources".loc)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if viewModel.isRefreshingAll {
+                    if viewModel.isRefreshingAll || (refreshTargetItem?.isLoading ?? false) {
                         ProgressView()
+                    } else if let item = refreshTargetItem {
+                        Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise") {
+                            Task { await viewModel.refreshSource(item) }
+                        }
                     } else {
                         Button("lc.sources.refreshAll".loc, systemImage: "arrow.clockwise") {
                             Task { await viewModel.refreshAllSources() }
@@ -292,10 +296,11 @@ struct LCSourcesView: View {
     /// editing the selected source's own mode, or the
     /// flat list's mode while the all chip is active.
     /// (A per-source refresh / remove menu briefly lived
-    /// here too; Ann removed it the same evening — refresh
-    /// is the toolbar's refresh-all, removal lives in
-    /// Manage Sources.) Global refresh and add-source
-    /// stay in the toolbar, as before.
+    /// here too; Ann removed it the same evening — removal
+    /// lives in Manage Sources, and the toolbar refresh
+    /// turns single-source while a chip is selected.)
+    /// Global refresh and add-source stay in the toolbar,
+    /// as before.
     @ViewBuilder
     private var sourcesChipsRow: some View {
         HStack(spacing: 10) {
@@ -356,6 +361,17 @@ struct LCSourcesView: View {
     private var selectedChipItem: AltStoreSourcesViewModel.SourceItem? {
         guard let selectedSourceChip else { return nil }
         return viewModel.enabledSources.first { $0.id == selectedSourceChip }
+    }
+
+    /// The toolbar refresh button's single-source target
+    /// (Ann 2026-11-26, her pick over a chip long-press
+    /// menu): while the sources segment is showing one
+    /// source's chip, the button refreshes just that
+    /// source; in all-sources mode and on the other
+    /// segments it refreshes every enabled source.
+    private var refreshTargetItem: AltStoreSourcesViewModel.SourceItem? {
+        guard selectedSegment == 0 else { return nil }
+        return selectedChipItem
     }
 
     /// A failed source's error card, shown wherever its
