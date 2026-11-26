@@ -146,19 +146,9 @@ struct LCSourceAppDetailView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(app.screenshots, id: \.self) { url in
-                                AsyncImage(url: url) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image
-                                            .resizable()
-                                            .scaledToFit()
-                                    default:
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .fill(Color(uiColor: UIColor.secondarySystemBackground))
-                                    }
-                                }
-                                .frame(height: 280)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                LCSourceScreenshotView(url: url)
+                                    .frame(height: 280)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
                         }
                     }

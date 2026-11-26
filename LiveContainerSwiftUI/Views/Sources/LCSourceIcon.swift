@@ -161,7 +161,8 @@ struct SourceIconView: View {
     /// The load task's identity: the URL, plus the cache's
     /// retry generation, so clearing the failure list
     /// re-runs the load for icons already on screen.
-    private struct LoadID: Hashable {
+    /// Shared with the screenshot view below.
+    struct LoadID: Hashable {
         let url: URL?
         let generation: Int
     }
@@ -193,5 +194,38 @@ struct SourceIconView: View {
         Image("DefaultIcon")
             .resizable()
             .scaledToFill()
+    }
+}
+
+/// A detail-page screenshot, loaded through the same
+/// cache as the icons (Ann 2026-11-26 audit): AsyncImage
+/// re-downloaded every visit and left a grey box forever
+/// on failure; this gets the memory/disk cache and the
+/// five-attempt retry for free.
+struct LCSourceScreenshotView: View {
+    let url: URL
+    @State private var image: UIImage?
+    @State private var loadedURL: URL?
+    @ObservedObject private var cache = SourceIconCache.shared
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                    .frame(width: 160, height: 280)
+            }
+        }
+        .task(id: SourceIconView.LoadID(url: url, generation: cache.retryGeneration)) {
+            if loadedURL != url {
+                image = nil
+            }
+            image = await SourceIconCache.shared.image(for: url)
+            loadedURL = url
+        }
     }
 }
