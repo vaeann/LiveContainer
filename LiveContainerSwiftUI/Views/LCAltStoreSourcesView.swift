@@ -837,6 +837,8 @@ struct LCSourcesView: View {
                             isExpanded: expandedSources.contains(item.id),
                             sortMode: sortMode(for: item),
                             onSortModeChange: { setSortMode($0, for: item) },
+                            todayFilterOn: todayFilterOn(for: item),
+                            onToggleTodayFilter: { toggleTodayFilter(for: item) },
                             onRefresh: { Task { await viewModel.refreshSource(item) } },
                             onRemove: { sourcePendingRemoval = item },
                             toggleExpanded: { toggleExpansion(for: item.id) }
@@ -865,7 +867,7 @@ struct LCSourcesView: View {
                             .padding(.horizontal)
                         } else if let source = item.source, expandedSources.contains(item.id) {
                             if apps.isEmpty {
-                                Text("lc.sources.section.noApps".loc)
+                                Text(todayFilterOn(for: item) && !(item.source?.apps.isEmpty ?? true) ? "lc.sources.section.noUpdatesToday".loc : "lc.sources.section.noApps".loc)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1144,6 +1146,24 @@ struct LCSourcesView: View {
     /// the persisted values live in LCSourceAppSort.
     @State private var sourceSortModes: [String: LCSourceAppSort] = [:]
 
+    /// Sources currently filtered to today's updates
+    /// (Ann 2026-11-26). Session-only on purpose: a
+    /// persisted "today" filter would silently empty the
+    /// source tomorrow and read as data loss.
+    @State private var sourceTodayFilters: Set<String> = []
+
+    private func todayFilterOn(for item: AltStoreSourcesViewModel.SourceItem) -> Bool {
+        sourceTodayFilters.contains(item.url.absoluteString)
+    }
+
+    private func toggleTodayFilter(for item: AltStoreSourcesViewModel.SourceItem) {
+        if todayFilterOn(for: item) {
+            sourceTodayFilters.remove(item.url.absoluteString)
+        } else {
+            sourceTodayFilters.insert(item.url.absoluteString)
+        }
+    }
+
     private func sortMode(for item: AltStoreSourcesViewModel.SourceItem) -> LCSourceAppSort {
         sourceSortModes[item.url.absoluteString] ?? LCSourceAppSort.storedMode(for: item.url)
     }
@@ -1153,15 +1173,23 @@ struct LCSourcesView: View {
         LCSourceAppSort.storeMode(mode, for: item.url)
     }
 
-    /// A source's apps in the order its header's sort menu
-    /// currently asks for. The sort is stable, so apps
-    /// sharing a date (or missing one) keep source order.
+    /// A source's apps as its header menu currently asks:
+    /// the today filter first (when on), then the sort.
+    /// The sort is stable, so apps sharing a date (or
+    /// missing one) keep source order.
     private func displayedApps(_ apps: [AltStoreSourceApp], for item: AltStoreSourcesViewModel.SourceItem) -> [AltStoreSourceApp] {
+        var result = apps
+        if todayFilterOn(for: item) {
+            result = result.filter { app in
+                guard let date = app.latestVersion?.releaseDate else { return false }
+                return Calendar.current.isDateInToday(date)
+            }
+        }
         switch sortMode(for: item) {
         case .sourceOrder:
-            return apps
+            return result
         case .recentlyUpdated:
-            return apps.sorted { a, b in
+            return result.sorted { a, b in
                 (a.latestVersion?.releaseDate ?? .distantPast) > (b.latestVersion?.releaseDate ?? .distantPast)
             }
         }
@@ -1423,6 +1451,8 @@ private struct AltStoreSourceSectionHeaderView: View {
     let isExpanded: Bool
     let sortMode: LCSourceAppSort
     let onSortModeChange: (LCSourceAppSort) -> Void
+    let todayFilterOn: Bool
+    let onToggleTodayFilter: () -> Void
     let onRefresh: () -> Void
     let onRemove: () -> Void
     let toggleExpanded: () -> Void
@@ -1461,6 +1491,14 @@ private struct AltStoreSourceSectionHeaderView: View {
                                         Label("lc.sources.sort.recent".loc, systemImage: "checkmark")
                                     } else {
                                         Text("lc.sources.sort.recent".loc)
+                                    }
+                                }
+                                Divider()
+                                Button(action: onToggleTodayFilter) {
+                                    if todayFilterOn {
+                                        Label("lc.sources.filter.today".loc, systemImage: "checkmark")
+                                    } else {
+                                        Text("lc.sources.filter.today".loc)
                                     }
                                 }
                             } label: {
