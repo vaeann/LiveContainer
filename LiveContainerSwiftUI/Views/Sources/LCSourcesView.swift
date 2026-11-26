@@ -574,6 +574,14 @@ struct LCSourcesView: View {
             return result.sorted { a, b in
                 (a.latestVersion?.releaseDate ?? .distantPast) > (b.latestVersion?.releaseDate ?? .distantPast)
             }
+        case .name:
+            return result.sorted { a, b in
+                a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+        case .size:
+            return result.sorted { a, b in
+                (a.latestVersion?.size ?? 0) > (b.latestVersion?.size ?? 0)
+            }
         }
     }
 

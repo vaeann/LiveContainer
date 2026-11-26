@@ -43,34 +43,12 @@ struct AltStoreSourceSectionHeaderView: View {
                 } else {
                     HStack(spacing: 14) {
                         if item.source != nil {
-                            Menu {
-                                Button(action: { onSortModeChange(.sourceOrder) }) {
-                                    if sortMode == .sourceOrder {
-                                        Label("lc.sources.sort.sourceOrder".loc, systemImage: "checkmark")
-                                    } else {
-                                        Text("lc.sources.sort.sourceOrder".loc)
-                                    }
-                                }
-                                Button(action: { onSortModeChange(.recentlyUpdated) }) {
-                                    if sortMode == .recentlyUpdated {
-                                        Label("lc.sources.sort.recent".loc, systemImage: "checkmark")
-                                    } else {
-                                        Text("lc.sources.sort.recent".loc)
-                                    }
-                                }
-                                Divider()
-                                Button(action: onToggleTodayFilter) {
-                                    if todayFilterOn {
-                                        Label("lc.sources.filter.today".loc, systemImage: "checkmark")
-                                    } else {
-                                        Text("lc.sources.filter.today".loc)
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "arrow.up.arrow.down.circle")
-                                    .imageScale(.large)
-                                    .foregroundColor(.secondary)
-                            }
+                            LCSourceSortMenuButton(
+                                sortMode: sortMode,
+                                onSortModeChange: onSortModeChange,
+                                todayFilterOn: todayFilterOn,
+                                onToggleTodayFilter: onToggleTodayFilter
+                            )
                         }
                         Menu {
                             Button("lc.sources.refresh".loc, systemImage: "arrow.clockwise", action: onRefresh)

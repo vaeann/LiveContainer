@@ -95,9 +95,20 @@ enum LCSourceUpdateIgnore {
 /// unstored means the source's own order. "Recently
 /// updated" keys on each app's latest version date —
 /// every app in a well-formed source carries one.
-enum LCSourceAppSort: String {
+enum LCSourceAppSort: String, CaseIterable {
     case sourceOrder
     case recentlyUpdated
+    case name
+    case size
+
+    var title: String {
+        switch self {
+        case .sourceOrder: return "lc.sources.sort.sourceOrder".loc
+        case .recentlyUpdated: return "lc.sources.sort.recent".loc
+        case .name: return "lc.sources.sort.name".loc
+        case .size: return "lc.sources.sort.size".loc
+        }
+    }
 
     private static func key(for sourceURL: URL) -> String {
         "LCSourceAppSort-\(sourceURL.absoluteString)"
