@@ -181,8 +181,8 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     }
 
     /// Deleting a kept package asks first too (Ann
-    /// 2026-11-26): the swipe button and the full swipe
-    /// both land here; "Clear all" already had its own
+    /// 2026-11-26): the swipe's delete button lands
+    /// here; "Clear all" already had its own
     /// confirmation.
     private func requestDelete(_ record: LCDownloadedPackage) {
         packageToDelete = record
