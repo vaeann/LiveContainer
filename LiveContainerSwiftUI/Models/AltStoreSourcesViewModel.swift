@@ -115,6 +115,17 @@ final class AltStoreSourcesViewModel: ObservableObject {
     
     @Published private(set) var sources: [SourceItem] = []
     @Published var isRefreshingAll = false
+    /// Sources the user switched off in Manage Sources
+    /// (Ann 2026-11-26): a switched-off source is paused,
+    /// not deleted — refresh-all and the auto-refresh skip
+    /// it, and the sources / updates segments, search and
+    /// the tab badge all ignore it. Its row stays in
+    /// Manage Sources (name / icon / app count come from
+    /// the on-disk source cache, no fetch needed), and
+    /// switching it back on refreshes it once. Persisted
+    /// as the sources' absolute URL strings.
+    @Published private(set) var disabledSourceURLs: Set<String> = []
+    private static let disabledSourcesKey = "LCDisabledSourceURLs"
     private let defaultsKey = "LCAltStoreSourceURLs"
     /// Built-in source (Ann's own AltSource collection): seeded into
     /// the stored list once, so it comes preinstalled on fresh and
@@ -129,6 +140,38 @@ final class AltStoreSourcesViewModel: ObservableObject {
 
     private let cacheDirectoryName = "AltStoreSourceCache"
     private var hasLoadedSources = false
+
+    init() {
+        disabledSourceURLs = Set(UserDefaults.standard.stringArray(forKey: Self.disabledSourcesKey) ?? [])
+    }
+
+    func isSourceEnabled(_ item: SourceItem) -> Bool {
+        !disabledSourceURLs.contains(item.url.absoluteString)
+    }
+
+    /// The sources the browsing UI works with — everything
+    /// except the switched-off ones.
+    var enabledSources: [SourceItem] {
+        sources.filter { isSourceEnabled($0) }
+    }
+
+    func isBuiltInSource(_ item: SourceItem) -> Bool {
+        item.url.absoluteString == Self.builtInSourceURLString
+    }
+
+    func setSourceEnabled(_ item: SourceItem, _ enabled: Bool) {
+        if enabled {
+            disabledSourceURLs.remove(item.url.absoluteString)
+        } else {
+            disabledSourceURLs.insert(item.url.absoluteString)
+        }
+        UserDefaults.standard.set(Array(disabledSourceURLs), forKey: Self.disabledSourcesKey)
+        if enabled {
+            // Catch up right away (Ann 2026-11-26): a source
+            // that was off may be stale.
+            Task { await refreshSource(item) }
+        }
+    }
     
     func loadSourcesIfNeeded() {
         guard !hasLoadedSources else { return }
@@ -156,6 +199,10 @@ final class AltStoreSourcesViewModel: ObservableObject {
     
     func removeSource(_ item: SourceItem) {
         sources.removeAll { $0.id == item.id }
+        if disabledSourceURLs.contains(item.url.absoluteString) {
+            disabledSourceURLs.remove(item.url.absoluteString)
+            UserDefaults.standard.set(Array(disabledSourceURLs), forKey: Self.disabledSourcesKey)
+        }
         persistSources()
         removeCache(for: item.url)
     }
@@ -170,7 +217,9 @@ final class AltStoreSourcesViewModel: ObservableObject {
         }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastFullRefreshKey)
         isRefreshingAll = true
-        for url in sources.map({ $0.url }) {
+        // Switched-off sources are skipped (Ann 2026-11-26):
+        // off means paused, no fetching.
+        for url in sources.filter({ isSourceEnabled($0) }).map({ $0.url }) {
             await refreshSource(url: url)
         }
         isRefreshingAll = false

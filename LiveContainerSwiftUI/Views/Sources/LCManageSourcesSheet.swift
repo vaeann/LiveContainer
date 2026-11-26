@@ -29,19 +29,49 @@ struct ManageSourcesSheet: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(viewModel.sources, id: \.id) { item in
-                            HStack(alignment: .top, spacing: 12) {
+                            // Card-style row (Ann 2026-11-26,
+                            // from her reference screenshot):
+                            // big icon, name with the built-in
+                            // badge, truncated URL, app count,
+                            // and the on/off switch on the
+                            // right. Swipe-to-delete stays.
+                            HStack(spacing: 12) {
                                 SourceIconView(url: resolvedIconURL(for: item))
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.displayName)
-                                        .bold()
+                                    .frame(width: 48, height: 48)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Text(item.displayName)
+                                            .font(.system(size: 16)).bold()
+                                            .lineLimit(1)
+                                        if viewModel.isBuiltInSource(item) {
+                                            Text("lc.sources.badge.builtIn".loc)
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundColor(.purple)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Capsule().fill(Color.purple.opacity(0.15)))
+                                        }
+                                    }
                                     Text(item.url.absoluteString)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                        .lineLimit(1)
                                         .textSelection(.enabled)
+                                    if let source = item.source {
+                                        Text("lc.sources.manage.appCount %lld".localizeWithFormat(source.apps.count))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { viewModel.isSourceEnabled(item) },
+                                    set: { viewModel.setSourceEnabled(item, $0) }
+                                ))
+                                .labelsHidden()
                             }
+                            .padding(.vertical, 4)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     sourcePendingRemoval = item
@@ -52,7 +82,7 @@ struct ManageSourcesSheet: View {
                         }
                     }
                 } header: {
-                    Text("lc.sources.manage.current".loc)
+                    Text("\("lc.sources.manage.current".loc) (\(viewModel.sources.count))")
                 }
                 
                 Section {

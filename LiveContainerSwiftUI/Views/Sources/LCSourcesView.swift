@@ -47,9 +47,11 @@ struct LCSourcesView: View {
     @EnvironmentObject private var sharedModel : SharedModel
     @ObservedObject private var downloadStore = LCDownloadStore.shared
 
-    /// Total number of apps across all sources (the sources tab's count).
+    /// Total number of apps across all enabled sources
+    /// (the sources tab's count; switched-off sources
+    /// don't count, Ann 2026-11-26).
     private var totalSourceAppsCount: Int {
-        viewModel.sources.reduce(0) { $0 + ($1.source?.apps.count ?? 0) }
+        viewModel.enabledSources.reduce(0) { $0 + ($1.source?.apps.count ?? 0) }
     }
 
     @State private var isViewAppeared = false
@@ -185,6 +187,13 @@ struct LCSourcesView: View {
                 self.selectedSourceChip = nil
             }
         }
+        .onChange(of: viewModel.disabledSourceURLs) { _ in
+            // A switched-off source's chip falls back to all.
+            if let selectedSourceChip,
+               !viewModel.enabledSources.contains(where: { $0.id == selectedSourceChip }) {
+                self.selectedSourceChip = nil
+            }
+        }
         .onChange(of: sharedModel.deepLink) { link in
             guard sharedModel.selectedTab == .sources, let link else { return }
             sharedModel.deepLink = nil
@@ -245,6 +254,13 @@ struct LCSourcesView: View {
             if viewModel.sources.isEmpty {
                 emptySourcesView
                     .padding(.top, 48)
+            } else if viewModel.enabledSources.isEmpty && !isFiltering(sourcesSearchContext) {
+                Text("lc.sources.allDisabled".loc)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 48)
+                    .padding(.horizontal)
             } else if isFiltering(sourcesSearchContext) {
                 sourcesSearchResultsRows
             } else {
@@ -269,7 +285,7 @@ struct LCSourcesView: View {
                     // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
                     // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
                 } else {
-                    ForEach(viewModel.sources, id: \.id) { item in
+                    ForEach(viewModel.enabledSources, id: \.id) { item in
                         sourceErrorCard(item: item)
                     }
                     ForEach(allSourcesApps, id: \.app.id) { pair in
@@ -308,7 +324,7 @@ struct LCSourcesView: View {
                     sourceChip(title: "lc.sources.chip.allSources".loc, iconURL: nil, systemImage: "square.grid.2x2", isSelected: selectedSourceChip == nil) {
                         selectedSourceChip = nil
                     }
-                    ForEach(viewModel.sources, id: \.id) { item in
+                    ForEach(viewModel.enabledSources, id: \.id) { item in
                         sourceChip(title: item.source?.name ?? item.displayName, iconURL: item.primaryIconURL, systemImage: nil, isSelected: selectedSourceChip == item.id) {
                             selectedSourceChip = item.id
                         }
@@ -371,7 +387,7 @@ struct LCSourcesView: View {
     /// The source behind the active chip, if any.
     private var selectedChipItem: AltStoreSourcesViewModel.SourceItem? {
         guard let selectedSourceChip else { return nil }
-        return viewModel.sources.first { $0.id == selectedSourceChip }
+        return viewModel.enabledSources.first { $0.id == selectedSourceChip }
     }
 
     /// A failed source's error card, shown wherever its
@@ -408,7 +424,7 @@ struct LCSourcesView: View {
     /// order).
     private var allSourcesApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         var pairs: [(source: AltStoreSource, app: AltStoreSourceApp)] = []
-        for item in viewModel.sources {
+        for item in viewModel.enabledSources {
             guard let source = item.source else { continue }
             for app in source.apps {
                 pairs.append((source: source, app: app))
@@ -547,7 +563,7 @@ struct LCSourcesView: View {
         _ = ignoreTick
         var bestByBundle: [String: (source: AltStoreSource, app: AltStoreSourceApp)] = [:]
         var order: [String] = []
-        for item in viewModel.sources {
+        for item in viewModel.enabledSources {
             guard let source = item.source else { continue }
             for app in source.apps {
                 guard hasUpdate(for: app), let latest = app.latestVersion else { continue }
@@ -704,7 +720,7 @@ struct LCSourcesView: View {
     /// search, in source order.
     private var sourcesSearchResults: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         var results: [(source: AltStoreSource, app: AltStoreSourceApp)] = []
-        for item in viewModel.sources {
+        for item in viewModel.enabledSources {
             guard let source = item.source else { continue }
             for app in appsMatching(source.apps, context: sourcesSearchContext) {
                 results.append((source: source, app: app))
