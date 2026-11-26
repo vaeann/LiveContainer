@@ -84,7 +84,7 @@ struct LCMultitaskSettingView: View {
                             .foregroundColor(.secondary)
                             .font(.caption)
                     }
-                    Slider(value: $dockWidth, in: 20...120) {
+                    Slider(value: $dockWidth, in: 50...100) {
                         Text("lc.settings.dockWidth".loc)
                     }
                     .tint(.accentColor)
