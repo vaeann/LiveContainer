@@ -126,6 +126,13 @@ final class AltStoreSourcesViewModel: ObservableObject {
     /// as the sources' absolute URL strings.
     @Published private(set) var disabledSourceURLs: Set<String> = []
     private static let disabledSourcesKey = "LCDisabledSourceURLs"
+    /// Per-source badge colors (hex by source URL),
+    /// assigned once when a source first appears and
+    /// then fixed (Ann 2026-11-26): a random palette
+    /// color no other current source holds. Removing a
+    /// source frees its color, so re-adding rolls again.
+    private var sourceBadgeColorHex: [String: String] = [:]
+    private static let badgeColorsKey = "LCSourceBadgeColors"
     private let defaultsKey = "LCAltStoreSourceURLs"
     /// Built-in source (Ann's own AltSource collection): seeded into
     /// the stored list once, so it comes preinstalled on fresh and
@@ -143,6 +150,41 @@ final class AltStoreSourcesViewModel: ObservableObject {
 
     init() {
         disabledSourceURLs = Set(UserDefaults.standard.stringArray(forKey: Self.disabledSourcesKey) ?? [])
+        sourceBadgeColorHex = UserDefaults.standard.dictionary(forKey: Self.badgeColorsKey) as? [String: String] ?? [:]
+    }
+
+    /// The source's badge color, assigned on first sight
+    /// and persisted. Stamped onto the decoded source so
+    /// every row can reach it.
+    private func badgeColorHex(for url: URL) -> String {
+        let key = url.absoluteString
+        if let existing = sourceBadgeColorHex[key] {
+            return existing
+        }
+        // Twelve hues around the wheel in the card
+        // colors' S/L family; unclaimed ones first, and
+        // once all twelve are taken, the least-held.
+        let palette = (0..<12).map { i -> String in
+            let rgb = lcHSLToRGB(hue: Double(i) * 30 + 15, saturation: 0.62, lightness: 0.42)
+            return String(format: "#%02X%02X%02X", Int(rgb.r * 255), Int(rgb.g * 255), Int(rgb.b * 255))
+        }
+        let used = Set(sourceBadgeColorHex.values)
+        let pick: String
+        if let free = palette.filter({ !used.contains($0) }).randomElement() {
+            pick = free
+        } else {
+            let counts = Dictionary(grouping: sourceBadgeColorHex.values.filter { palette.contains($0) }, by: { $0 }).mapValues(\.count)
+            pick = palette.min(by: { (counts[$0] ?? 0) < (counts[$1] ?? 0) })!
+        }
+        sourceBadgeColorHex[key] = pick
+        UserDefaults.standard.set(sourceBadgeColorHex, forKey: Self.badgeColorsKey)
+        return pick
+    }
+
+    private func stampedWithBadgeColor(_ source: AltStoreSource, url: URL) -> AltStoreSource {
+        var stamped = source
+        stamped.badgeColorHex = badgeColorHex(for: url)
+        return stamped
     }
 
     func isSourceEnabled(_ item: SourceItem) -> Bool {
@@ -203,6 +245,9 @@ final class AltStoreSourcesViewModel: ObservableObject {
             disabledSourceURLs.remove(item.url.absoluteString)
             UserDefaults.standard.set(Array(disabledSourceURLs), forKey: Self.disabledSourcesKey)
         }
+        if sourceBadgeColorHex.removeValue(forKey: item.url.absoluteString) != nil {
+            UserDefaults.standard.set(sourceBadgeColorHex, forKey: Self.badgeColorsKey)
+        }
         persistSources()
         removeCache(for: item.url)
     }
@@ -241,7 +286,7 @@ final class AltStoreSourcesViewModel: ObservableObject {
                 sources[sourceIndex].isLoading = false
                 return
             }
-            sources[sourceIndex].source = source
+            sources[sourceIndex].source = stampedWithBadgeColor(source, url: url)
             sources[sourceIndex].isLoading = false
             storeCache(data, for: url)
         } catch {
@@ -272,7 +317,7 @@ final class AltStoreSourcesViewModel: ObservableObject {
             let url = sources[index].url
             if let data = cachedData(for: url),
                let cachedSource = try? AltStoreSourceLoader.decode(from: data, baseURL: url) {
-                sources[index].source = cachedSource
+                sources[index].source = stampedWithBadgeColor(cachedSource, url: url)
             }
         }
     }

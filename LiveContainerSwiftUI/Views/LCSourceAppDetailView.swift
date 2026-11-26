@@ -25,9 +25,10 @@ struct LCSourceAppDetailView: View {
 
     /// 与列表行完全同款的按钮颜色（Ann 2026-11-26）：列表用 App 的
     /// 主题色，详情页之前写死 FontColor，同一个按钮两个颜色不协调。
+    /// 主题色现由客户端按 bundle id 定（lcCardColor），两边共用。
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
-        return app.tintColor ?? source.tintColor ?? Color("FontColor")
+        return app.lcCardColor
     }
 
     /// 头部图标边长：跟文字栈一样高（Ann 2026-11-26：图标大小看

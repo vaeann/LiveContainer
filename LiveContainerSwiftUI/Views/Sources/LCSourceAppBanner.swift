@@ -54,7 +54,9 @@ struct LCSourceAppBanner: View {
 
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
-        return app.tintColor ?? source.tintColor ?? Color("FontColor")
+        // Ours, not the source file's (Ann 2026-11-26):
+        // MD5-of-bundle-id, see AltStoreSourceApp.lcCardColor.
+        return app.lcCardColor
     }
 
     private var textColor: Color {
@@ -243,13 +245,16 @@ struct LCSourceAppBanner: View {
     }
 
     private var sourceTag: some View {
+        // The badge wears the source's own assigned color
+        // (Ann 2026-11-26): light fill, full-strength
+        // text — the manage sheet's built-in badge style.
         Text(source.name)
             .font(.system(size: 9, weight: .semibold))
-            .foregroundColor(textColor)
+            .foregroundColor(source.badgeColor ?? textColor)
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
-            .background(Capsule().fill(Color.primary.opacity(0.08)))
+            .background(Capsule().fill((source.badgeColor ?? Color.primary).opacity(source.badgeColor == nil ? 0.08 : 0.15)))
     }
 
     private var betaBadge: some View {

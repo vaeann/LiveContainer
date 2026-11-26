@@ -6,6 +6,7 @@
 //  stage 1: pure move, no code changes).
 //
 
+import CryptoKit
 import Foundation
 import SwiftUI
 
@@ -45,6 +46,68 @@ struct AltStoreSource: Identifiable, Hashable {
     let tintColor: Color?
     let website: URL?
     let apps: [AltStoreSourceApp]
+    /// This source's badge color (hex), assigned by the
+    /// view model when the source is decoded — a random
+    /// palette color no other current source uses,
+    /// persisted per source URL so it stays fixed across
+    /// launches (Ann 2026-11-26). Stamped after decoding,
+    /// never part of the source file.
+    var badgeColorHex: String?
+
+    var badgeColor: Color? {
+        badgeColorHex.flatMap { lcColor(fromHex: $0) }
+    }
+}
+
+/// HSL → RGB (hue in degrees, saturation / lightness
+/// 0…1), channels truncated like Ann's source
+/// generator does.
+func lcHSLToRGB(hue: Double, saturation: Double, lightness: Double) -> (r: Double, g: Double, b: Double) {
+    let c = (1 - abs(2 * lightness - 1)) * saturation
+    let x = c * (1 - abs((hue / 60).truncatingRemainder(dividingBy: 2) - 1))
+    let m = lightness - c / 2
+    let sector = (Int(hue) / 60) % 6
+    let base: (Double, Double, Double)
+    switch sector {
+    case 0: base = (c, x, 0)
+    case 1: base = (x, c, 0)
+    case 2: base = (0, c, x)
+    case 3: base = (0, x, c)
+    case 4: base = (x, 0, c)
+    default: base = (c, 0, x)
+    }
+    return (base.0 + m, base.1 + m, base.2 + m)
+}
+
+func lcColor(fromHex hex: String) -> Color? {
+    var cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+    cleaned = cleaned.replacingOccurrences(of: "#", with: "")
+    guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
+    return Color(
+        red: Double((value & 0xFF0000) >> 16) / 255,
+        green: Double((value & 0x00FF00) >> 8) / 255,
+        blue: Double(value & 0x0000FF) / 255
+    )
+}
+
+extension AltStoreSourceApp {
+    /// The card color is decided here, not by the source
+    /// file (Ann 2026-11-26): MD5 of the bundle id, with
+    /// the exact recipe her own AltSource collection
+    /// uses — hue from the digest's first 8 hex digits,
+    /// saturation 58–69%, lightness 44–52% (HSL). The
+    /// same app gets the same color in every source and
+    /// on every launch, with no storage; the narrow S/L
+    /// bands keep all cards in one visual family.
+    var lcCardColor: Color {
+        let digest = Insecure.MD5.hash(data: Data(bundleIdentifier.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        let hue = Double(Int(hex.prefix(8), radix: 16)! % 360)
+        let saturation = Double(58 + (Int(hex.dropFirst(8).prefix(2), radix: 16)! % 12)) / 100
+        let lightness = Double(44 + (Int(hex.dropFirst(10).prefix(2), radix: 16)! % 9)) / 100
+        let rgb = lcHSLToRGB(hue: hue, saturation: saturation, lightness: lightness)
+        return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
+    }
 }
 
 /// Segment-wise numeric version comparison (1.10 > 1.9); non-numeric
