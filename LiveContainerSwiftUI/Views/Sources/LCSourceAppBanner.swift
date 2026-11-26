@@ -143,7 +143,12 @@ struct LCSourceAppBanner: View {
                 // 2026-11-26, second round): it belongs to
                 // the action — "GET, and this is the version
                 // you get". Overlong versions truncate at
-                // the column's width.
+                // the column's width. The column hangs from
+                // the BUTTON's centre, not its own (Ann
+                // 2026-11-26, later): centred as a whole, the
+                // button rode ~8pt above the copy button
+                // beside it; aligned on the button, the pair
+                // sits level and the version drops below.
                 VStack(spacing: 4) {
                     installButton
                     if let version = app.latestVersion?.version {
@@ -154,6 +159,7 @@ struct LCSourceAppBanner: View {
                             .frame(width: 70)
                     }
                 }
+                .alignmentGuide(.center) { _ in 16 }
             } else {
                 installButton
             }
