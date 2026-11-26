@@ -59,11 +59,14 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     /// scroll — the same physics as the sources page. A short
     /// library leaves the list shorter than the screen, so a
     /// clear tail row pads the content to a hair past the
-    /// viewport. The estimate only has to be rough: overshooting
-    /// is harmless (a long list needs no padding), and the
-    /// picker/header allowance below errs on the high side.
+    /// viewport. The estimate must err LOW: the spacer tops
+    /// the content up by (viewport + 1 − estimate), so an
+    /// estimate higher than the real content (rows run about
+    /// 60pt, the picker and headers about 100) still leaves
+    /// the list short of the screen and the bar pinned, while
+    /// a low estimate only adds invisible tail.
     private var tailSpacerHeight: CGFloat {
-        let estimatedContent = 140 + CGFloat(filteredPackages.count) * 66
+        let estimatedContent = 60 + CGFloat(filteredPackages.count) * 56
         return max(0, listViewportHeight + 1 - estimatedContent)
     }
 
