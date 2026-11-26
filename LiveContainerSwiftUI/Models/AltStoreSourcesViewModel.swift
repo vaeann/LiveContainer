@@ -253,13 +253,19 @@ final class AltStoreSourcesViewModel: ObservableObject {
     }
     
     func refreshSource(_ item: SourceItem) async {
+        // An explicit refresh also forgives icon failures
+        // (Ann 2026-11-26): an icon that failed earlier the
+        // same hour gets downloaded again instead of
+        // waiting out its hour in the failure list.
+        SourceIconCache.shared.clearFailures()
         await refreshSource(url: item.url)
     }
-    
+
     func refreshAllSources() async {
         guard !sources.isEmpty else {
             return
         }
+        SourceIconCache.shared.clearFailures()
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastFullRefreshKey)
         isRefreshingAll = true
         // Switched-off sources are skipped (Ann 2026-11-26):
