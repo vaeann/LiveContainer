@@ -399,6 +399,15 @@ private struct LCSwipeActionsRow<Content: View>: View {
                 Spacer()
                 actionButton(role: .destructive, systemImage: "trash", glyphColor: .red) {
                     onDelete()
+                    // Reset on tap like the share button
+                    // and the full swipe do (Ann 2026-11-27,
+                    // on device: the row used to hang open
+                    // behind the delete confirmation and
+                    // only reset once the alert was answered
+                    // — an leftover asymmetry, not a design).
+                    // Confirming removes the row anyway;
+                    // cancelling leaves it closed.
+                    close()
                 }
             }
 
