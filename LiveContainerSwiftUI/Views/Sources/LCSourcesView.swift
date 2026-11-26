@@ -22,15 +22,15 @@ struct LCSourcesView: View {
     // fresh instance each time — which reset the search query to ""
     // while typing (device report 2026-11-22). A StateObject is
     // created once per view identity and ignores later initializers.
-    // One context per segment (Ann 2026-11-26): each segment's
-    // search filters only its own list and keeps its own query.
-    // They live here rather than in the segment views because a
-    // segment view is destroyed when another segment shows, and
-    // its state would go with it — the queries must survive
+    // The sources segment's search context (Ann 2026-11-26:
+    // it is the only segment that searches — the updates and
+    // downloads bars were removed the same day, there is
+    // little in those lists worth searching). It lives here
+    // rather than in the segment view because the segment
+    // view is destroyed when another segment shows, and its
+    // state would go with it — the query must survive
     // segment switches.
     @StateObject private var sourcesSearchContext = SearchContext()
-    @StateObject private var updatesSearchContext = SearchContext()
-    @StateObject private var downloadsSearchContext = SearchContext()
     @State private var expandedSources: Set<URL> = []
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
@@ -50,7 +50,7 @@ struct LCSourcesView: View {
         NavigationView {
             Group {
                 if selectedSegment == 2 {
-                    LCDownloadsView(searchContext: downloadsSearchContext) {
+                    LCDownloadsView {
                         segmentPicker
                     }
                 } else if selectedSegment == 1 {
@@ -326,53 +326,45 @@ struct LCSourcesView: View {
 
     // MARK: - Updates tab
 
-    /// The updates segment, on the shared segment shell;
-    /// its own drawer search bar filters only this list.
-    /// The update-all button hides while filtering: it
-    /// acts on the whole list, and over a filtered list
-    /// it would read as "update only these".
+    /// The updates segment, on the shared segment shell.
+    /// No search bar (Ann 2026-11-26: little here worth
+    /// searching) — the list is always the whole list, so
+    /// the update-all button always shows.
     private var updatesScrollView: some View {
-        LCSegmentShell(searchContext: updatesSearchContext) {
+        LCSegmentShell {
             segmentPicker
         } content: {
             if viewModel.sources.isEmpty {
                 emptySourcesView
                     .padding(.top, 48)
-            } else if isFiltering(updatesSearchContext) && filteredUpdatableApps.isEmpty {
-                Text("lc.sources.search.noResults".loc)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
             } else if updatableApps.isEmpty {
                 Text("lc.sources.updates.empty".loc)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 40)
             } else {
-                if !isFiltering(updatesSearchContext) {
-                    Button {
-                        updateAll()
-                    } label: {
-                        Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
-                            .bold()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 40)
-                            .modifier { content in
-                                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                                    content
-                                        .glassEffect(.regular.interactive(true), in: .capsule)
-                                } else {
-                                    content
-                                        .foregroundColor(.white)
-                                        .background(Capsule().fill(Color("FontColor")))
-                                }
+                Button {
+                    updateAll()
+                } label: {
+                    Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
+                        .bold()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .modifier { content in
+                            if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                                content
+                                    .glassEffect(.regular.interactive(true), in: .capsule)
+                            } else {
+                                content
+                                    .foregroundColor(.white)
+                                    .background(Capsule().fill(Color("FontColor")))
                             }
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal)
+                        }
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
 
-                ForEach(filteredUpdatableApps, id: \.app.id) { pair in
+                ForEach(updatableApps, id: \.app.id) { pair in
                     sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
                         .padding(.horizontal)
                 }
@@ -427,8 +419,7 @@ struct LCSourcesView: View {
     /// sources. One entry per bundle id (the newest offer wins), in
     /// first-appearance order. Ignored versions stay in this list.
     /// Deliberately unfiltered: the badge count and update-all act
-    /// on the whole list — the updates segment filters its own copy
-    /// for display (filteredUpdatableApps).
+    /// on the whole list, and the updates segment shows it as-is.
     var updatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         _ = ignoreTick
         var bestByBundle: [String: (source: AltStoreSource, app: AltStoreSourceApp)] = [:]
@@ -632,16 +623,6 @@ struct LCSourcesView: View {
         return results
     }
 
-    /// The updates list under the updates segment's own
-    /// query (the canonical updatableApps stays unfiltered).
-    private var filteredUpdatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
-        let query = updatesSearchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else {
-            return updatableApps
-        }
-        return updatableApps.filter { appMatches($0.app, lowercasedQuery: query) }
-    }
-    
     @MainActor
     private func handleAddSource(_ rawValue: String) async -> Bool {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)

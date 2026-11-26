@@ -32,16 +32,18 @@ import SwiftUI
 ///   a scroll view that cannot scroll gives the drawer
 ///   no travel to hide with — the bar stays pinned.
 ///
-/// Each segment supplies its own SearchContext, so each
-/// searches only itself and keeps its own query.
+/// Only the sources segment searches (Ann 2026-11-26,
+/// later the same day: the updates and downloads lists
+/// hold little worth searching, so their bars were
+/// removed for good); a segment passes nil to opt out.
 struct LCSegmentShell<Picker: View, Content: View>: View {
-    @ObservedObject var searchContext: SearchContext
+    private let searchContext: SearchContext?
     private let picker: Picker
     private let content: Content
 
     @State private var viewportHeight: CGFloat = 0
 
-    init(searchContext: SearchContext,
+    init(searchContext: SearchContext? = nil,
          @ViewBuilder picker: () -> Picker,
          @ViewBuilder content: () -> Content) {
         self.searchContext = searchContext
@@ -58,11 +60,28 @@ struct LCSegmentShell<Picker: View, Content: View>: View {
             .padding(.vertical)
             .frame(minHeight: viewportHeight + 1, alignment: .top)
         }
-        .searchable(text: $searchContext.query)
+        .modifier(LCSegmentSearchBar(context: searchContext))
         .background(GeometryReader { proxy in
             Color.clear
                 .onAppear { viewportHeight = proxy.size.height }
                 .onChange(of: proxy.size.height) { viewportHeight = $0 }
         })
+    }
+}
+
+/// The drawer search bar for segments that search;
+/// segments without a context get no bar at all.
+private struct LCSegmentSearchBar: ViewModifier {
+    let context: SearchContext?
+
+    func body(content: Content) -> some View {
+        if let context {
+            content.searchable(text: Binding(
+                get: { context.query },
+                set: { context.query = $0 }
+            ))
+        } else {
+            content
+        }
     }
 }

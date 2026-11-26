@@ -9,18 +9,19 @@
 //  overwritten), swipe or long-press to share/delete it, and
 //  tap an interrupted download to resume it.
 //
-//  Search (Ann 2026-11-26): like the other two segments, this
-//  segment rides the shared segment shell (LCSegmentShell) —
-//  the picker as first row, its own drawer search bar,
-//  filtering only this library by app name / bundle id and
-//  keeping its own query. Until the 2026-11-26 stage-3
-//  refactor this segment was a List while the others were
-//  scroll views, which put its picker lower and narrower
-//  than theirs; on the shell all three are the same
-//  geometry by construction. The List's inset-grouped card
-//  is reproduced by hand below, and swipe-to-delete by
-//  LCSwipeToDeleteRow (List-only .swipeActions does not
-//  exist on a scroll view).
+//  This segment rides the shared segment shell
+//  (LCSegmentShell) — the picker as first row, so all
+//  three segments share one geometry by construction
+//  (until the 2026-11-26 stage-3 refactor this segment
+//  was a List while the others were scroll views, which
+//  put its picker lower and narrower than theirs). The
+//  List's inset-grouped card is reproduced by hand
+//  below, and swipe-to-delete by LCSwipeToDeleteRow
+//  (List-only .swipeActions does not exist on a scroll
+//  view). No search bar here: Ann removed the updates
+//  and downloads bars on 2026-11-26 — little in those
+//  lists worth searching; only the sources segment
+//  searches.
 //
 
 import SwiftUI
@@ -36,7 +37,6 @@ private let lcDownloadsDateFormatter: DateFormatter = {
 }()
 
 struct LCDownloadsView<SegmentPicker: View>: View {
-    @ObservedObject var searchContext: SearchContext
     private let segmentPicker: SegmentPicker
 
     @ObservedObject private var store = LCDownloadStore.shared
@@ -48,34 +48,12 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     /// revealed; opening one row closes the others.
     @State private var openRowID: LCDownloadedPackage.ID?
 
-    init(searchContext: SearchContext, @ViewBuilder segmentPicker: () -> SegmentPicker) {
-        self.searchContext = searchContext
+    init(@ViewBuilder segmentPicker: () -> SegmentPicker) {
         self.segmentPicker = segmentPicker()
     }
 
-    private var isFiltering: Bool {
-        !searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var filteredPackages: [LCDownloadedPackage] {
-        let query = searchContext.debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            return store.packages
-        }
-        let lower = query.lowercased()
-        return store.packages.filter { record in
-            if record.appName.lowercased().contains(lower) {
-                return true
-            }
-            if let bundleID = record.bundleID, bundleID.lowercased().contains(lower) {
-                return true
-            }
-            return false
-        }
-    }
-
     var body: some View {
-        LCSegmentShell(searchContext: searchContext) {
+        LCSegmentShell {
             segmentPicker
         } content: {
             if store.packages.isEmpty {
@@ -90,38 +68,26 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 .padding()
                 .padding(.top, 48)
                 .frame(maxWidth: .infinity, alignment: .center)
-            } else if isFiltering && filteredPackages.isEmpty {
-                Text("lc.sources.search.noResults".loc)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
-                    .padding(.horizontal)
             } else {
                 VStack(spacing: 8) {
-                    // Total size and clear-all describe the
-                    // whole library; over a filtered list they
-                    // would mislead, so the header steps aside
-                    // while filtering.
-                    if !isFiltering {
-                        HStack {
-                            Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("lc.downloads.clearAll".loc) {
-                                showClearAllConfirm = true
-                            }
-                            .foregroundStyle(.red)
+                    HStack {
+                        Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("lc.downloads.clearAll".loc) {
+                            showClearAllConfirm = true
                         }
-                        .font(.footnote)
-                        .padding(.horizontal)
+                        .foregroundStyle(.red)
                     }
+                    .font(.footnote)
+                    .padding(.horizontal)
 
                     // The inset-grouped card, by hand: one
                     // rounded stack, dividers inset past the
                     // icons, rows sliding over it to delete.
                     VStack(spacing: 0) {
-                        ForEach(filteredPackages) { record in
-                            if record.id != filteredPackages.first?.id {
+                        ForEach(store.packages) { record in
+                            if record.id != store.packages.first?.id {
                                 Divider()
                                     .padding(.leading, 68)
                             }
@@ -148,14 +114,6 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         }
         .sheet(item: $packageToShare) { record in
             ActivityViewController(activityItems: [store.fileURL(for: record)])
-        }
-        .onChange(of: store.packages.isEmpty) { isEmpty in
-            // A query that outlives the last package would
-            // silently filter the next download that lands
-            // here — the search it belonged to is gone.
-            if isEmpty {
-                searchContext.query = ""
-            }
         }
     }
 
