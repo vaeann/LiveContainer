@@ -30717,29 +30717,6 @@
         }
       }
     },
-    "lc.sources.sort.name" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Name"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "名称"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "名稱"
-          }
-        }
-      }
-    },
     "lc.sources.sort.recent" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -30759,29 +30736,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近更新"
-          }
-        }
-      }
-    },
-    "lc.sources.sort.size" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Size"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大小"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "大小"
           }
         }
       }

@@ -528,8 +528,7 @@ struct LCSourcesView: View {
 
     /// A source's apps in the order its header menu
     /// currently asks for. The sort is stable, so apps
-    /// sharing a key (same date, same size) keep source
-    /// order.
+    /// sharing a date keep source order.
     private func displayedApps(_ apps: [AltStoreSourceApp], for item: AltStoreSourcesViewModel.SourceItem) -> [AltStoreSourceApp] {
         let result = apps
         switch sortMode(for: item) {
@@ -538,14 +537,6 @@ struct LCSourcesView: View {
         case .recentlyUpdated:
             return result.sorted { a, b in
                 (a.latestVersion?.releaseDate ?? .distantPast) > (b.latestVersion?.releaseDate ?? .distantPast)
-            }
-        case .name:
-            return result.sorted { a, b in
-                a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-            }
-        case .size:
-            return result.sorted { a, b in
-                (a.latestVersion?.size ?? 0) > (b.latestVersion?.size ?? 0)
             }
         }
     }

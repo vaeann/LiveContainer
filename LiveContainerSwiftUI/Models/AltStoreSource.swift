@@ -98,15 +98,21 @@ enum LCSourceUpdateIgnore {
 enum LCSourceAppSort: String, CaseIterable {
     case sourceOrder
     case recentlyUpdated
-    case name
-    case size
 
     var title: String {
         switch self {
         case .sourceOrder: return "lc.sources.sort.sourceOrder".loc
         case .recentlyUpdated: return "lc.sources.sort.recent".loc
-        case .name: return "lc.sources.sort.name".loc
-        case .size: return "lc.sources.sort.size".loc
+        }
+    }
+
+    /// Menu icon, mirroring the App page's sort menu
+    /// (its default is "ellipsis", its recency sort
+    /// is "clock").
+    var systemImage: String {
+        switch self {
+        case .sourceOrder: return "ellipsis"
+        case .recentlyUpdated: return "clock"
         }
     }
 
