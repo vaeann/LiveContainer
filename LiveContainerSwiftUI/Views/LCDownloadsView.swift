@@ -85,17 +85,32 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 .padding(.top, 48)
                 .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                VStack(spacing: 8) {
-                    HStack {
-                        Text("lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("lc.downloads.clearAll".loc) {
-                            showClearAllConfirm = true
-                        }
-                        .foregroundStyle(.red)
+                VStack(spacing: 12) {
+                    // Total size and clear-all, merged
+                    // into one full-width capsule in the
+                    // updates segment's update-all style
+                    // (Ann 2026-11-26): the size rides in
+                    // the button's label, and the tap still
+                    // lands on the clear-all confirmation.
+                    Button {
+                        showClearAllConfirm = true
+                    } label: {
+                        Text("lc.downloads.clearAll".loc + " · " + "lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
+                            .bold()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .modifier { content in
+                                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                                    content
+                                        .glassEffect(.regular.interactive(true), in: .capsule)
+                                } else {
+                                    content
+                                        .foregroundColor(.white)
+                                        .background(Capsule().fill(Color("FontColor")))
+                                }
+                            }
                     }
-                    .font(.footnote)
+                    .buttonStyle(.plain)
                     .padding(.horizontal)
 
                     // One card per package, in the
