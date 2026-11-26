@@ -400,6 +400,31 @@ class AppInfoProvider {
             self.hostingController = UIHostingController(rootView: dockView)
             self.hostingController?.view.autoresizingMask = [.flexibleTopMargin, .flexibleLeftMargin, .flexibleRightMargin, .flexibleBottomMargin]
             self.hostingController?.view.backgroundColor = .clear
+            // An external multitask takeover （微珠） suppresses
+            // the native dock by hiding THIS surface — it finds
+            // the one hosting view in the window and sets it
+            // hidden. Upstream's collapsed form (the orb) lived
+            // inside that surface, so hiding it hid everything;
+            // our handle is a sibling in the window instead
+            // (it must stay on screen while the surface is
+            // parked off-screen), so the takeover left it
+            // behind (Ann 2026-11-27). Follow the surface: when
+            // it is hidden from outside, the handle goes too;
+            // when it comes back, the frame pass re-syncs it.
+            // Nothing in LC ever hides this view, so a hidden
+            // surface can only mean a takeover.
+            if let surface = self.hostingController?.view {
+                self.dockSurfaceObservation = surface.observe(\.isHidden, options: [.new]) { [weak self] _, change in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if change.newValue == true {
+                            self.removeHiddenHandle()
+                        } else if self.isVisible {
+                            self.updateDockFrame(animated: false)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -433,6 +458,7 @@ class AppInfoProvider {
     // MARK: - Hidden handle
 
     private var hiddenHandle: LCHiddenDockHandleView?
+    private var dockSurfaceObservation: NSKeyValueObservation?
 
     /// The handle is the only thing a hidden dock leaves on
     /// screen (Ann 2026-11-25): it lives in the same superview as
@@ -440,19 +466,31 @@ class AppInfoProvider {
     /// on the dock's own edge, centered on the dock's height.
     /// Synced from updateDockFrame so every path that moves or
     /// hides the dock keeps it correct.
+    /// Fade the handle out and take it off the window: the
+    /// recall path (the dock is coming back) and the external
+    /// takeover path (the dock surface was hidden from
+    /// outside) both end here.
+    private func removeHiddenHandle() {
+        if let handle = hiddenHandle {
+            hiddenHandle = nil
+            UIView.animate(withDuration: 0.18, animations: {
+                handle.alpha = 0
+            }, completion: { _ in
+                handle.removeFromSuperview()
+            })
+        }
+    }
+
     private func syncHiddenHandle(dockFrame: CGRect, isOnRightSide: Bool) {
-        guard isDockHidden, isVisible, let parent = hostingController?.view.superview else {
+        // The last condition is the takeover guard: while an
+        // external multitask UI （微珠） has the dock surface
+        // hidden, no frame pass may resurrect the handle.
+        guard isDockHidden, isVisible, let parent = hostingController?.view.superview,
+              hostingController?.view.isHidden == false else {
             // Recall (or dismissal): the handle fades out as the
             // dock springs back in, instead of popping out of
             // existence mid-handoff.
-            if let handle = hiddenHandle {
-                hiddenHandle = nil
-                UIView.animate(withDuration: 0.18, animations: {
-                    handle.alpha = 0
-                }, completion: { _ in
-                    handle.removeFromSuperview()
-                })
-            }
+            removeHiddenHandle()
             return
         }
         let handle: LCHiddenDockHandleView
