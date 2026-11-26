@@ -39,7 +39,9 @@ private let lcDownloadsDateFormatter: DateFormatter = {
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter
-}()struct LCDownloadsView<SegmentPicker: View>: View {
+}()
+
+struct LCDownloadsView<SegmentPicker: View>: View {
     private let segmentPicker: SegmentPicker
 
     @ObservedObject private var store = LCDownloadStore.shared
