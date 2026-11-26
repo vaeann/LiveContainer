@@ -17,12 +17,10 @@ struct LCAppGridActions {
     // a running app's window grows out of it (iOS-style entrance).
     let onLaunch: (LCAppModel, CGRect?) -> Void
     let onLaunchMultitaskToggle: (LCAppModel) -> Void
-    /// Double-tap: always launch windowed (Ann 2026-11-27,
-    /// replacing double-tap-opens-settings in both the
-    /// grid and the list; settings stays in the long-press
-    /// menu). Not the toggle above — the gesture means
-    /// "windowed", whatever the app's default mode is.
-    let onLaunchWindowed: (LCAppModel) -> Void
+    /// Long-press menu: launch multitask, but as a small
+    /// window regardless of the global "launch multitask
+    /// windows maximized" default (Ann 2026-11-27).
+    let onLaunchSmallWindow: (LCAppModel) -> Void
     let onOpenSettings: (LCAppModel) -> Void
     let onOpenDataFolder: (LCAppModel) -> Void
     let onCopyLaunchUrl: (LCAppModel) -> Void
@@ -196,7 +194,6 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     private var launchSink: AnyCancellable?
 
     private var onLaunch: ((CGRect?) -> Void)?
-    private var onLaunchWindowed: (() -> Void)?
     private var onClose: (() -> Void)?
     private var menuProvider: (() -> UIMenu)?
 
@@ -240,14 +237,15 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         badgeButton.addTarget(self, action: #selector(handleBadgeTap), for: .touchUpInside)
         addSubview(badgeButton)
 
-        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap))
-        doubleTap.numberOfTapsRequired = 2
-        doubleTap.delegate = self
-        addGestureRecognizer(doubleTap)
+        // No double tap (Ann 2026-11-27: it went, in both
+        // the grid and the list — the settings it opened
+        // upstream and the windowed launch briefly tried
+        // here both live in the long-press menu instead).
+        // The single tap no longer waits for a double tap
+        // to fail, so launches answer at once.
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
         singleTap.numberOfTapsRequired = 1
         singleTap.delegate = self
-        singleTap.require(toFail: doubleTap)
         addGestureRecognizer(singleTap)
 
         addInteraction(UIContextMenuInteraction(delegate: self))
@@ -259,11 +257,9 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     func configure(icon: UIImage, iconSize: CGFloat, showBadge: Bool, ribbon: RibbonSpec,
                    isLaunching: Bool, app: LCAppModel,
                    onLaunch: @escaping (CGRect?) -> Void,
-                   onLaunchWindowed: @escaping () -> Void,
                    onClose: @escaping () -> Void,
                    menuProvider: @escaping () -> UIMenu) {
         self.onLaunch = onLaunch
-        self.onLaunchWindowed = onLaunchWindowed
         self.onClose = onClose
         self.menuProvider = menuProvider
         updateModelLaunching(isLaunching)
@@ -408,14 +404,10 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // The single tap only fires once the double tap has failed
-        // (a good 0.3s+ after the finger lifts), and only then
-        // does the launch latch take over the dimming (see
-        // handleSingleTap). Hold the press dim across that
-        // disambiguation window so a quick tap flows straight
-        // from press dim into launch dim with no gap; 0.5s
-        // covers the recogniser's failure window with margin
-        // (the latch covers everything after the tap fires).
+        // The tap fires as the touch ends and the launch
+        // latch takes over the dimming (see handleSingleTap);
+        // hold the press dim a beat past the lift so the two
+        // meet with no gap.
         let work = DispatchWorkItem { [weak self] in self?.setPressed(false) }
         clearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
@@ -502,15 +494,6 @@ private final class LCGridIconHostView: UIView, UIContextMenuInteractionDelegate
         onLaunch?(rect)
     }
 
-    @objc private func handleDoubleTap() {
-        // Double-tap launches windowed (Ann 2026-11-27;
-        // it opened settings in the upstream banner this
-        // grid's interactions were copied from — settings
-        // stays in the long-press menu).
-        latchLaunchDim()
-        onLaunchWindowed?()
-    }
-
     @objc private func handleBadgeTap() {
         onClose?()
     }
@@ -593,7 +576,6 @@ private struct LCGridIconHost: UIViewRepresentable {
             isLaunching: app.isAppRunning,
             app: app,
             onLaunch: { rect in actions.onLaunch(app, rect) },
-            onLaunchWindowed: { actions.onLaunchWindowed(app) },
             onClose: { actions.onCloseRunning(app) },
             menuProvider: { Self.buildMenu(app: app, actions: actions, onUninstall: onUninstall) }
         )
@@ -608,11 +590,21 @@ private struct LCGridIconHost: UIViewRepresentable {
             })
         }
         if #available(iOS 16.0, *) {
+            // The toggle item names the mode it launches
+            // INTO (Ann 2026-11-27: the upstream titles
+            // "Run" / "Multitask" hid that the first is a
+            // single-task launch).
             rest.append(UIAction(
-                title: app.shouldLaunchInMultitaskMode ? "lc.appBanner.run".loc : "lc.appBanner.multitask".loc,
+                title: app.shouldLaunchInMultitaskMode ? "lc.appBanner.runSingleTask".loc : "lc.appBanner.runMultitask".loc,
                 image: UIImage(systemName: app.shouldLaunchInMultitaskMode ? "play.fill" : "macwindow.badge.plus")
             ) { _ in
                 actions.onLaunchMultitaskToggle(app)
+            })
+            rest.append(UIAction(
+                title: "lc.appBanner.runSmallWindow".loc,
+                image: UIImage(systemName: "macwindow")
+            ) { _ in
+                actions.onLaunchSmallWindow(app)
             })
         }
         rest.append(UIMenu(title: "lc.appBanner.addToHomeScreen".loc,

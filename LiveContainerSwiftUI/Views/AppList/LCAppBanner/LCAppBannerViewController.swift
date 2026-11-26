@@ -76,10 +76,10 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
         bannerView.runControl.addTarget(self, action: #selector(runButtonTapped), for: .touchUpInside)
         bannerView.addInteraction(UIContextMenuInteraction(delegate: self))
 
-        let doubleTapGesture = UITapGestureRecognizer(target: self, action: #selector(bannerDoubleTapped))
-        doubleTapGesture.numberOfTapsRequired = 2
-        doubleTapGesture.cancelsTouchesInView = false
-        bannerView.addGestureRecognizer(doubleTapGesture)
+        // No double tap (Ann 2026-11-27: it went, in both
+        // the list and the grid — upstream had it open
+        // settings; everything it did lives in the
+        // long-press menu).
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -120,24 +120,6 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
         updatePressFeedback()
     }
 
-    @objc private func bannerDoubleTapped(_ gestureRecognizer: UITapGestureRecognizer) {
-        let location = gestureRecognizer.location(in: bannerView.runControl)
-        guard !bannerView.runControl.bounds.contains(location) else {
-            return
-        }
-        // Double-tap launches windowed (Ann 2026-11-27,
-        // both list and grid; upstream had it open
-        // settings — settings stays in the long-press
-        // menu). runApp falls back gracefully where
-        // windowed mode cannot apply (classic-mode apps
-        // force classic inside runApp; pre-iOS 16 takes
-        // the classic path), and an already-windowed app
-        // is brought to the front by runApp's own check.
-        Task { [weak self] in
-            await self?.runApp(multitask: true)
-        }
-    }
-
     @objc private func runButtonTapped() {
         if #available(iOS 16.0, *),
            let currentDataFolder = configuration.model.uiSelectedContainer?.folderName,
@@ -159,7 +141,7 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
         }
     }
 
-    private func runApp(multitask: Bool? = nil) async {
+    private func runApp(multitask: Bool? = nil, smallWindow: Bool = false) async {
         if configuration.model.appInfo.isLocked && !DataManager.shared.model.isHiddenAppUnlocked {
             do {
                 if !(try await LCUtils.authenticateUser()) {
@@ -169,6 +151,14 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
                 showError(error.localizedDescription)
                 return
             }
+        }
+
+        if smallWindow {
+            // One-shot small-window override, consumed by
+            // the next created window (see the grid's
+            // identical write in LCAppListView).
+            UserDefaults.standard.set(false, forKey: "LCNextLaunchMaximizedOverride")
+            UserDefaults.standard.set(Date().timeIntervalSinceReferenceDate, forKey: "LCNextLaunchMaximizedOverrideStamp")
         }
 
         do {
@@ -208,15 +198,28 @@ final class LCAppBannerViewController: UIViewController, UIContextMenuInteractio
             })
         }
 
-        // Multitask Toggle
+        // Multitask Toggle — the item names the mode it
+        // launches INTO (Ann 2026-11-27: the upstream
+        // titles "Run" / "Multitask" hid that the first
+        // is a single-task launch), plus a small-window
+        // launch that ignores the global maximized
+        // default for this one launch.
         if #available(iOS 16.0, *) {
             let shouldLaunchInMultitaskMode = model.shouldLaunchInMultitaskMode
             sectionChildren.append(UIAction(
-                title: shouldLaunchInMultitaskMode ? "lc.appBanner.run".loc : "lc.appBanner.multitask".loc,
+                title: shouldLaunchInMultitaskMode ? "lc.appBanner.runSingleTask".loc : "lc.appBanner.runMultitask".loc,
                 image: UIImage(systemName: shouldLaunchInMultitaskMode ? "play.fill" : "macwindow.badge.plus")
             ) { [weak self] _ in
                 Task { [weak self] in
                     await self?.runApp(multitask: !shouldLaunchInMultitaskMode)
+                }
+            })
+            sectionChildren.append(UIAction(
+                title: "lc.appBanner.runSmallWindow".loc,
+                image: UIImage(systemName: "macwindow")
+            ) { [weak self] _ in
+                Task { [weak self] in
+                    await self?.runApp(multitask: true, smallWindow: true)
                 }
             })
         }

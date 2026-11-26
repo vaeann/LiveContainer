@@ -745,7 +745,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         LCAppGridActions(
             onLaunch: { app, iconRect in gridLaunchApp(app, from: iconRect) },
             onLaunchMultitaskToggle: { app in gridLaunchApp(app, multitask: !(app.shouldLaunchInMultitaskMode)) },
-            onLaunchWindowed: { app in gridLaunchApp(app, multitask: true) },
+            onLaunchSmallWindow: { app in gridLaunchApp(app, multitask: true, smallWindow: true) },
             onOpenSettings: { app in
                 openNavigationView(view: AnyView(LCAppSettingsView(model: app)))
             },
@@ -763,7 +763,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         )
     }
 
-    func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil, from iconRect: CGRect? = nil) {
+    func gridLaunchApp(_ app: LCAppModel, multitask: Bool? = nil, smallWindow: Bool = false, from iconRect: CGRect? = nil) {
         // Already running: bring it to the front, exactly like the banner's run button.
         if multitask == nil, #available(iOS 16.0, *),
            let folderName = app.uiSelectedContainer?.folderName,
@@ -791,6 +791,18 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     errorShow = true
                     return
                 }
+            }
+
+            if smallWindow {
+                // One-shot: the next multitask window
+                // created opens small, whatever the global
+                // maximized default says; the window's
+                // controller consumes it at creation (Ann
+                // 2026-11-27). Written only here, after
+                // auth, so a declined launch leaves nothing
+                // behind.
+                UserDefaults.standard.set(false, forKey: "LCNextLaunchMaximizedOverride")
+                UserDefaults.standard.set(Date().timeIntervalSinceReferenceDate, forKey: "LCNextLaunchMaximizedOverrideStamp")
             }
 
             do {
