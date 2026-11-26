@@ -6,8 +6,8 @@
 //  page (Ann 2026-11-24). Every package LiveContainer downloads
 //  or imports is kept here: tap a finished package to install
 //  it again (any kept version — old versions are never
-//  overwritten), swipe or long-press to share/delete it, and
-//  tap an interrupted download to resume it.
+//  overwritten), swipe left to delete it or right to share
+//  it, and tap an interrupted download to resume it.
 //
 //  This segment rides the shared segment shell
 //  (LCSegmentShell) — the picker as first row, so all
@@ -15,7 +15,7 @@
 //  (until the 2026-11-26 stage-3 refactor this segment
 //  was a List while the others were scroll views, which
 //  put its picker lower and narrower than theirs).
-//  Swipe-to-delete is LCSwipeToDeleteRow (List-only
+//  The swipe actions are LCSwipeActionsRow (List-only
 //  .swipeActions does not exist on a scroll view). Each
 //  package is a card in the sources segment's card
 //  style — same tint recipe, 56pt icon, install capsule
@@ -60,7 +60,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     /// 2026-11-26, right after the install confirm).
     @State private var packageToDelete: LCDownloadedPackage?
     @State private var showDeleteConfirm = false
-    /// The one row whose delete action is currently
+    /// The one row whose swipe actions are currently
     /// revealed; opening one row closes the others.
     @State private var openRowID: LCDownloadedPackage.ID?
 
@@ -117,7 +117,9 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     // sources segment's card style.
                     VStack(spacing: 12) {
                         ForEach(store.packages) { record in
-                            LCSwipeToDeleteRow(rowID: record.id, openRowID: $openRowID, onDelete: {
+                            LCSwipeActionsRow(rowID: record.id, openRowID: $openRowID, canShare: record.isComplete, onShare: {
+                                packageToShare = record
+                            }, onDelete: {
                                 requestDelete(record)
                             }) {
                                 card(for: record)
@@ -166,7 +168,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     // MARK: - Cards
 
     /// Every install entry point (card tap, Install
-    /// button, context menu) asks first (Ann 2026-11-26).
+    /// button) asks first (Ann 2026-11-26).
     private func requestInstall(_ record: LCDownloadedPackage) {
         packageToInstall = record
         showInstallConfirm = true
@@ -177,9 +179,9 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     }
 
     /// Deleting a kept package asks first too (Ann
-    /// 2026-11-26): swipe, full swipe and the context
-    /// menu all land here; "Clear all" already had its
-    /// own confirmation.
+    /// 2026-11-26): the swipe button and the full swipe
+    /// both land here; "Clear all" already had its own
+    /// confirmation.
     private func requestDelete(_ record: LCDownloadedPackage) {
         packageToDelete = record
         showDeleteConfirm = true
@@ -270,23 +272,9 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 downloadHelper.resumeDownload(record: record)
             }
         }
-        .contextMenu {
-            if record.isComplete {
-                Button("lc.downloads.install".loc) {
-                    requestInstall(record)
-                }
-                Button("lc.downloads.share".loc) {
-                    packageToShare = record
-                }
-            } else {
-                Button("lc.downloads.resume".loc) {
-                    downloadHelper.resumeDownload(record: record)
-                }
-            }
-            Button("lc.downloads.delete".loc, role: .destructive) {
-                requestDelete(record)
-            }
-        }
+        // No long-press menu (Ann 2026-11-27): the swipe
+        // actions carry share and delete now, and install
+        // / resume are the card's own tap and capsule.
     }
 
     @ViewBuilder
@@ -336,19 +324,25 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     }
 }
 
-/// A downloads row that reveals a delete button on a
-/// left swipe — the scroll-view stand-in for List's
-/// .swipeActions (stage-3 refactor, Ann approved the
-/// plan 2026-11-26). The button is a liquid-glass circle
-/// with a trash glyph, no red block (Ann 2026-11-27:
-/// the red rectangle is gone, and with it the need to
-/// clip the row so the block's corners looked round).
+/// A downloads row with swipe actions on both sides —
+/// the scroll-view stand-in for List's .swipeActions
+/// (stage-3 refactor, Ann approved the plan 2026-11-26):
+/// swipe left for delete, swipe right for share (Ann
+/// 2026-11-27; share is only offered on complete
+/// packages — a partial file has nothing to share). Both
+/// buttons are the same liquid-glass circle, trash on
+/// the right, share glyph on the left — no red block
+/// (Ann 2026-11-27: the red rectangle is gone, and with
+/// it the need to clip the row so the block's corners
+/// looked round). The card's long-press menu went away
+/// the same day: the swipes carry its actions now.
+///
 /// The drag claims the row only when it is clearly
 /// horizontal (width past 1.5× the height), so vertical
-/// scrolling keeps the row; past half the button's width
-/// the row stays open, a hard swipe deletes outright
-/// like a full swipe in a List, and tapping an open row
-/// closes it instead of acting.
+/// scrolling keeps the row; past half a button's width
+/// the row stays open on that side, a hard swipe fires
+/// the action outright like a full swipe in a List, and
+/// tapping an open row closes it instead of acting.
 ///
 /// The sliding layer's offset is a single stored value
 /// driven directly by the drag (Ann 2026-11-27: the old
@@ -361,14 +355,17 @@ struct LCDownloadsView<SegmentPicker: View>: View {
 /// time is subtracted so motion starts from zero, and
 /// settling animates the same stored offset the finger
 /// was driving.
-private struct LCSwipeToDeleteRow<Content: View>: View {
+private struct LCSwipeActionsRow<Content: View>: View {
     let rowID: LCDownloadedPackage.ID
     @Binding var openRowID: LCDownloadedPackage.ID?
+    let canShare: Bool
+    let onShare: () -> Void
     let onDelete: () -> Void
     @ViewBuilder let content: () -> Content
 
     /// The sliding layer's live x offset: 0 closed,
-    /// -actionWidth open. The one source of truth, while
+    /// +actionWidth open on the share side, -actionWidth
+    /// on the delete side. The one source of truth, while
     /// dragging and while settled alike.
     @State private var offset: CGFloat = 0
     private enum DragIntent {
@@ -376,7 +373,9 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
     }
     @State private var dragIntent: DragIntent = .undecided
     /// Offset the current drag started from (0 or
-    /// -actionWidth), captured when the drag is claimed.
+    /// ±actionWidth — simply the settled offset, since
+    /// the stored offset IS the settled position),
+    /// captured when the drag is claimed.
     @State private var dragStartOffset: CGFloat = 0
     /// Finger travel at claim time: subtracted from the
     /// live translation so the card starts moving from
@@ -391,26 +390,19 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
     }
 
     var body: some View {
-        ZStack(alignment: .trailing) {
-            Button(role: .destructive, action: onDelete) {
-                ZStack {
-                    if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                        Circle()
-                            .fill(Color.clear)
-                            .glassEffect(.regular.interactive(true), in: Circle())
-                    } else {
-                        Circle()
-                            .fill(Color(uiColor: UIColor.secondarySystemBackground))
+        ZStack {
+            HStack(spacing: 0) {
+                if canShare {
+                    actionButton(systemImage: "square.and.arrow.up", glyphColor: .primary) {
+                        onShare()
+                        close()
                     }
-                    Image(systemName: "trash")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.red)
                 }
-                .frame(width: 54, height: 54)
+                Spacer()
+                actionButton(role: .destructive, systemImage: "trash", glyphColor: .red) {
+                    onDelete()
+                }
             }
-            .buttonStyle(.plain)
-            .frame(width: actionWidth)
-            .frame(maxHeight: .infinity)
 
             ZStack {
                 content()
@@ -427,7 +419,7 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
             // Opaque, and it slides WITH the card: the
             // card's tint is a 50% wash — on the sources
             // page that blends with the page behind it, but
-            // here the delete button sits behind the card
+            // here the action buttons sit behind the card
             // and bled straight through until the sliding
             // layer carried the page's own color
             // (Ann 2026-11-26, on device).
@@ -447,6 +439,30 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
         }
     }
 
+    /// One glass-circle action button, 54pt in a
+    /// full-height 78pt cell — the same on both sides.
+    private func actionButton(role: ButtonRole? = nil, systemImage: String, glyphColor: Color, action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            ZStack {
+                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                    Circle()
+                        .fill(Color.clear)
+                        .glassEffect(.regular.interactive(true), in: Circle())
+                } else {
+                    Circle()
+                        .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                }
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(glyphColor)
+            }
+            .frame(width: 54, height: 54)
+        }
+        .buttonStyle(.plain)
+        .frame(width: actionWidth)
+        .frame(maxHeight: .infinity)
+    }
+
     private func close() {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             offset = 0
@@ -462,7 +478,7 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
                     let h = abs(value.translation.height)
                     if w > 6, w > h * 1.5 {
                         dragIntent = .horizontal
-                        dragStartOffset = isOpen ? -actionWidth : 0
+                        dragStartOffset = offset
                         dragClaimDelta = value.translation.width
                     } else if h > 6, h > w {
                         dragIntent = .vertical
@@ -470,27 +486,39 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
                 }
                 guard dragIntent == .horizontal else { return }
                 let traveled = dragStartOffset + value.translation.width - dragClaimDelta
-                offset = min(max(traveled, -actionWidth - 24), 0)
+                offset = min(max(traveled, -actionWidth - 24), canShare ? actionWidth + 24 : 0)
             }
             .onEnded { value in
                 defer { dragIntent = .undecided }
                 guard dragIntent == .horizontal else { return }
-                // A hard swipe from closed deletes outright,
-                // like a full swipe in a List (the delete
-                // itself still asks first, as everywhere).
-                if dragStartOffset == 0, offset <= -96 || value.predictedEndTranslation.width < -240 {
-                    onDelete()
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        offset = 0
+                // A hard swipe from closed fires the action
+                // outright, like a full swipe in a List (the
+                // delete itself still asks first, as
+                // everywhere; share just opens its sheet).
+                if dragStartOffset == 0 {
+                    if offset <= -96 || value.predictedEndTranslation.width < -240 {
+                        onDelete()
+                        close()
+                        return
                     }
-                    openRowID = nil
-                    return
+                    if canShare, offset >= 96 || value.predictedEndTranslation.width > 240 {
+                        onShare()
+                        close()
+                        return
+                    }
                 }
-                let target: CGFloat = offset < -actionWidth / 2 ? -actionWidth : 0
+                let target: CGFloat
+                if offset < -actionWidth / 2 {
+                    target = -actionWidth
+                } else if canShare, offset > actionWidth / 2 {
+                    target = actionWidth
+                } else {
+                    target = 0
+                }
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                     offset = target
                 }
-                openRowID = target == -actionWidth ? rowID : nil
+                openRowID = target != 0 ? rowID : nil
             }
     }
 }
