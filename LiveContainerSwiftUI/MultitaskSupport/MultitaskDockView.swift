@@ -1908,8 +1908,11 @@ enum LCBreathingLightColor: String, CaseIterable {
     // on the thin breathing grip, so it lives on as
     // .rose, and .pink is a true hot pink now; white was
     // drawn in the mock and swapped for gray before it
-    // ever shipped).
-    case standard, red, orange, yellow, green, mint, cyan, blue, indigo, purple, pink, lightPink, rose, gray, gold
+    // ever shipped — and later the same day gray and the
+    // custom mint retired for stock Apple teal and
+    // brown, again at her word; a stored mint/gray value
+    // simply falls back to standard).
+    case standard, red, orange, yellow, green, teal, cyan, blue, indigo, purple, pink, lightPink, rose, brown, gold
 
     static var current: LCBreathingLightColor {
         LCBreathingLightColor(rawValue: LCUtils.appGroupUserDefault.string(forKey: "LCBreathingLightColor") ?? "") ?? .standard
@@ -1924,7 +1927,7 @@ enum LCBreathingLightColor: String, CaseIterable {
         case .orange: return .systemOrange
         case .yellow: return .systemYellow
         case .green: return .systemGreen
-        case .mint: return UIColor(red: 0.180, green: 0.902, blue: 0.659, alpha: 1) // #2EE6A8
+        case .teal: return .systemTeal
         case .cyan: return UIColor(red: 0.196, green: 0.678, blue: 0.902, alpha: 1) // #32ADE6
         case .blue: return .systemBlue
         case .indigo: return .systemIndigo
@@ -1932,7 +1935,7 @@ enum LCBreathingLightColor: String, CaseIterable {
         case .pink: return UIColor(red: 1.0, green: 0.412, blue: 0.706, alpha: 1) // #FF69B4
         case .lightPink: return UIColor(red: 1.0, green: 0.561, blue: 0.671, alpha: 1) // #FF8FAB
         case .rose: return .systemPink // #FF2D55 — the old "pink"
-        case .gray: return .systemGray
+        case .brown: return .systemBrown
         case .gold: return UIColor(red: 0.890, green: 0.702, blue: 0.255, alpha: 1) // #E3B341
         }
     }
