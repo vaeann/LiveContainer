@@ -34,10 +34,19 @@ struct LCSourceSortMenuButton: View {
         } label: {
             // Same glyph as the App page's sort menu
             // (top-right), so sorting reads the same
-            // across the app.
+            // across the app. The fixed frame is load-
+            // bearing (Ann 2026-11-27, on device): with
+            // the label sized by the symbol alone, the
+            // button shifted once when the page scrolled
+            // after the menu had been opened and closed —
+            // the menu's presentation leaves the button
+            // measuring slightly differently until the
+            // next layout pass settles it. A pinned 32×32
+            // frame gives layout nothing to renegotiate.
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .imageScale(.large)
                 .foregroundColor(.secondary)
+                .frame(width: 32, height: 32)
         }
     }
 
