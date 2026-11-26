@@ -577,6 +577,12 @@ struct LCSourcesView: View {
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
+    /// Height of the segment area below the picker, measured
+    /// by the segments' scroll views (see sourcesContent):
+    /// their content is kept a hair taller than this so the
+    /// scroll view always has travel — the drawer search
+    /// bar can only hide when the scroll view can scroll.
+    @State private var segmentViewportHeight: CGFloat = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
     @ObservedObject private var downloadStore = LCDownloadStore.shared
@@ -816,6 +822,16 @@ struct LCSourcesView: View {
                 }
             }
             .padding(.vertical)
+            // Always a hair taller than the viewport (Ann
+            // 2026-11-26, the stubborn part): with the
+            // sources collapsed this content is far shorter
+            // than the screen, the scroll view cannot scroll
+            // at all, and a drawer search bar with no scroll
+            // travel has nowhere to hide — it stays pinned
+            // no matter what the .searchable hangs on. The
+            // App page never hits this because its list is
+            // always tall.
+            .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
         // The search bar hangs on the scroll view itself
         // (Ann 2026-11-26): that is what makes it hide
@@ -827,6 +843,11 @@ struct LCSourcesView: View {
         // outside (the original) it belonged to the whole
         // stack and surfaced on the detail page.
         .searchable(text: $searchContext.query)
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { segmentViewportHeight = proxy.size.height }
+                .onChange(of: proxy.size.height) { segmentViewportHeight = $0 }
+        })
     }
 
     // MARK: - Updates tab
@@ -868,8 +889,14 @@ struct LCSourcesView: View {
                 }
             }
             .padding(.vertical)
+            .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
         .searchable(text: $searchContext.query)
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { segmentViewportHeight = proxy.size.height }
+                .onChange(of: proxy.size.height) { segmentViewportHeight = $0 }
+        })
     }
 
     // MARK: - Row construction
