@@ -18,6 +18,16 @@
 
 import SwiftUI
 
+/// File scope, not a static property of the view: static
+/// stored properties are not supported in generic types,
+/// and LCDownloadsView is generic over its picker row.
+private let lcDownloadsDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .none
+    return formatter
+}()
+
 struct LCDownloadsView<SegmentPicker: View>: View {
     @ObservedObject var searchContext: SearchContext
     private let segmentPicker: SegmentPicker
@@ -274,7 +284,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 parts.append("v\(version)")
             }
             parts.append(Self.formatSize(record.size))
-            parts.append(Self.dateFormatter.string(from: record.savedAt))
+            parts.append(lcDownloadsDateFormatter.string(from: record.savedAt))
             return parts.joined(separator: " · ")
         }
         if record.totalBytes > 0 {
@@ -284,13 +294,6 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     }
 
     // MARK: - Formatting
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
 
     static func formatSize(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)

@@ -1147,10 +1147,14 @@ struct LCSourcesView: View {
     /// Flat cross-source results for the sources segment's
     /// search, in source order.
     private var sourcesSearchResults: [(source: AltStoreSource, app: AltStoreSourceApp)] {
-        viewModel.sources.flatMap { item in
-            guard let source = item.source else { return [] }
-            return appsMatching(source.apps, context: sourcesSearchContext).map { (source: source, app: $0) }
+        var results: [(source: AltStoreSource, app: AltStoreSourceApp)] = []
+        for item in viewModel.sources {
+            guard let source = item.source else { continue }
+            for app in appsMatching(source.apps, context: sourcesSearchContext) {
+                results.append((source: source, app: app))
+            }
         }
+        return results
     }
 
     /// The updates list under the updates segment's own
