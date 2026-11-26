@@ -336,29 +336,53 @@ struct LCDownloadsView<SegmentPicker: View>: View {
     }
 }
 
-/// A downloads row that reveals a destructive delete
-/// button on a left swipe — the scroll-view stand-in for
-/// List's .swipeActions (stage-3 refactor, Ann approved
-/// the plan 2026-11-26). The drag claims the row only
-/// when it is clearly horizontal (width past 1.5× the
-/// height), so vertical scrolling keeps the row; past
-/// the button's width the row stays open, a hard swipe
-/// (180pt) deletes outright like a full swipe in a List,
-/// and tapping an open row closes it instead of acting.
+/// A downloads row that reveals a delete button on a
+/// left swipe — the scroll-view stand-in for List's
+/// .swipeActions (stage-3 refactor, Ann approved the
+/// plan 2026-11-26). The button is a liquid-glass circle
+/// with a trash glyph, no red block (Ann 2026-11-27:
+/// the red rectangle is gone, and with it the need to
+/// clip the row so the block's corners looked round).
+/// The drag claims the row only when it is clearly
+/// horizontal (width past 1.5× the height), so vertical
+/// scrolling keeps the row; past half the button's width
+/// the row stays open, a hard swipe deletes outright
+/// like a full swipe in a List, and tapping an open row
+/// closes it instead of acting.
+///
+/// The sliding layer's offset is a single stored value
+/// driven directly by the drag (Ann 2026-11-27: the old
+/// computed offset — base + delta, re-derived from
+/// isOpen whenever the drag state flipped — jumped when
+/// the drag was claimed and snapped instead of springing
+/// on release, so the card felt like it was not
+/// following the finger). The drag now runs simultaneous
+/// with the scroll view's pan, the translation at claim
+/// time is subtracted so motion starts from zero, and
+/// settling animates the same stored offset the finger
+/// was driving.
 private struct LCSwipeToDeleteRow<Content: View>: View {
     let rowID: LCDownloadedPackage.ID
     @Binding var openRowID: LCDownloadedPackage.ID?
     let onDelete: () -> Void
     @ViewBuilder let content: () -> Content
 
-    @State private var dragOffset: CGFloat = 0
-    @State private var dragIsHorizontal: Bool?
+    /// The sliding layer's live x offset: 0 closed,
+    /// -actionWidth open. The one source of truth, while
+    /// dragging and while settled alike.
+    @State private var offset: CGFloat = 0
+    private enum DragIntent {
+        case undecided, horizontal, vertical
+    }
+    @State private var dragIntent: DragIntent = .undecided
     /// Offset the current drag started from (0 or
-    /// -actionWidth), captured when the drag is claimed:
-    /// openRowID — and with it isOpen — only settles when
-    /// the drag ends, so the live offset must be computed
-    /// from this, not from isOpen.
-    @State private var dragBase: CGFloat = 0
+    /// -actionWidth), captured when the drag is claimed.
+    @State private var dragStartOffset: CGFloat = 0
+    /// Finger travel at claim time: subtracted from the
+    /// live translation so the card starts moving from
+    /// exactly where it sits instead of jumping by the
+    /// claim distance.
+    @State private var dragClaimDelta: CGFloat = 0
 
     private let actionWidth: CGFloat = 78
 
@@ -366,23 +390,27 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
         openRowID == rowID
     }
 
-    private var displayOffset: CGFloat {
-        if dragIsHorizontal == true {
-            return dragBase + dragOffset
-        }
-        return isOpen ? -actionWidth : 0
-    }
-
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
-                    .font(.body)
-                    .foregroundStyle(.white)
-                    .frame(width: actionWidth)
-                    .frame(maxHeight: .infinity)
+                ZStack {
+                    if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                        Circle()
+                            .fill(Color.clear)
+                            .glassEffect(.regular.interactive(true), in: Circle())
+                    } else {
+                        Circle()
+                            .fill(Color(uiColor: UIColor.secondarySystemBackground))
+                    }
+                    Image(systemName: "trash")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.red)
+                }
+                .frame(width: 54, height: 54)
             }
-            .background(Color.red)
+            .buttonStyle(.plain)
+            .frame(width: actionWidth)
+            .frame(maxHeight: .infinity)
 
             ZStack {
                 content()
@@ -399,57 +427,70 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
             // Opaque, and it slides WITH the card: the
             // card's tint is a 50% wash — on the sources
             // page that blends with the page behind it, but
-            // here the red delete button sits behind the
-            // card and bled straight through until the
-            // sliding layer carried the page's own color
+            // here the delete button sits behind the card
+            // and bled straight through until the sliding
+            // layer carried the page's own color
             // (Ann 2026-11-26, on device).
             .background(Color(uiColor: UIColor.systemBackground))
-            .offset(x: displayOffset)
-            .gesture(rowDrag)
+            .offset(x: offset)
+            .simultaneousGesture(rowDrag)
         }
-        // The row clips to the card's own radius: at rest
-        // the corners show the page through them, and
-        // swiped open the red button's outer corners come
-        // out rounded like the card's instead of square
-        // (Ann 2026-11-26).
-        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .onChange(of: openRowID) { newValue in
+            // Another row opened (or the open state was
+            // cleared elsewhere): glide shut instead of
+            // snapping.
+            if newValue != rowID, offset != 0 {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    offset = 0
+                }
+            }
+        }
     }
 
     private func close() {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            offset = 0
             openRowID = nil
         }
     }
 
     private var rowDrag: some Gesture {
-        DragGesture(minimumDistance: 8)
+        DragGesture(minimumDistance: 4)
             .onChanged { value in
-                if dragIsHorizontal == nil {
+                if dragIntent == .undecided {
                     let w = abs(value.translation.width)
                     let h = abs(value.translation.height)
-                    if w > h * 1.5 && w > 8 {
-                        dragIsHorizontal = true
-                        dragBase = isOpen ? -actionWidth : 0
-                    } else if h > 12 {
-                        dragIsHorizontal = false
+                    if w > 6, w > h * 1.5 {
+                        dragIntent = .horizontal
+                        dragStartOffset = isOpen ? -actionWidth : 0
+                        dragClaimDelta = value.translation.width
+                    } else if h > 6, h > w {
+                        dragIntent = .vertical
                     }
                 }
-                guard dragIsHorizontal == true else { return }
-                let total = dragBase + value.translation.width
-                dragOffset = min(max(total, -actionWidth - 24), 0) - dragBase
+                guard dragIntent == .horizontal else { return }
+                let traveled = dragStartOffset + value.translation.width - dragClaimDelta
+                offset = min(max(traveled, -actionWidth - 24), 0)
             }
             .onEnded { value in
-                defer { dragIsHorizontal = nil }
-                guard dragIsHorizontal == true else { return }
-                let total = dragBase + value.translation.width
-                if value.translation.width < -180 {
+                defer { dragIntent = .undecided }
+                guard dragIntent == .horizontal else { return }
+                // A hard swipe from closed deletes outright,
+                // like a full swipe in a List (the delete
+                // itself still asks first, as everywhere).
+                if dragStartOffset == 0, offset <= -96 || value.predictedEndTranslation.width < -240 {
                     onDelete()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                        offset = 0
+                    }
+                    openRowID = nil
                     return
                 }
+                let target: CGFloat = offset < -actionWidth / 2 ? -actionWidth : 0
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    dragOffset = 0
-                    openRowID = total < -actionWidth / 2 ? rowID : nil
+                    offset = target
                 }
+                openRowID = target == -actionWidth ? rowID : nil
             }
     }
 }
