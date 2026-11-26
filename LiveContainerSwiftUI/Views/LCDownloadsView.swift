@@ -381,6 +381,14 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
                         .onTapGesture { close() }
                 }
             }
+            // Opaque, and it slides WITH the card: the
+            // card's tint is a 50% wash — on the sources
+            // page that blends with the page behind it, but
+            // here the red delete button sits behind the
+            // card and bled straight through until the
+            // sliding layer carried the page's own color
+            // (Ann 2026-11-26, on device).
+            .background(Color(uiColor: UIColor.systemBackground))
             .offset(x: displayOffset)
             .gesture(rowDrag)
         }
