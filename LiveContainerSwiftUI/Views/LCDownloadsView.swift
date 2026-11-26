@@ -337,9 +337,10 @@ struct LCDownloadsView<SegmentPicker: View>: View {
 ///
 /// The drag claims the row only when it is clearly
 /// horizontal (width past 1.5× the height), so vertical
-/// scrolling keeps the row; past half a button's width
-/// the row stays open on that side, a hard swipe fires
-/// the action outright like a full swipe in a List, and
+/// scrolling keeps the row; the row only ever settles
+/// open on a side or shut — nothing fires from the swipe
+/// itself (Ann 2026-11-27: the hard-swipe full swipe
+/// went, it was too easy to trigger by accident) — and
 /// tapping an open row closes it instead of acting.
 ///
 /// The sliding layer's offset is a single stored value
@@ -400,13 +401,13 @@ private struct LCSwipeActionsRow<Content: View>: View {
                 actionButton(role: .destructive, systemImage: "trash", glyphColor: .red) {
                     onDelete()
                     // Reset on tap like the share button
-                    // and the full swipe do (Ann 2026-11-27,
-                    // on device: the row used to hang open
-                    // behind the delete confirmation and
-                    // only reset once the alert was answered
-                    // — an leftover asymmetry, not a design).
-                    // Confirming removes the row anyway;
-                    // cancelling leaves it closed.
+                    // does (Ann 2026-11-27, on device: the
+                    // row used to hang open behind the delete
+                    // confirmation and only reset once the
+                    // alert was answered — a leftover
+                    // asymmetry, not a design). Confirming
+                    // removes the row anyway; cancelling
+                    // leaves it closed.
                     close()
                 }
             }
@@ -493,31 +494,41 @@ private struct LCSwipeActionsRow<Content: View>: View {
                 }
                 guard dragIntent == .horizontal else { return }
                 let traveled = dragStartOffset + value.translation.width - dragClaimDelta
-                offset = min(max(traveled, -actionWidth - 24), canShare ? actionWidth + 24 : 0)
+                // The pull stops a short elastic tail past
+                // the open position (Ann 2026-11-27): with
+                // no full swipe out there to reach for, the
+                // travel ends where the button is.
+                offset = min(max(traveled, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
             }
             .onEnded { value in
                 defer { dragIntent = .undecided }
                 guard dragIntent == .horizontal else { return }
-                // A hard swipe from closed fires the action
-                // outright, like a full swipe in a List (the
-                // delete itself still asks first, as
-                // everywhere; share just opens its sheet).
-                if dragStartOffset == 0 {
-                    if offset <= -96 || value.predictedEndTranslation.width < -240 {
-                        onDelete()
-                        close()
-                        return
-                    }
-                    if canShare, offset >= 96 || value.predictedEndTranslation.width > 240 {
-                        onShare()
-                        close()
-                        return
-                    }
+                // Settle by where the finger was HEADED
+                // (Ann 2026-11-27, shorter travel): the
+                // drag's predicted end, run through the
+                // same start-offset math and clamp as the
+                // live offset. A slow drag predicts about
+                // its own position — past half the button
+                // stays open, as before. A quick flick
+                // predicts well ahead of the finger, so a
+                // short flick opens (or closes) the row
+                // without travelling the whole distance.
+                // The prediction may only reinforce the
+                // side the row is already on — never pull
+                // it across to the other side by itself.
+                let predicted = min(max(dragStartOffset + value.predictedEndTranslation.width - dragClaimDelta, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
+                let decision: CGFloat
+                if offset <= 0, predicted <= 0 {
+                    decision = min(offset, predicted)
+                } else if offset >= 0, predicted >= 0 {
+                    decision = max(offset, predicted)
+                } else {
+                    decision = offset
                 }
                 let target: CGFloat
-                if offset < -actionWidth / 2 {
+                if decision < -actionWidth / 2 {
                     target = -actionWidth
-                } else if canShare, offset > actionWidth / 2 {
+                } else if canShare, decision > actionWidth / 2 {
                     target = actionWidth
                 } else {
                     target = 0
