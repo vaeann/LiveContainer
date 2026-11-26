@@ -4,10 +4,13 @@
 //
 //  The downloads library page — third segment of the sources
 //  page (Ann 2026-11-24). Every package LiveContainer downloads
-//  or imports is kept here: tap a finished package to install
-//  it again (any kept version — old versions are never
+//  or imports is kept here: a finished package installs again
+//  from its button (any kept version — old versions are never
 //  overwritten), swipe left to delete it or right to share
-//  it, and tap an interrupted download to resume it.
+//  it, and an interrupted download resumes from its button.
+//  The card body itself deliberately has no tap (Ann
+//  2026-11-27): one less gesture arbitrating against the
+//  row's swipe, and install-via-button is unambiguous.
 //
 //  This segment rides the shared segment shell
 //  (LCSegmentShell) — the picker as first row, so all
@@ -167,8 +170,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
 
     // MARK: - Cards
 
-    /// Every install entry point (card tap, Install
-    /// button) asks first (Ann 2026-11-26).
+    /// Installing asks first (Ann 2026-11-26).
     private func requestInstall(_ record: LCDownloadedPackage) {
         packageToInstall = record
         showInstallConfirm = true
@@ -204,9 +206,9 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         // The sources segment's card, minus the badge and
         // intro lines (Ann 2026-11-26): 56pt icon, name,
         // the info line in its existing version · size ·
-        // date format, and the install capsule. Not a
-        // row-wide Button: the capsule consumes its own
-        // taps; the card body acts via a tap gesture.
+        // date format, and the install capsule. Only the
+        // capsule acts — the card body has no tap of its
+        // own (Ann 2026-11-27).
         let tint = cardTint(for: record)
         let textColor = cardTextColor(for: record)
         HStack(spacing: 12) {
@@ -265,16 +267,12 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 .fill(dynamicColors ? tint.opacity(0.5) : Color("AppBannerBG"))
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            if record.isComplete {
-                requestInstall(record)
-            } else {
-                downloadHelper.resumeDownload(record: record)
-            }
-        }
-        // No long-press menu (Ann 2026-11-27): the swipe
-        // actions carry share and delete now, and install
-        // / resume are the card's own tap and capsule.
+        // No tap, no long-press menu on the card body
+        // (Ann 2026-11-27): install / resume live on the
+        // capsule alone, share and delete on the swipe —
+        // and with no gesture of its own on the body, the
+        // row's swipe has nothing left to arbitrate
+        // against but the scroll view itself.
     }
 
     @ViewBuilder
