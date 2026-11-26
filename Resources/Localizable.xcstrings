@@ -5398,6 +5398,29 @@
         }
       }
     },
+    "lc.appList.sort.default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default Order"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认排序"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設排序"
+          }
+        }
+      }
+    },
     "lc.appList.sort.installationDate" : {
       "extractionState" : "stale",
       "localizations" : {

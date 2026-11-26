@@ -1964,7 +1964,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private let shapeMask = CAShapeLayer()
     /// A hairline tracing the outline: native glass puts
     /// its own edge highlight on a rectangular boundary,
-    /// so a custom silhouette draws its own rim.
+    /// so a custom silhouette draws its own rim. The rim
+    /// runs as an OPEN path that stops at the wall: the
+    /// wall-side segment is not drawn, so against the
+    /// screen edge — above all in dark mode, against the
+    /// black bezel — the handle melts into the edge
+    /// instead of ending in a bright seam (Ann
+    /// 2026-11-26).
     private let rimLayer = CAShapeLayer()
 
     /// The pill's width (the frame's width), fed by the
@@ -2014,8 +2020,10 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// same in both states, so the morph reads as the
     /// roots growing out of the pill, not the whole shape
     /// swimming. Built for a right-hand dock; every x is
-    /// mirrored for the left.
-    private func outlinePath(flare t: CGFloat) -> CGPath {
+    /// mirrored for the left. `closed` adds the wall-side
+    /// closing segment; the rim passes false so its stroke
+    /// stops where the flares meet the wall.
+    private func outlinePath(flare t: CGFloat, closed: Bool = true) -> CGPath {
         let w = bounds.width, h = bounds.height
         let r = pillWidth / 2
         let bodyTop = flareLength
@@ -2046,8 +2054,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         path.addCurve(to: CGPoint(x: mx(w), y: lerp(bodyBottom - r, h)),
                       control1: CGPoint(x: mx(lerp(w / 2 + k * r, w / 2 + r * 0.4)), y: bodyBottom),
                       control2: CGPoint(x: mx(w), y: lerp(bodyBottom - r + k * r, h - bodyTop * 0.45)))
-        // The wall itself closes the outline.
-        path.closeSubpath()
+        // The wall itself closes the outline (the rim's
+        // open path ends here, at the wall).
+        if closed {
+            path.closeSubpath()
+        }
         return path
     }
 
@@ -2056,18 +2067,19 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     private func animateOutline(toDocked docked: Bool, duration: TimeInterval) {
         guard bounds.width > 0 else { return }
         let target = outlinePath(flare: docked ? 1 : 0)
-        func morph(_ layer: CALayer, _ keyPath: String, from: CGPath?, apply: (CGPath) -> Void) {
+        let rimTarget = outlinePath(flare: docked ? 1 : 0, closed: false)
+        func morph(_ layer: CALayer, _ keyPath: String, from: CGPath?, to: CGPath, apply: (CGPath) -> Void) {
             let anim = CABasicAnimation(keyPath: keyPath)
             anim.fromValue = from
-            anim.toValue = target
+            anim.toValue = to
             anim.duration = duration
             anim.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            apply(target)
+            apply(to)
             layer.add(anim, forKey: "outlineMorph")
         }
-        morph(shapeMask, "path", from: (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path) { shapeMask.path = $0 }
-        morph(rimLayer, "path", from: (rimLayer.presentation() as? CAShapeLayer)?.path ?? rimLayer.path) { rimLayer.path = $0 }
-        morph(layer, "shadowPath", from: layer.presentation()?.shadowPath ?? layer.shadowPath) { layer.shadowPath = $0 }
+        morph(shapeMask, "path", from: (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path, to: target) { shapeMask.path = $0 }
+        morph(rimLayer, "path", from: (rimLayer.presentation() as? CAShapeLayer)?.path ?? rimLayer.path, to: rimTarget) { rimLayer.path = $0 }
+        morph(layer, "shadowPath", from: layer.presentation()?.shadowPath ?? layer.shadowPath, to: target) { layer.shadowPath = $0 }
     }
 
     /// The grip: two short segments in a column, breathing
@@ -2155,7 +2167,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         if shapeMask.animation(forKey: "outlineMorph") == nil {
             let outline = outlinePath(flare: isFloating ? 0 : 1)
             shapeMask.path = outline
-            rimLayer.path = outline
+            rimLayer.path = outlinePath(flare: isFloating ? 0 : 1, closed: false)
             layer.shadowPath = outline
         }
         tintView.frame = bounds

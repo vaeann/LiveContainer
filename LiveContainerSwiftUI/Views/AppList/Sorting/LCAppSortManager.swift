@@ -20,7 +20,7 @@ enum AppSortType: String, CaseIterable {
     var displayName: String {
         switch self {
         case .defaultOrder:
-            return "lc.common.default".loc
+            return "lc.appList.sort.default".loc
         case .alphabetical:
             return "lc.appList.sort.alphabetical".loc
         case .reverseAlphabetical:
