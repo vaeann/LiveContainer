@@ -33,12 +33,6 @@ struct LCSourcesView: View {
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
-    /// Height of the active segment's scroll view, measured
-    /// by its background: the sources and updates contents
-    /// are kept a hair taller than this so their scroll view
-    /// always has travel — the drawer search bar can only
-    /// hide when the scroll view can scroll.
-    @State private var segmentViewportHeight: CGFloat = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
     @ObservedObject private var downloadStore = LCDownloadStore.shared
@@ -223,19 +217,9 @@ struct LCSourcesView: View {
 
     // MARK: - Sources tab (flattened, lazily loaded)
 
-    /// The sources segment (Ann 2026-11-26, search settled
-    /// after four attempts): one ScrollView as the navigation
-    /// view's direct content — the App page's geometry — with
-    /// the picker as its first row and this segment's own
-    /// drawer search bar on the scroll view itself. Every
-    /// earlier placement failed structurally: outside the
-    /// NavigationView the bar belonged to the whole stack and
-    /// surfaced on the detail page; on the page VStack, or
-    /// below a fixed picker, the scroll view never scrolls
-    /// under the navigation bar and the drawer's hide
-    /// mechanism never engages; and with the sources
-    /// collapsed the content is too short to scroll at all,
-    /// which the min-height below covers. While this
+    /// The sources segment, on the shared segment shell
+    /// (LCSegmentShell carries the geometry rules and the
+    /// four-attempt history behind them). While this
     /// segment's query is non-empty the rows swap to flat
     /// cross-source results — the same scroll view, so the
     /// bar's geometry never changes. In browse mode the
@@ -243,95 +227,80 @@ struct LCSourcesView: View {
     /// the LazyVStack, so rows and icons load as they scroll
     /// into view and there is no per-source app cap.
     private var sourcesScrollView: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                segmentPicker
-                if viewModel.sources.isEmpty {
-                    emptySourcesView
-                        .padding(.top, 48)
-                } else if isFiltering(sourcesSearchContext) {
-                    sourcesSearchResultsRows
-                } else {
-                    ForEach(viewModel.sources, id: \.id) { item in
-                        let apps = displayedApps(item.source?.apps ?? [], for: item)
-                        AltStoreSourceSectionHeaderView(
-                            item: item,
-                            isExpanded: expandedSources.contains(item.id),
-                            sortMode: sortMode(for: item),
-                            onSortModeChange: { setSortMode($0, for: item) },
-                            todayFilterOn: todayFilterOn(for: item),
-                            onToggleTodayFilter: { toggleTodayFilter(for: item) },
-                            onRefresh: { Task { await viewModel.refreshSource(item) } },
-                            onRemove: { sourcePendingRemoval = item },
-                            toggleExpanded: { toggleExpansion(for: item.id) }
+        LCSegmentShell(searchContext: sourcesSearchContext) {
+            segmentPicker
+        } content: {
+            if viewModel.sources.isEmpty {
+                emptySourcesView
+                    .padding(.top, 48)
+            } else if isFiltering(sourcesSearchContext) {
+                sourcesSearchResultsRows
+            } else {
+                ForEach(viewModel.sources, id: \.id) { item in
+                    let apps = displayedApps(item.source?.apps ?? [], for: item)
+                    AltStoreSourceSectionHeaderView(
+                        item: item,
+                        isExpanded: expandedSources.contains(item.id),
+                        sortMode: sortMode(for: item),
+                        onSortModeChange: { setSortMode($0, for: item) },
+                        todayFilterOn: todayFilterOn(for: item),
+                        onToggleTodayFilter: { toggleTodayFilter(for: item) },
+                        onRefresh: { Task { await viewModel.refreshSource(item) } },
+                        onRemove: { sourcePendingRemoval = item },
+                        toggleExpanded: { toggleExpansion(for: item.id) }
+                    )
+                    .padding(.horizontal)
+
+                    if let error = item.error {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("lc.sources.section.error".loc)
+                                .font(.subheadline)
+                                .bold()
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Button("lc.sources.refresh".loc) {
+                                Task { await viewModel.refreshSource(item) }
+                            }
+                            .font(.footnote)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(Color(uiColor: UIColor.secondarySystemBackground))
                         )
                         .padding(.horizontal)
-
-                        if let error = item.error {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("lc.sources.section.error".loc)
-                                    .font(.subheadline)
-                                    .bold()
-                                Text(error)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                Button("lc.sources.refresh".loc) {
-                                    Task { await viewModel.refreshSource(item) }
-                                }
+                    } else if let source = item.source, expandedSources.contains(item.id) {
+                        if apps.isEmpty {
+                            Text(todayFilterOn(for: item) && !(item.source?.apps.isEmpty ?? true) ? "lc.sources.section.noUpdatesToday".loc : "lc.sources.section.noApps".loc)
                                 .font(.footnote)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .fill(Color(uiColor: UIColor.secondarySystemBackground))
-                            )
-                            .padding(.horizontal)
-                        } else if let source = item.source, expandedSources.contains(item.id) {
-                            if apps.isEmpty {
-                                Text(todayFilterOn(for: item) && !(item.source?.apps.isEmpty ?? true) ? "lc.sources.section.noUpdatesToday".loc : "lc.sources.section.noApps".loc)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal)
+                        } else {
+                            ForEach(apps) { app in
+                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
                                     .padding(.horizontal)
-                            } else {
-                                ForEach(apps) { app in
-                                    sourceAppBanner(app: app, source: source, inUpdatesTab: false)
-                                        .padding(.horizontal)
-                                }
                             }
                         }
-                        // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
-                        // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
                     }
+                    // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
+                    // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
+                }
 
-                    if totalSourceAppsCount == 0 {
-                        VStack(spacing: 8) {
-                            Text("lc.sources.section.noApps".loc)
-                                .foregroundStyle(.gray)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 160, alignment: .center)
-                        .padding(.horizontal)
+                if totalSourceAppsCount == 0 {
+                    VStack(spacing: 8) {
+                        Text("lc.sources.section.noApps".loc)
+                            .foregroundStyle(.gray)
+                            .multilineTextAlignment(.center)
                     }
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 160, alignment: .center)
+                    .padding(.horizontal)
                 }
             }
-            .padding(.vertical)
-            // Always a hair taller than the viewport: with
-            // the sources collapsed this content can be far
-            // shorter than the screen, and a scroll view that
-            // cannot scroll gives the drawer search bar no
-            // travel to hide with — it stays pinned (the App
-            // page never hits this; its list is always tall).
-            .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
-        .searchable(text: $sourcesSearchContext.query)
-        .background(GeometryReader { proxy in
-            Color.clear
-                .onAppear { segmentViewportHeight = proxy.size.height }
-                .onChange(of: proxy.size.height) { segmentViewportHeight = $0 }
-        })
     }
 
     /// Flat cross-source results while the sources segment
@@ -355,69 +324,58 @@ struct LCSourcesView: View {
 
     // MARK: - Updates tab
 
-    /// The updates segment: same shape as the sources
-    /// segment — its own scroll view as the navigation
-    /// view's direct content, the picker as its first row,
-    /// its own drawer search bar filtering only this list
-    /// (Ann 2026-11-26). The update-all button hides while
-    /// filtering: it acts on the whole list, and over a
-    /// filtered list it would read as "update only these".
+    /// The updates segment, on the shared segment shell;
+    /// its own drawer search bar filters only this list.
+    /// The update-all button hides while filtering: it
+    /// acts on the whole list, and over a filtered list
+    /// it would read as "update only these".
     private var updatesScrollView: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                segmentPicker
-                if viewModel.sources.isEmpty {
-                    emptySourcesView
-                        .padding(.top, 48)
-                } else if isFiltering(updatesSearchContext) && filteredUpdatableApps.isEmpty {
-                    Text("lc.sources.search.noResults".loc)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
-                } else if updatableApps.isEmpty {
-                    Text("lc.sources.updates.empty".loc)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
-                } else {
-                    if !isFiltering(updatesSearchContext) {
-                        Button {
-                            updateAll()
-                        } label: {
-                            Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
-                                .bold()
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 40)
-                                .modifier { content in
-                                    if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
-                                        content
-                                            .glassEffect(.regular.interactive(true), in: .capsule)
-                                    } else {
-                                        content
-                                            .foregroundColor(.white)
-                                            .background(Capsule().fill(Color("FontColor")))
-                                    }
+        LCSegmentShell(searchContext: updatesSearchContext) {
+            segmentPicker
+        } content: {
+            if viewModel.sources.isEmpty {
+                emptySourcesView
+                    .padding(.top, 48)
+            } else if isFiltering(updatesSearchContext) && filteredUpdatableApps.isEmpty {
+                Text("lc.sources.search.noResults".loc)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+            } else if updatableApps.isEmpty {
+                Text("lc.sources.updates.empty".loc)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+            } else {
+                if !isFiltering(updatesSearchContext) {
+                    Button {
+                        updateAll()
+                    } label: {
+                        Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
+                            .bold()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .modifier { content in
+                                if #available(iOS 26.0, *), SharedModel.isLiquidGlassEnabled {
+                                    content
+                                        .glassEffect(.regular.interactive(true), in: .capsule)
+                                } else {
+                                    content
+                                        .foregroundColor(.white)
+                                        .background(Capsule().fill(Color("FontColor")))
                                 }
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal)
+                            }
                     }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+                }
 
-                    ForEach(filteredUpdatableApps, id: \.app.id) { pair in
-                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
-                            .padding(.horizontal)
-                    }
+                ForEach(filteredUpdatableApps, id: \.app.id) { pair in
+                    sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
+                        .padding(.horizontal)
                 }
             }
-            .padding(.vertical)
-            .frame(minHeight: segmentViewportHeight + 1, alignment: .top)
         }
-        .searchable(text: $updatesSearchContext.query)
-        .background(GeometryReader { proxy in
-            Color.clear
-                .onAppear { segmentViewportHeight = proxy.size.height }
-                .onChange(of: proxy.size.height) { segmentViewportHeight = $0 }
-        })
     }
 
     // MARK: - Row construction
