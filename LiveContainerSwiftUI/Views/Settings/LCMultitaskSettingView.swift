@@ -122,57 +122,82 @@ struct LCMultitaskSettingView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .sheet(isPresented: $showBreathingColorPicker) {
-                    LCBreathingLightColorSheet(selection: $breathingLightColorRaw)
-                }
             }
         }
         .navigationTitle("lc.appBanner.multitask".loc)
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// The breathing-light color sheet (Ann 2026-11-27): a
-/// grid of round swatches — the iOS color-picker idiom —
-/// with the name under each; the selected swatch wears
-/// a ring in its own color. Tapping writes the choice
-/// through immediately (the resting handle recolors on
-/// the spot via the dock manager's defaults observer);
-/// the sheet stays open so colors can be tried one
-/// after another. (A handle-scene card grid was built
-/// first the same night; she picked the swatches.)
-private struct LCBreathingLightColorSheet: View {
-    @Binding var selection: String
-    @Environment(\.dismiss) private var dismiss
-
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
-
-    var body: some View {
-        NavigationView {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(LCBreathingLightColor.allCases, id: \.rawValue) { preset in
-                        Button {
-                            selection = preset.rawValue
-                        } label: {
-                            swatch(preset)
+        // The color picker is a CENTERED popup, not a
+        // bottom sheet (Ann 2026-11-27: she asked for the
+        // centered kind explicitly, after the bottom
+        // sheet — first full-height, then fitted — both
+        // felt wrong for fifteen swatches).
+        .overlay {
+            if showBreathingColorPicker {
+                ZStack {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showBreathingColorPicker = false
                         }
-                        .buttonStyle(.plain)
+                        .transition(.opacity)
+                    LCBreathingLightColorCard(selection: $breathingLightColorRaw) {
+                        showBreathingColorPicker = false
                     }
-                }
-                .padding()
-            }
-            .navigationTitle("lc.settings.breathingLightColor".loc)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("lc.common.done".loc) {
-                        dismiss()
-                    }
+                    .padding(.horizontal, 28)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
         }
-        .modifier(LCBreathingSheetHeight())
+        .animation(.easeOut(duration: 0.2), value: showBreathingColorPicker)
+    }
+}
+
+/// The breathing-light color popup (Ann 2026-11-27): a
+/// centered card over a dimmed page — a grid of round
+/// swatches, the iOS color-picker idiom, with the name
+/// under each; the selected swatch wears a ring in its
+/// own color. Tapping writes the choice through
+/// immediately (the resting handle recolors on the spot
+/// via the dock manager's defaults observer); the card
+/// stays open so colors can be tried one after another,
+/// and Done — or a tap on the dim — closes it. (Tried
+/// before it the same night: a handle-scene card grid,
+/// then a bottom sheet; she settled on swatches,
+/// centered.)
+private struct LCBreathingLightColorCard: View {
+    @Binding var selection: String
+    let onDone: () -> Void
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Text("lc.settings.breathingLightColor".loc)
+                    .font(.headline)
+                Spacer()
+                Button("lc.common.done".loc) {
+                    onDone()
+                }
+                .font(.body.weight(.semibold))
+            }
+            LazyVGrid(columns: columns, spacing: 16) {
+                ForEach(LCBreathingLightColor.allCases, id: \.rawValue) { preset in
+                    Button {
+                        selection = preset.rawValue
+                    } label: {
+                        swatch(preset)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color(uiColor: .systemBackground))
+        )
+        .shadow(color: Color.black.opacity(0.25), radius: 24, y: 8)
     }
 
     private func swatch(_ preset: LCBreathingLightColor) -> some View {
@@ -207,25 +232,6 @@ private struct LCBreathingLightColorSheet: View {
             Text(preset.labelKey.loc)
                 .font(.system(size: 11, weight: selected ? .semibold : .regular))
                 .foregroundColor(selected ? .primary : .secondary)
-        }
-    }
-}
-
-/// Fit the color sheet to its content (Ann 2026-11-27:
-/// the full-height sheet left most of the bottom
-/// empty). The grid is fixed — fifteen swatches, five
-/// across, three rows — so the height is a constant:
-/// nav bar + three rows of disc + name + padding.
-/// Detents are iOS 16+; on 15 the sheet stays
-/// full-height, as sheets were.
-private struct LCBreathingSheetHeight: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 16.0, *) {
-            content
-                .presentationDetents([.height(300)])
-                .presentationDragIndicator(.visible)
-        } else {
-            content
         }
     }
 }
