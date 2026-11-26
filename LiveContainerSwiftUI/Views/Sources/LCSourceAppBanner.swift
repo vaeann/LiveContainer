@@ -16,12 +16,14 @@ import UIKit
 struct LCSourceAppBanner: View {
     let app: AltStoreSourceApp
     let source: AltStoreSource
-    /// Flat lists (all-sources browsing, search results,
-    /// updates) carry the source's name on its own badge
-    /// line under the app name (Ann 2026-11-26); a single
-    /// source's own list already says which source it is
-    /// via the chip.
-    var showsSourceName: Bool = false
+    /// The source's name rides on its own badge line
+    /// under the app name — in EVERY list, single-source
+    /// browsing included (Ann 2026-11-27: the badge used
+    /// to be flat-lists-only because the chip already
+    /// named the source, but the chip selection persists
+    /// across visits and scrolls away with the content,
+    /// leaving badgeless cards that read as a bug; one
+    /// rule, no exceptions, won).
     let buttonState: LCSourceAppButtonState
     /// Re-asks for the button state whenever the detail
     /// page renders: the row's own button uses the value
@@ -274,9 +276,7 @@ struct LCSourceAppBanner: View {
                     betaBadge
                 }
             }
-            if showsSourceName {
-                sourceTag
-            }
+            sourceTag
             if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
                 Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
                     .font(.system(size: 12))

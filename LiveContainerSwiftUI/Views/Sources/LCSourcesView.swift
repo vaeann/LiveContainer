@@ -225,8 +225,9 @@ struct LCSourcesView: View {
     /// bar's geometry never changes. Browsing is filtered
     /// by the chips row (Ann 2026-11-26, second redesign
     /// round): the all chip flattens every source into one
-    /// card list with source badges, a source's chip shows
-    /// only that source (no badge — the chip says it). The
+    /// card list, a source's chip shows only that source —
+    /// and every card carries its source badge either way
+    /// (Ann 2026-11-27: always, no exceptions). The
     /// chips and rows are direct children of the
     /// LazyVStack, so rows and icons load as they scroll
     /// into view and there is no per-source app cap.
@@ -272,7 +273,7 @@ struct LCSourcesView: View {
                         sourceErrorCard(item: item)
                     }
                     ForEach(allSourcesApps, id: \.app.id) { pair in
-                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
+                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false)
                             .padding(.horizontal)
                     }
                     if totalSourceAppsCount == 0 {
@@ -449,7 +450,7 @@ struct LCSourcesView: View {
                 .padding(.horizontal)
         } else {
             ForEach(results, id: \.app.id) { pair in
-                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
+                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false)
                     .padding(.horizontal)
             }
         }
@@ -496,7 +497,7 @@ struct LCSourcesView: View {
                 .padding(.horizontal)
 
                 ForEach(updatableApps, id: \.app.id) { pair in
-                    sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true, showsSourceName: true)
+                    sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
                         .padding(.horizontal)
                 }
             }
@@ -520,13 +521,12 @@ struct LCSourcesView: View {
     }
 
     @ViewBuilder
-    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool) -> some View {
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
         LCSourceAppBanner(
             app: app,
             source: source,
-            showsSourceName: showsSourceName,
             buttonState: currentButtonState(for: app, inUpdatesTab: inUpdatesTab),
             liveState: { currentButtonState(for: app, inUpdatesTab: inUpdatesTab) },
             action: {
