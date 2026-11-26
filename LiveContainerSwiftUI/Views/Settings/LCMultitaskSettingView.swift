@@ -140,9 +140,7 @@ struct LCMultitaskSettingView: View {
                             showBreathingColorPicker = false
                         }
                         .transition(.opacity)
-                    LCBreathingLightColorCard(selection: $breathingLightColorRaw) {
-                        showBreathingColorPicker = false
-                    }
+                    LCBreathingLightColorCard(selection: $breathingLightColorRaw)
                     .padding(.horizontal, 28)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
@@ -160,27 +158,25 @@ struct LCMultitaskSettingView: View {
 /// immediately (the resting handle recolors on the spot
 /// via the dock manager's defaults observer); the card
 /// stays open so colors can be tried one after another,
-/// and Done — or a tap on the dim — closes it. (Tried
+/// and a tap on the dim around it closes it — there is
+/// no Done button, by her word. (Tried
 /// before it the same night: a handle-scene card grid,
 /// then a bottom sheet; she settled on swatches,
 /// centered.)
 private struct LCBreathingLightColorCard: View {
     @Binding var selection: String
-    let onDone: () -> Void
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
 
     var body: some View {
         VStack(spacing: 16) {
-            HStack {
-                Text("lc.settings.breathingLightColor".loc)
-                    .font(.headline)
-                Spacer()
-                Button("lc.common.done".loc) {
-                    onDone()
-                }
-                .font(.body.weight(.semibold))
-            }
+            // No Done button (Ann 2026-11-27): picking
+            // applies and saves on the tap itself, and
+            // the card closes by tapping the dim around
+            // it — a button would only repeat that.
+            Text("lc.settings.breathingLightColor".loc)
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
             LazyVGrid(columns: columns, spacing: 16) {
                 ForEach(LCBreathingLightColor.allCases, id: \.rawValue) { preset in
                     Button {
