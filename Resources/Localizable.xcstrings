@@ -16206,6 +16206,29 @@
           }
       }
     },
+    "lc.downloads.confirmDelete %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是否删除 %@？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是否刪除 %@？"
+          }
+        }
+      }
+    },
     "lc.downloads.confirmInstall %@" : {
       "extractionState" : "manual",
       "localizations" : {

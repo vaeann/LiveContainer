@@ -53,6 +53,11 @@ private let lcDownloadsDateFormatter: DateFormatter = {
     /// confirmation alert (Ann 2026-11-26).
     @State private var packageToInstall: LCDownloadedPackage?
     @State private var showInstallConfirm = false
+    /// The package whose deletion is waiting on its
+    /// confirmation alert — deleting asks too (Ann
+    /// 2026-11-26, right after the install confirm).
+    @State private var packageToDelete: LCDownloadedPackage?
+    @State private var showDeleteConfirm = false
     /// The one row whose delete action is currently
     /// revealed; opening one row closes the others.
     @State private var openRowID: LCDownloadedPackage.ID?
@@ -96,7 +101,7 @@ private let lcDownloadsDateFormatter: DateFormatter = {
                     VStack(spacing: 12) {
                         ForEach(store.packages) { record in
                             LCSwipeToDeleteRow(rowID: record.id, openRowID: $openRowID, onDelete: {
-                                store.remove(record)
+                                requestDelete(record)
                             }) {
                                 card(for: record)
                             }
@@ -115,6 +120,17 @@ private let lcDownloadsDateFormatter: DateFormatter = {
             }
             Button("lc.common.no".loc, role: .cancel) {
                 packageToInstall = nil
+            }
+        }
+        .alert("lc.downloads.confirmDelete %@".localizeWithFormat(packageToDelete?.appName ?? ""), isPresented: $showDeleteConfirm) {
+            Button("lc.common.yes".loc) {
+                if let record = packageToDelete {
+                    store.remove(record)
+                }
+                packageToDelete = nil
+            }
+            Button("lc.common.no".loc, role: .cancel) {
+                packageToDelete = nil
             }
         }
         .alert("lc.downloads.clearAll".loc, isPresented: $showClearAllConfirm) {
@@ -141,6 +157,15 @@ private let lcDownloadsDateFormatter: DateFormatter = {
 
     private func performInstall(_ record: LCDownloadedPackage) {
         NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+    }
+
+    /// Deleting a kept package asks first too (Ann
+    /// 2026-11-26): swipe, full swipe and the context
+    /// menu all land here; "Clear all" already had its
+    /// own confirmation.
+    private func requestDelete(_ record: LCDownloadedPackage) {
+        packageToDelete = record
+        showDeleteConfirm = true
     }
 
     /// The sources cards' tint recipe, keyed by bundle id
@@ -242,7 +267,7 @@ private let lcDownloadsDateFormatter: DateFormatter = {
                 }
             }
             Button("lc.downloads.delete".loc, role: .destructive) {
-                store.remove(record)
+                requestDelete(record)
             }
         }
     }
