@@ -386,6 +386,12 @@ class AppInfoProvider {
     @objc private func userDefaultsDidChange() {
         DispatchQueue.main.async {
             self.settingsChanged.toggle()
+            // A breathing-light color picked in Settings
+            // lands on the handle at once (Ann 2026-11-27):
+            // it used to keep the old color until the dock
+            // next collapsed, because the grip style was
+            // only re-read as the handle appeared.
+            self.hiddenHandle?.refreshGripColor()
             if self.isVisible {
                 self.updateDockFrame()
             }
@@ -1895,7 +1901,15 @@ struct LoadingIconView: View {
 /// value under LCBreathingLightColor in the app-group
 /// defaults.
 enum LCBreathingLightColor: String, CaseIterable {
-    case standard, red, orange, green, blue, purple, pink
+    // Declaration order is the picker's grid order.
+    // Fifteen presets (Ann 2026-11-27, expanded from the
+    // original seven at her word — she also renamed what
+    // used to be "pink" by eye: .systemPink reads as red
+    // on the thin breathing grip, so it lives on as
+    // .rose, and .pink is a true hot pink now; white was
+    // drawn in the mock and swapped for gray before it
+    // ever shipped).
+    case standard, red, orange, yellow, green, mint, cyan, blue, indigo, purple, pink, lightPink, rose, gray, gold
 
     static var current: LCBreathingLightColor {
         LCBreathingLightColor(rawValue: LCUtils.appGroupUserDefault.string(forKey: "LCBreathingLightColor") ?? "") ?? .standard
@@ -1908,10 +1922,18 @@ enum LCBreathingLightColor: String, CaseIterable {
         case .standard: return nil
         case .red: return .systemRed
         case .orange: return .systemOrange
+        case .yellow: return .systemYellow
         case .green: return .systemGreen
+        case .mint: return UIColor(red: 0.180, green: 0.902, blue: 0.659, alpha: 1) // #2EE6A8
+        case .cyan: return UIColor(red: 0.196, green: 0.678, blue: 0.902, alpha: 1) // #32ADE6
         case .blue: return .systemBlue
+        case .indigo: return .systemIndigo
         case .purple: return .systemPurple
-        case .pink: return .systemPink
+        case .pink: return UIColor(red: 1.0, green: 0.412, blue: 0.706, alpha: 1) // #FF69B4
+        case .lightPink: return UIColor(red: 1.0, green: 0.561, blue: 0.671, alpha: 1) // #FF8FAB
+        case .rose: return .systemPink // #FF2D55 — the old "pink"
+        case .gray: return .systemGray
+        case .gold: return UIColor(red: 0.890, green: 0.702, blue: 0.255, alpha: 1) // #E3B341
         }
     }
 
@@ -2301,6 +2323,15 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// uses. Re-read every time the handle appears, so a
     /// color picked in Settings applies the next time the
     /// dock hides.
+    /// Re-read the breathing-light color NOW (Ann
+    /// 2026-11-27): the manager calls this from its
+    /// defaults-change observer, so a color picked in
+    /// Settings shows on the resting handle immediately —
+    /// no expand/collapse cycle to refresh it.
+    func refreshGripColor() {
+        applyGripStyle()
+    }
+
     private func applyGripStyle() {
         // The color lands on the two segments; the pulse itself
         // sits on their container, so both segments breathe as
