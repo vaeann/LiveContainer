@@ -39,7 +39,25 @@ static const CGFloat LCResizeHandleSize = 44;
     
     _dataUUID = dataUUID;
     _scaleRatio = 1.0;
-    _isMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
+    // A one-shot override from a "launch in a small window"
+    // menu action (Ann 2026-11-27) wins over the global
+    // default below and is consumed here. It carries a
+    // timestamp and expires after 30 seconds: a launch
+    // that never creates a window (the app was already on
+    // stage and only came to the front) leaves it behind,
+    // and a stale override must not leak into a later,
+    // unrelated launch.
+    NSNumber *maximizedOverride = [NSUserDefaults.lcUserDefaults objectForKey:@"LCNextLaunchMaximizedOverride"];
+    NSTimeInterval overrideAge = NSDate.timeIntervalSinceReferenceDate - [NSUserDefaults.lcUserDefaults doubleForKey:@"LCNextLaunchMaximizedOverrideStamp"];
+    if (maximizedOverride != nil && overrideAge < 30) {
+        _isMaximized = maximizedOverride.boolValue;
+    } else {
+        _isMaximized = [NSUserDefaults.lcUserDefaults boolForKey:@"LCLaunchMultitaskMaximized"];
+    }
+    if (maximizedOverride != nil) {
+        [NSUserDefaults.lcUserDefaults removeObjectForKey:@"LCNextLaunchMaximizedOverride"];
+        [NSUserDefaults.lcUserDefaults removeObjectForKey:@"LCNextLaunchMaximizedOverrideStamp"];
+    }
     _appSceneVC = [[AppSceneViewController alloc] initWithBundleId:bundleId dataUUID:dataUUID delegate:self];
     self.title = windowName;
     [self setupDecoratedView];
