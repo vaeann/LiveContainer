@@ -131,21 +131,25 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     }
                     .padding(.horizontal)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    // Taps that land on no control — the
-                    // gaps between cards, the padding —
-                    // close an open row too (Ann
-                    // 2026-11-27: in the open state,
-                    // tapping anywhere but the revealed
-                    // buttons resets the row). Taps on a
-                    // row itself are caught by the row's
-                    // own overlay; taps on the revealed
-                    // buttons still act.
-                    if openRowID != nil {
-                        openRowID = nil
-                    }
-                }
+            }
+        }
+        .onTapGesture {
+            // Taps that land on no control close an open
+            // row (Ann 2026-11-27: in the open state,
+            // tapping anywhere but the revealed buttons
+            // resets the row). The catcher hangs on the
+            // SHELL, not on the content column: the empty
+            // stretch below the last card belongs to the
+            // shell's scroll area, and a catcher on the
+            // column alone left that whole region deaf
+            // (Ann 2026-11-27, on device: gaps between
+            // cards reset the row, the blank below them
+            // did not). Taps on a row itself are caught
+            // by the row's own overlay first; taps on the
+            // revealed buttons still act; scrolls and
+            // swipes are drags, never taps, so they pass.
+            if openRowID != nil {
+                openRowID = nil
             }
         }
         .alert("lc.downloads.confirmInstall %@".localizeWithFormat(packageToInstall?.appName ?? ""), isPresented: $showInstallConfirm) {
