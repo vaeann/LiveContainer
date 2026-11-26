@@ -154,6 +154,14 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         .sheet(item: $packageToShare) { record in
             ActivityViewController(activityItems: [store.fileURL(for: record)])
         }
+        .onChange(of: store.packages.isEmpty) { isEmpty in
+            // A query that outlives the last package would
+            // silently filter the next download that lands
+            // here — the search it belonged to is gone.
+            if isEmpty {
+                searchContext.query = ""
+            }
+        }
     }
 
     // MARK: - Rows

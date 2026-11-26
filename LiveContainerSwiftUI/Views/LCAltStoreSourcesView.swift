@@ -837,13 +837,11 @@ struct LCSourcesView: View {
                             .padding(.horizontal)
                         } else if let source = item.source, expandedSources.contains(item.id) {
                             if apps.isEmpty {
-                                if source.apps.isEmpty {
-                                    Text("lc.sources.section.noApps".loc)
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal)
-                                }
+                                Text("lc.sources.section.noApps".loc)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal)
                             } else {
                                 ForEach(apps) { app in
                                     sourceAppBanner(app: app, source: source, inUpdatesTab: false)
