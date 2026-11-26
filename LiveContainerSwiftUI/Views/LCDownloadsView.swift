@@ -181,6 +181,16 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         .sheet(item: $packageToShare) { record in
             ActivityViewController(activityItems: [store.fileURL(for: record)])
         }
+        .onDisappear {
+            // Leaving resets any open row (Ann
+            // 2026-11-27: tapping another page's buttons
+            // counts as tapping elsewhere). Segment
+            // switches destroy this view outright, so the
+            // rows are rebuilt shut regardless; this
+            // covers tab switches, which keep the view
+            // alive underneath.
+            openRowID = nil
+        }
     }
 
     // MARK: - Cards
