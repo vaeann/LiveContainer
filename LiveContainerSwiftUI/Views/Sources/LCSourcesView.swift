@@ -260,7 +260,7 @@ struct LCSourcesView: View {
                                 .padding(.horizontal)
                         } else {
                             ForEach(apps) { app in
-                                sourceAppBanner(app: app, source: source, inUpdatesTab: false, cardLayout: true)
+                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
                                     .padding(.horizontal)
                             }
                         }
@@ -272,7 +272,7 @@ struct LCSourcesView: View {
                         sourceErrorCard(item: item)
                     }
                     ForEach(allSourcesApps, id: \.app.id) { pair in
-                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true, cardLayout: true)
+                        sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
                             .padding(.horizontal)
                     }
                     if totalSourceAppsCount == 0 {
@@ -440,7 +440,7 @@ struct LCSourcesView: View {
                 .padding(.horizontal)
         } else {
             ForEach(results, id: \.app.id) { pair in
-                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true, cardLayout: true)
+                sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false, showsSourceName: true)
                     .padding(.horizontal)
             }
         }
@@ -487,7 +487,7 @@ struct LCSourcesView: View {
                 .padding(.horizontal)
 
                 ForEach(updatableApps, id: \.app.id) { pair in
-                    sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
+                    sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true, showsSourceName: true)
                         .padding(.horizontal)
                 }
             }
@@ -497,7 +497,7 @@ struct LCSourcesView: View {
     // MARK: - Row construction
 
     @ViewBuilder
-    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false, cardLayout: Bool = false) -> some View {
+    private func sourceAppBanner(app: AltStoreSourceApp, source: AltStoreSource, inUpdatesTab: Bool, showsSourceName: Bool = false) -> some View {
         let installed = installedModel(for: app.bundleIdentifier)
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
@@ -506,7 +506,6 @@ struct LCSourcesView: View {
             app: app,
             source: source,
             showsSourceName: showsSourceName,
-            cardLayout: cardLayout,
             buttonState: state,
             action: {
                 switch state {

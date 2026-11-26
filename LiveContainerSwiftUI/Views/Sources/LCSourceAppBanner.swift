@@ -16,18 +16,12 @@ import UIKit
 struct LCSourceAppBanner: View {
     let app: AltStoreSourceApp
     let source: AltStoreSource
-    /// Flat lists (all-sources browsing, search results)
-    /// carry the source's name on its own badge line under
-    /// the app name (Ann 2026-11-26); a single source's own
-    /// list already says which source it is via the chip.
+    /// Flat lists (all-sources browsing, search results,
+    /// updates) carry the source's name on its own badge
+    /// line under the app name (Ann 2026-11-26); a single
+    /// source's own list already says which source it is
+    /// via the chip.
     var showsSourceName: Bool = false
-    /// The sources segment's card layout (Ann 2026-11-26,
-    /// second redesign round): fixed 56pt icon, compressed
-    /// four-line stack (name / source badge / date · size /
-    /// intro) and the version under the install button
-    /// instead of in the text. The updates segment keeps
-    /// the original layout (false).
-    var cardLayout: Bool = false
     let buttonState: LCSourceAppButtonState
     let action: () -> Void
     let copyAction: () -> Void
@@ -39,18 +33,6 @@ struct LCSourceAppBanner: View {
     @EnvironmentObject private var downloadHelper: DownloadHelper
     @State private var showDetail = false
     @State private var copied = false
-    @State private var textHeight: CGFloat = 0
-
-    /// The icon grows with the text block (Ann 2026-11-26):
-    /// the four-line row is taller than the old three-line
-    /// one and the fixed 60pt icon looked small in it, so
-    /// the icon tracks the measured text height — never
-    /// below the old 60, capped at 88. The card layout
-    /// instead fixes the icon at 56 (Ann: shrink it a bit
-    /// and squeeze the row tighter).
-    private var iconSize: CGFloat {
-        cardLayout ? 56 : min(max(textHeight, 60), 88)
-    }
 
     private var primaryColor: Color {
         guard dynamicColors else { return Color("FontColor") }
@@ -74,23 +56,6 @@ struct LCSourceAppBanner: View {
     private var dateText: String? {
         guard let date = app.latestVersion?.releaseDate else { return nil }
         return Self.metadataDateFormatter.string(from: date)
-    }
-
-    // 第三行 = 版本号 + 安装包大小（Ann 2026-11-26）：读
-    // versions 的 version/build/size 标准字段；源里没有
-    // 版本信息时回退到 bundle ID（详情页也有一份）。
-    private var versionSizeText: String {
-        guard let latest = app.latestVersion else {
-            return app.bundleIdentifier
-        }
-        var text = latest.version
-        if let build = latest.buildVersion, !build.isEmpty {
-            text += " (\(build))"
-        }
-        if let size = latest.size, size > 0 {
-            text += " • " + ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
-        }
-        return text
     }
 
     // 卡片版式第三行 = 日期 · 大小（Ann 2026-11-26 第二轮）：
@@ -127,44 +92,36 @@ struct LCSourceAppBanner: View {
         HStack {
             HStack(alignment: .center, spacing: 12) {
                 SourceIconView(url: app.iconURL)
-                    .frame(width: iconSize, height: iconSize)
-                    .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.2))
-                if cardLayout {
-                    cardTextStack
-                } else {
-                    legacyTextStack
-                }
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 56 * 0.2))
+                cardTextStack
             }
             .allowsHitTesting(false)
             Spacer()
             copyButton
-            if cardLayout {
-                // The version sits under the button (Ann
-                // 2026-11-26, second round): it belongs to
-                // the action — "GET, and this is the version
-                // you get". Overlong versions truncate at
-                // the column's width. The column hangs from
-                // the BUTTON's centre, not its own (Ann
-                // 2026-11-26, later): centred as a whole, the
-                // button rode ~8pt above the copy button
-                // beside it; aligned on the button, the pair
-                // sits level and the version drops below.
-                VStack(spacing: 4) {
-                    installButton
-                    if let version = app.latestVersion?.version {
-                        Text(version)
-                            .font(.system(size: 10))
-                            .foregroundColor(textColor)
-                            .lineLimit(1)
-                            .frame(width: 70)
-                    }
-                }
-                .alignmentGuide(.center) { _ in 16 }
-            } else {
+            // The version sits under the button (Ann
+            // 2026-11-26, second round): it belongs to
+            // the action — "GET, and this is the version
+            // you get". Overlong versions truncate at
+            // the column's width. The column hangs from
+            // the BUTTON's centre, not its own (Ann
+            // 2026-11-26, later): centred as a whole, the
+            // button rode ~8pt above the copy button
+            // beside it; aligned on the button, the pair
+            // sits level and the version drops below.
+            VStack(spacing: 4) {
                 installButton
+                if let version = app.latestVersion?.version {
+                    Text(version)
+                        .font(.system(size: 10))
+                        .foregroundColor(textColor)
+                        .lineLimit(1)
+                        .frame(width: 70)
+                }
             }
+            .alignmentGuide(.center) { _ in 16 }
         }
-        .padding(cardLayout ? 12 : 16)
+        .padding(12)
         .background {
             RoundedRectangle(cornerSize: CGSize(width: 22, height: 22))
                 .fill(backgroundColor)
@@ -272,66 +229,14 @@ struct LCSourceAppBanner: View {
             .background(Capsule().fill(Color.orange))
     }
 
-    /// The original stack (updates segment): name (+ source
-    /// tag) + beta / date / version + size — or the install
-    /// status in the version line's place / intro. Carries
-    /// the text-height measurement the adaptive icon feeds
-    /// on.
-    private var legacyTextStack: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(app.name)
-                    .font(.system(size: 16)).bold()
-                    .lineLimit(1)
-                if showsSourceName {
-                    sourceTag
-                }
-                if app.isBeta {
-                    betaBadge
-                }
-            }
-            // Four lines (Ann 2026-11-26): name /
-            // release date / version + size / intro.
-            // While installing, the status text takes
-            // the version line's place, as on the
-            // detail page.
-            if let dateText = dateText {
-                Text(dateText)
-                    .font(.system(size: 12))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-            }
-            if let phase = downloadHelper.sourceInstallStates[app.bundleIdentifier] {
-                Text(lcSourceInstallStatusText(phase: phase, bundleID: app.bundleIdentifier, helper: downloadHelper))
-                    .font(.system(size: 12))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-            } else {
-                Text(versionSizeText)
-                    .font(.system(size: 12))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-            }
-            if !subtitleText.isEmpty {
-                Text(subtitleText)
-                    .font(.system(size: 11))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-            }
-        }
-        .background(GeometryReader { proxy in
-            Color.clear
-                .onAppear { textHeight = proxy.size.height }
-                .onChange(of: proxy.size.height) { textHeight = $0 }
-        })
-    }
-
-    /// The card stack (sources segment, Ann 2026-11-26
-    /// second round): name + beta / source badge alone /
-    /// date · size — or the install status in that line's
-    /// place / intro. Squeezed (spacing 3, name 15) to sit
-    /// with the fixed 56pt icon; the version moved under
-    /// the install button.
+    /// The text stack (Ann 2026-11-26 second round; the
+    /// updates segment aligned to this same card later
+    /// that day, retiring the original roomier stack):
+    /// name + beta / source badge alone / date · size —
+    /// or the install status in that line's place /
+    /// intro. Squeezed (spacing 3, name 15) to sit with
+    /// the fixed 56pt icon; the version moved under the
+    /// install button.
     private var cardTextStack: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
