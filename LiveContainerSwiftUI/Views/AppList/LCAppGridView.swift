@@ -39,8 +39,7 @@ struct LCAppGridView: View {
     let darkModeIcon: Bool
     let actions: LCAppGridActions
 
-    @State private var uninstallTarget: LCAppModel?
-    @State private var deleteDataTarget: LCAppModel?
+
 
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 16), count: columns)
@@ -71,55 +70,42 @@ struct LCAppGridView: View {
                     iconSize: cellIconSize,
                     darkModeIcon: darkModeIcon,
                     actions: actions,
-                    onUninstall: { uninstallTarget = app }
+                    onUninstall: { runUninstallFlow(app) }
                 )
             }
         }
-        .confirmationDialog(
-            "lc.appBanner.confirmUninstallTitle".loc,
-            isPresented: Binding(
-                get: { uninstallTarget != nil },
-                set: { if !$0 { uninstallTarget = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: uninstallTarget
-        ) { app in
-            Button("lc.appBanner.uninstall".loc, role: .destructive) {
-                uninstallTarget = nil
-                if app.appInfo.containers.isEmpty {
-                    Task { await actions.onUninstall(app, false) }
-                } else {
-                    deleteDataTarget = app
-                }
+    }
+
+    /// Uninstall asks exactly like the list does (Ann
+    /// 2026-11-27: the grid's SwiftUI confirmation sheets
+    /// became the banner's UIKit alerts — same titles,
+    /// same messages, same buttons): a destructive
+    /// confirm / cancel alert, then — only when the app
+    /// has data containers — the delete-data alert whose
+    /// two answers are Delete and No (No keeps the data
+    /// and still uninstalls; there is no third, aborting
+    /// button, again like the list).
+    private func runUninstallFlow(_ app: LCAppModel) {
+        Task {
+            guard let presenter = LCIconExportHelper.topViewController() else { return }
+            let displayName = app.appInfo.displayName() ?? app.displayName
+            let confirmed = await presenter.presentConfirmation(
+                title: "lc.appBanner.confirmUninstallTitle".loc,
+                message: "lc.appBanner.confirmUninstallMsg %@".localizeWithFormat(displayName),
+                confirmTitle: "lc.appBanner.uninstall".loc,
+                cancelTitle: "lc.common.cancel".loc
+            )
+            guard confirmed == true else { return }
+            var deleteData = false
+            if !app.appInfo.containers.isEmpty {
+                deleteData = await presenter.presentConfirmation(
+                    title: "lc.appBanner.deleteDataTitle".loc,
+                    message: "lc.appBanner.deleteDataMsg %@".localizeWithFormat(displayName),
+                    confirmTitle: "lc.common.delete".loc,
+                    cancelTitle: "lc.common.no".loc
+                ) == true
             }
-            Button("lc.common.cancel".loc, role: .cancel) {
-                uninstallTarget = nil
-            }
-        } message: { app in
-            Text("lc.appBanner.confirmUninstallMsg %@".localizeWithFormat(app.displayName))
-        }
-        .confirmationDialog(
-            "lc.appBanner.deleteDataTitle".loc,
-            isPresented: Binding(
-                get: { deleteDataTarget != nil },
-                set: { if !$0 { deleteDataTarget = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: deleteDataTarget
-        ) { app in
-            Button("lc.common.delete".loc, role: .destructive) {
-                deleteDataTarget = nil
-                Task { await actions.onUninstall(app, true) }
-            }
-            Button("lc.common.no".loc) {
-                deleteDataTarget = nil
-                Task { await actions.onUninstall(app, false) }
-            }
-            Button("lc.common.cancel".loc, role: .cancel) {
-                deleteDataTarget = nil
-            }
-        } message: { app in
-            Text("lc.appBanner.deleteDataMsg %@".localizeWithFormat(app.displayName))
+            await actions.onUninstall(app, deleteData)
         }
     }
 }
@@ -775,7 +761,7 @@ final class LCIconExportHelper: NSObject, UIDocumentPickerDelegate {
         }
     }
 
-    private static func topViewController() -> UIViewController? {
+    static func topViewController() -> UIViewController? {
         let keyWindow = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
