@@ -14,11 +14,16 @@
 //  three segments share one geometry by construction
 //  (until the 2026-11-26 stage-3 refactor this segment
 //  was a List while the others were scroll views, which
-//  put its picker lower and narrower than theirs). The
-//  List's inset-grouped card is reproduced by hand
-//  below, and swipe-to-delete by LCSwipeToDeleteRow
-//  (List-only .swipeActions does not exist on a scroll
-//  view). No search bar here: Ann removed the updates
+//  put its picker lower and narrower than theirs).
+//  Swipe-to-delete is LCSwipeToDeleteRow (List-only
+//  .swipeActions does not exist on a scroll view). Each
+//  package is a card in the sources segment's card
+//  style — same tint recipe, 56pt icon, install capsule
+//  — minus the source-badge and intro lines a kept
+//  package does not have (Ann 2026-11-26); the info
+//  line keeps its version · size · date format. Tapping
+//  install asks first ("Install X?" — Ann 2026-11-26).
+//  No search bar here: Ann removed the updates
 //  and downloads bars on 2026-11-26 — little in those
 //  lists worth searching; only the sources segment
 //  searches.
@@ -34,16 +39,20 @@ private let lcDownloadsDateFormatter: DateFormatter = {
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter
-}()
-
-struct LCDownloadsView<SegmentPicker: View>: View {
+}()struct LCDownloadsView<SegmentPicker: View>: View {
     private let segmentPicker: SegmentPicker
 
     @ObservedObject private var store = LCDownloadStore.shared
     @EnvironmentObject private var sharedModel: SharedModel
     @EnvironmentObject private var downloadHelper: DownloadHelper
+    @AppStorage("dynamicColors") private var dynamicColors = true
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showClearAllConfirm = false
     @State private var packageToShare: LCDownloadedPackage?
+    /// The package whose install is waiting on the
+    /// confirmation alert (Ann 2026-11-26).
+    @State private var packageToInstall: LCDownloadedPackage?
+    @State private var showInstallConfirm = false
     /// The one row whose delete action is currently
     /// revealed; opening one row closes the others.
     @State private var openRowID: LCDownloadedPackage.ID?
@@ -82,26 +91,30 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     .font(.footnote)
                     .padding(.horizontal)
 
-                    // The inset-grouped card, by hand: one
-                    // rounded stack, dividers inset past the
-                    // icons, rows sliding over it to delete.
-                    VStack(spacing: 0) {
+                    // One card per package, in the
+                    // sources segment's card style.
+                    VStack(spacing: 12) {
                         ForEach(store.packages) { record in
-                            if record.id != store.packages.first?.id {
-                                Divider()
-                                    .padding(.leading, 68)
-                            }
                             LCSwipeToDeleteRow(rowID: record.id, openRowID: $openRowID, onDelete: {
                                 store.remove(record)
                             }) {
-                                row(for: record)
+                                card(for: record)
                             }
                         }
                     }
-                    .background(RoundedRectangle(cornerRadius: 18).fill(Color(uiColor: UIColor.secondarySystemBackground)))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
                     .padding(.horizontal)
                 }
+            }
+        }
+        .alert("lc.downloads.confirmInstall %@".localizeWithFormat(packageToInstall?.appName ?? ""), isPresented: $showInstallConfirm) {
+            Button("lc.common.yes".loc) {
+                if let record = packageToInstall {
+                    performInstall(record)
+                }
+                packageToInstall = nil
+            }
+            Button("lc.common.no".loc, role: .cancel) {
+                packageToInstall = nil
             }
         }
         .alert("lc.downloads.clearAll".loc, isPresented: $showClearAllConfirm) {
@@ -117,56 +130,100 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         }
     }
 
-    // MARK: - Rows
+    // MARK: - Cards
+
+    /// Every install entry point (card tap, Install
+    /// button, context menu) asks first (Ann 2026-11-26).
+    private func requestInstall(_ record: LCDownloadedPackage) {
+        packageToInstall = record
+        showInstallConfirm = true
+    }
+
+    private func performInstall(_ record: LCDownloadedPackage) {
+        NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+    }
+
+    /// The sources cards' tint recipe, keyed by bundle id
+    /// (name when a package somehow has none).
+    private func cardTint(for record: LCDownloadedPackage) -> Color {
+        lcCardColor(forKey: record.bundleID ?? record.appName)
+    }
+
+    private func cardTextColor(for record: LCDownloadedPackage) -> Color {
+        _ = colorScheme == .dark // trigger refresh
+        let color = dynamicColors ? cardTint(for: record) : Color("FontColor")
+        return color.readableTextColor()
+    }
 
     @ViewBuilder
-    private func row(for record: LCDownloadedPackage) -> some View {
-        // Not a row-wide Button: the row carries its own explicit
-        // install / resume button on the right (Ann 2026-11-24),
-        // and a Button inside a Button label would not receive
-        // its taps. The row body keeps the same tap action via a
-        // tap gesture; the trailing button consumes its own taps.
+    private func card(for record: LCDownloadedPackage) -> some View {
+        // The sources segment's card, minus the badge and
+        // intro lines (Ann 2026-11-26): 56pt icon, name,
+        // the info line in its existing version · size ·
+        // date format, and the install capsule. Not a
+        // row-wide Button: the capsule consumes its own
+        // taps; the card body acts via a tap gesture.
+        let tint = cardTint(for: record)
+        let textColor = cardTextColor(for: record)
         HStack(spacing: 12) {
             iconView(for: record)
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 56 * 0.2))
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.appName)
-                    .font(.body)
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 15)).bold()
+                    .foregroundColor(textColor)
                     .lineLimit(1)
                 Text(detailText(for: record))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundColor(textColor)
                     .lineLimit(1)
                 if !record.isComplete && record.totalBytes > 0 {
                     ProgressView(value: Double(record.downloadedBytes), total: Double(record.totalBytes))
                         .progressViewStyle(.linear)
+                        .tint(textColor)
                 }
             }
             Spacer()
             if record.isComplete {
-                Button("lc.downloads.install".loc) {
-                    NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+                Button {
+                    requestInstall(record)
+                } label: {
+                    Text("lc.downloads.install".loc)
+                        .bold()
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 18)
+                        .frame(height: 32)
+                        .background(Capsule().fill(dynamicColors ? tint : Color("FontColor")))
+                        .clipShape(Capsule())
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
                 .buttonStyle(.plain)
             } else {
-                Button("lc.downloads.resume".loc) {
+                Button {
                     downloadHelper.resumeDownload(record: record)
+                } label: {
+                    Text("lc.downloads.resume".loc)
+                        .bold()
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 18)
+                        .frame(height: 32)
+                        .background(Capsule().fill(dynamicColors ? tint : Color("FontColor")))
+                        .clipShape(Capsule())
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerSize: CGSize(width: 22, height: 22))
+                .fill(dynamicColors ? tint.opacity(0.5) : Color("AppBannerBG"))
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             if record.isComplete {
-                NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+                requestInstall(record)
             } else {
                 downloadHelper.resumeDownload(record: record)
             }
@@ -174,7 +231,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         .contextMenu {
             if record.isComplete {
                 Button("lc.downloads.install".loc) {
-                    NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: store.fileURL(for: record))
+                    requestInstall(record)
                 }
                 Button("lc.downloads.share".loc) {
                     packageToShare = record
@@ -297,7 +354,6 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
                         .onTapGesture { close() }
                 }
             }
-            .background(Color(uiColor: UIColor.secondarySystemBackground))
             .offset(x: displayOffset)
             .gesture(rowDrag)
         }

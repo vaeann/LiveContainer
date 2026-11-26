@@ -100,14 +100,21 @@ extension AltStoreSourceApp {
     /// on every launch, with no storage; the narrow S/L
     /// bands keep all cards in one visual family.
     var lcCardColor: Color {
-        let digest = Insecure.MD5.hash(data: Data(bundleIdentifier.utf8))
-        let hex = digest.map { String(format: "%02x", $0) }.joined()
-        let hue = Double(Int(hex.prefix(8), radix: 16)! % 360)
-        let saturation = Double(58 + (Int(hex.dropFirst(8).prefix(2), radix: 16)! % 12)) / 100
-        let lightness = Double(44 + (Int(hex.dropFirst(10).prefix(2), radix: 16)! % 9)) / 100
-        let rgb = lcHSLToRGB(hue: hue, saturation: saturation, lightness: lightness)
-        return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
+        lcCardColor(forKey: bundleIdentifier)
     }
+}
+
+/// The shared card-color recipe (see above), keyed by
+/// any stable string — the downloads library colors its
+/// cards with it too, keyed by bundle id.
+func lcCardColor(forKey key: String) -> Color {
+    let digest = Insecure.MD5.hash(data: Data(key.utf8))
+    let hex = digest.map { String(format: "%02x", $0) }.joined()
+    let hue = Double(Int(hex.prefix(8), radix: 16)! % 360)
+    let saturation = Double(58 + (Int(hex.dropFirst(8).prefix(2), radix: 16)! % 12)) / 100
+    let lightness = Double(44 + (Int(hex.dropFirst(10).prefix(2), radix: 16)! % 9)) / 100
+    let rgb = lcHSLToRGB(hue: hue, saturation: saturation, lightness: lightness)
+    return Color(red: rgb.r, green: rgb.g, blue: rgb.b)
 }
 
 /// Segment-wise numeric version comparison (1.10 > 1.9); non-numeric
