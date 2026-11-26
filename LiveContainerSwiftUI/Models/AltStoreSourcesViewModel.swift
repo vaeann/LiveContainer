@@ -23,6 +23,24 @@ private struct AltStoreSourceResponse: Decodable {
     let apps: [AltStoreSourceAppResponse]?
 }
 
+/// A byte count that arrives as a JSON number in most
+/// sources but as a string in a few: decode either, and
+/// never let one odd size value fail the whole source.
+private struct FlexibleInt64: Decodable {
+    let value: Int64?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int64.self) {
+            value = number
+        } else if let string = try? container.decode(String.self) {
+            value = Int64(string)
+        } else {
+            value = nil
+        }
+    }
+}
+
 private struct AltStoreSourceAppResponse: Decodable {
     let beta: Bool?
     let name: String?
@@ -36,9 +54,10 @@ private struct AltStoreSourceAppResponse: Decodable {
     let localizedDescription: String?
     let iconURL: String?
     let tintColor: String?
+    let size: FlexibleInt64?
     let screenshotURLs: [String]?
     let versions: [AltStoreSourceAppVersionResponse]?
-    
+
     enum CodingKeys: String, CodingKey {
         case beta
         case name
@@ -52,6 +71,7 @@ private struct AltStoreSourceAppResponse: Decodable {
         case localizedDescription
         case iconURL
         case tintColor
+        case size
         case screenshotURLs
         case versions
     }
@@ -63,7 +83,7 @@ private struct AltStoreSourceAppVersionResponse: Decodable {
     let date: String?
     let localizedDescription: String?
     let downloadURL: String?
-    let size: Int64?
+    let size: FlexibleInt64?
     
     enum CodingKeys: String, CodingKey {
         case version
@@ -491,7 +511,7 @@ enum AltStoreSourceLoader {
                 releaseDate: parseDate(version.date),
                 localizedDescription: version.localizedDescription,
                 downloadURL: downloadURL,
-                size: version.size
+                size: version.size?.value
             )
         }
     }
@@ -508,7 +528,12 @@ enum AltStoreSourceLoader {
             releaseDate: parseDate(response.versionDate),
             localizedDescription: response.versionDescription ?? response.localizedDescription,
             downloadURL: downloadURL,
-            size: nil
+            // Legacy sources carry the size at the app
+            // level, beside the version — it used to be
+            // dropped here, so legacy cards and detail
+            // pages showed no size at all (Ann 2026-11-26
+            // audit; CyPwn is a legacy source).
+            size: response.size?.value
         )
     }
     
