@@ -131,6 +131,21 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     }
                     .padding(.horizontal)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Taps that land on no control — the
+                    // gaps between cards, the padding —
+                    // close an open row too (Ann
+                    // 2026-11-27: in the open state,
+                    // tapping anywhere but the revealed
+                    // buttons resets the row). Taps on a
+                    // row itself are caught by the row's
+                    // own overlay; taps on the revealed
+                    // buttons still act.
+                    if openRowID != nil {
+                        openRowID = nil
+                    }
+                }
             }
         }
         .alert("lc.downloads.confirmInstall %@".localizeWithFormat(packageToInstall?.appName ?? ""), isPresented: $showInstallConfirm) {
@@ -422,6 +437,18 @@ private struct LCSwipeActionsRow<Content: View>: View {
                         .fill(Color.clear)
                         .contentShape(Rectangle())
                         .onTapGesture { close() }
+                } else if openRowID != nil {
+                    // Another row is open: a tap on this
+                    // row closes that one instead of
+                    // acting (Ann 2026-11-27: in the open
+                    // state, tapping anywhere but the
+                    // revealed buttons resets the row) —
+                    // the open row glides shut through its
+                    // own openRowID change handler.
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture { openRowID = nil }
                 }
             }
             // Opaque, and it slides WITH the card: the
@@ -498,7 +525,21 @@ private struct LCSwipeActionsRow<Content: View>: View {
                 // the open position (Ann 2026-11-27): with
                 // no full swipe out there to reach for, the
                 // travel ends where the button is.
-                offset = min(max(traveled, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
+                var clamped = min(max(traveled, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
+                // A drag that starts from an open row is a
+                // closing drag: it stops at shut and never
+                // crosses into the other side's buttons
+                // within the same gesture (Ann 2026-11-27,
+                // on device: swiping an open row back
+                // overshot easily and exposed the opposite
+                // button). Opening the other side takes a
+                // fresh swipe from shut.
+                if dragStartOffset > 0 {
+                    clamped = max(clamped, 0)
+                } else if dragStartOffset < 0 {
+                    clamped = min(clamped, 0)
+                }
+                offset = clamped
             }
             .onEnded { value in
                 defer { dragIntent = .undecided }
@@ -516,7 +557,15 @@ private struct LCSwipeActionsRow<Content: View>: View {
                 // The prediction may only reinforce the
                 // side the row is already on — never pull
                 // it across to the other side by itself.
-                let predicted = min(max(dragStartOffset + value.predictedEndTranslation.width - dragClaimDelta, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
+                var predicted = min(max(dragStartOffset + value.predictedEndTranslation.width - dragClaimDelta, -actionWidth - 14), canShare ? actionWidth + 14 : 0)
+                // The prediction is pinned to the starting
+                // side too: a closing flick's momentum must
+                // not re-open the other side on release.
+                if dragStartOffset > 0 {
+                    predicted = max(predicted, 0)
+                } else if dragStartOffset < 0 {
+                    predicted = min(predicted, 0)
+                }
                 let decision: CGFloat
                 if offset <= 0, predicted <= 0 {
                     decision = min(offset, predicted)
