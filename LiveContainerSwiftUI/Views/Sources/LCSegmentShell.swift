@@ -12,34 +12,16 @@ import Foundation
 import SwiftUI
 
 /// One segment of the sources page (Ann 2026-11-26,
-/// search settled after four attempts; the header
-/// placement re-settled 2026-11-27 — re-read both
-/// before moving pieces):
+/// search settled after four attempts — do not move the
+/// pieces around without re-reading why):
 ///
 /// - The scroll view is the navigation view's direct
 ///   content (the App page's geometry), so it scrolls
 ///   under the navigation bar and the drawer search
-///   bar's hide mechanism engages. Nothing WRAPS it:
-///   a VStack or a fixed view between the navigation
-///   view and the scroll view breaks the link the
-///   drawer's hide mechanism needs and pins the bar
-///   (four attempts, 2026-11-26).
-/// - The segment picker and the sources segment's
-///   chips row ride in the scroll view's TOP SAFE-AREA
-///   INSET instead — the inset is the scroll view's
-///   own geometry, not a wrapper, so the drawer link
-///   survives, while the header itself never scrolls:
-///   one picker position for all three segments by
-///   construction, and controls up there stand outside
-///   the scroll flow entirely. That last part is what
-///   ended the sort button's drift (Ann 2026-11-27):
-///   iOS 26 restores a menu's anchor from a snapshot
-///   after dismissal, and an anchor inside the scroll
-///   flow lags the finger until the restore lands —
-///   the App page's toolbar sort menu never showed
-///   it, because a toolbar never scrolls. (Device
-///   check still owed: drawer reveal/hide unchanged,
-///   sort drift gone.)
+///   bar's hide mechanism engages.
+/// - The segment picker rides as the scroll view's first
+///   row, so every segment's picker sits at the same
+///   coordinates by construction.
 /// - The drawer search bar hangs on the scroll view
 ///   itself — never on an outer container, where it
 ///   would belong to the whole navigation stack and
@@ -54,33 +36,29 @@ import SwiftUI
 /// later the same day: the updates and downloads lists
 /// hold little worth searching, so their bars were
 /// removed for good); a segment passes nil to opt out.
-struct LCSegmentShell<Header: View, Content: View>: View {
+struct LCSegmentShell<Picker: View, Content: View>: View {
     private let searchContext: SearchContext?
-    private let header: Header
+    private let picker: Picker
     private let content: Content
 
     @State private var viewportHeight: CGFloat = 0
 
     init(searchContext: SearchContext? = nil,
-         @ViewBuilder header: () -> Header,
+         @ViewBuilder picker: () -> Picker,
          @ViewBuilder content: () -> Content) {
         self.searchContext = searchContext
-        self.header = header()
+        self.picker = picker()
         self.content = content()
     }
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 16) {
+                picker
                 content
             }
             .padding(.vertical)
             .frame(minHeight: viewportHeight + 1, alignment: .top)
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            header
-                .frame(maxWidth: .infinity)
-                .background(Color(uiColor: UIColor.systemBackground))
         }
         .modifier(LCSegmentSearchBar(context: searchContext))
         .background(GeometryReader { proxy in

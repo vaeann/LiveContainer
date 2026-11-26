@@ -13,9 +13,8 @@
 //  row's swipe, and install-via-button is unambiguous.
 //
 //  This segment rides the shared segment shell
-//  (LCSegmentShell) — the picker in the shell's fixed
-//  top inset, so all three segments share one geometry
-//  by construction
+//  (LCSegmentShell) — the picker as first row, so all
+//  three segments share one geometry by construction
 //  (until the 2026-11-26 stage-3 refactor this segment
 //  was a List while the others were scroll views, which
 //  put its picker lower and narrower than theirs).
