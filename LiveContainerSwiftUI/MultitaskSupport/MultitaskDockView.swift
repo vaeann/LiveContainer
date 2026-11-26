@@ -2010,6 +2010,20 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
     /// instead of ending in a bright seam (Ann
     /// 2026-11-26).
     private let rimLayer = CAShapeLayer()
+    /// The rim's wall-side segment as its OWN layer:
+    /// docked, that side IS the screen edge and draws
+    /// nothing (above); floating, the pill's outer edge
+    /// is a real edge over the content and needs its line
+    /// (Ann 2026-11-27: the segment was simply absent
+    /// from the rim's open path in both states, so the
+    /// dragged pill was missing the line on that side
+    /// too). It cannot just join the rim's path — open
+    /// and closed variants differ in segment structure,
+    /// and path morphs need matching structures — so it
+    /// rides as a two-point path whose endpoints follow
+    /// the same flare interpolation, fading out as the
+    /// handle docks and in as it leaves the edge.
+    private let wallRimLayer = CAShapeLayer()
 
     /// The pill's width (the frame's width), fed by the
     /// manager like the other values it owns. Every outline
@@ -2100,6 +2114,23 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         return path
     }
 
+    /// The rim's wall-side segment at a given flare: the
+    /// straight line between the outline's two wall
+    /// points — the flare tips when docked, the pill's
+    /// straight outer edge when floating.
+    private func wallSegmentPath(flare t: CGFloat) -> CGPath {
+        let w = bounds.width, h = bounds.height
+        let r = pillWidth / 2
+        let bodyTop = flareLength
+        let bodyBottom = h - flareLength
+        func mx(_ x: CGFloat) -> CGFloat { isOnRightSide ? x : w - x }
+        func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * t }
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: mx(w), y: lerp(bodyTop + r, 0)))
+        path.addLine(to: CGPoint(x: mx(w), y: lerp(bodyBottom - r, h)))
+        return path
+    }
+
     /// Morph the outline (mask, rim and shadow together)
     /// between the pill and the docked silhouette.
     private func animateOutline(toDocked docked: Bool, duration: TimeInterval) {
@@ -2118,6 +2149,18 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         morph(shapeMask, "path", from: (shapeMask.presentation() as? CAShapeLayer)?.path ?? shapeMask.path, to: target) { shapeMask.path = $0 }
         morph(rimLayer, "path", from: (rimLayer.presentation() as? CAShapeLayer)?.path ?? rimLayer.path, to: rimTarget) { rimLayer.path = $0 }
         morph(layer, "shadowPath", from: layer.presentation()?.shadowPath ?? layer.shadowPath, to: target) { layer.shadowPath = $0 }
+        // The wall segment rides the same morph: its
+        // endpoints follow the flare, and it fades out as
+        // the handle docks (its line becomes the wall)
+        // and in as it leaves the edge.
+        morph(wallRimLayer, "path", from: (wallRimLayer.presentation() as? CAShapeLayer)?.path ?? wallRimLayer.path, to: wallSegmentPath(flare: docked ? 1 : 0)) { wallRimLayer.path = $0 }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = wallRimLayer.presentation()?.opacity ?? wallRimLayer.opacity
+        fade.toValue = docked ? 0 : 1
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        wallRimLayer.opacity = docked ? 0 : 1
+        wallRimLayer.add(fade, forKey: "outlineMorph")
     }
 
     /// The grip: two short segments in a column, breathing
@@ -2153,6 +2196,11 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         rimLayer.strokeColor = UIColor.white.withAlphaComponent(0.35).cgColor
         rimLayer.lineWidth = 1
         clipView.layer.addSublayer(rimLayer)
+        wallRimLayer.fillColor = UIColor.clear.cgColor
+        wallRimLayer.strokeColor = UIColor.white.withAlphaComponent(0.35).cgColor
+        wallRimLayer.lineWidth = 1
+        wallRimLayer.opacity = 0
+        clipView.layer.addSublayer(wallRimLayer)
         addSubview(clipView)
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -2202,10 +2250,13 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         // animateOutline instead of snapping it here.
         shapeMask.frame = bounds
         rimLayer.frame = bounds
+        wallRimLayer.frame = bounds
         if shapeMask.animation(forKey: "outlineMorph") == nil {
             let outline = outlinePath(flare: isFloating ? 0 : 1)
             shapeMask.path = outline
             rimLayer.path = outlinePath(flare: isFloating ? 0 : 1, closed: false)
+            wallRimLayer.path = wallSegmentPath(flare: isFloating ? 0 : 1)
+            wallRimLayer.opacity = isFloating ? 1 : 0
             layer.shadowPath = outline
         }
         tintView.frame = bounds
@@ -2236,6 +2287,7 @@ private final class LCHiddenDockHandleView: UIView, UIGestureRecognizerDelegate 
         isFloating = false
         shapeMask.removeAnimation(forKey: "outlineMorph")
         rimLayer.removeAnimation(forKey: "outlineMorph")
+        wallRimLayer.removeAnimation(forKey: "outlineMorph")
         layer.removeAnimation(forKey: "outlineMorph")
         setNeedsLayout()
         alpha = 0
