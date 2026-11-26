@@ -100,7 +100,9 @@ extension AltStoreSourceApp {
     /// on every launch, with no storage; the narrow S/L
     /// bands keep all cards in one visual family.
     var lcCardColor: Color {
-        lcCardColor(forKey: bundleIdentifier)
+        // Module-qualified: inside this property the name
+        // lcCardColor resolves to the property itself.
+        LiveContainerSwiftUI.lcCardColor(forKey: bundleIdentifier)
     }
 }
 
