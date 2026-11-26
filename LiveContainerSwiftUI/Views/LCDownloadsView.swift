@@ -392,7 +392,12 @@ private struct LCSwipeToDeleteRow<Content: View>: View {
             .offset(x: displayOffset)
             .gesture(rowDrag)
         }
-        .clipped()
+        // The row clips to the card's own radius: at rest
+        // the corners show the page through them, and
+        // swiped open the red button's outer corners come
+        // out rounded like the card's instead of square
+        // (Ann 2026-11-26).
+        .clipShape(RoundedRectangle(cornerRadius: 22))
     }
 
     private func close() {
