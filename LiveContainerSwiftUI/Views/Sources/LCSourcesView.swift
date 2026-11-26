@@ -237,7 +237,7 @@ struct LCSourcesView: View {
             if viewModel.sources.isEmpty {
                 emptySourcesView
                     .padding(.top, 48)
-            } else if viewModel.enabledSources.isEmpty && !isFiltering(sourcesSearchContext) {
+            } else if viewModel.enabledSources.isEmpty {
                 Text("lc.sources.allDisabled".loc)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -566,12 +566,24 @@ struct LCSourcesView: View {
     /// on the whole list, and the updates segment shows it as-is.
     var updatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         _ = ignoreTick
+        // One lookup table per evaluation instead of a
+        // linear scan of the installed list for every app
+        // in every source (Ann 2026-11-26 audit): this is
+        // re-evaluated on every render pass — the segment
+        // picker, the updates list and the badge count all
+        // ask — and sources now hold hundreds of apps.
+        let installedByBundle = Dictionary(
+            (sharedModel.apps + sharedModel.hiddenApps).map { ($0.appInfo.bundleIdentifier(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var bestByBundle: [String: (source: AltStoreSource, app: AltStoreSourceApp)] = [:]
         var order: [String] = []
         for item in viewModel.enabledSources {
             guard let source = item.source else { continue }
             for app in source.apps {
-                guard hasUpdate(for: app), let latest = app.latestVersion else { continue }
+                guard let latest = app.latestVersion,
+                      let installed = installedByBundle[app.bundleIdentifier],
+                      lcIsVersion(latest.version, newerThan: installed.version) else { continue }
                 if let existing = bestByBundle[app.bundleIdentifier],
                    let existingLatest = existing.app.latestVersion {
                     if lcIsVersion(latest.version, newerThan: existingLatest.version) {
