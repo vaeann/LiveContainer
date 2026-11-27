@@ -122,6 +122,12 @@ struct LCMultitaskSettingView: View {
                     }
                 }
                 .buttonStyle(.plain)
+            } footer: {
+                // The multitask explanation moved here from
+                // the settings root (Ann 2026-11-27: the
+                // group footer there is gone; each page
+                // carries its own description).
+                Text("lc.settings.multitaskDesc".loc)
             }
         }
         .navigationTitle("lc.appBanner.multitask".loc)

@@ -22665,7 +22665,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dark Mode Icon"
+            "value" : "App Dark Mode Icon"
           }
         },
         "es" : {
@@ -22719,13 +22719,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "深色模式图标"
+            "value" : "App深色模式图标"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "深色模式圖示"
+            "value" : "App深色模式圖標"
           }
         }
       }
@@ -23228,7 +23228,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dynamic colors"
+            "value" : "App List Dynamic Colors"
           }
         },
         "es" : {
@@ -23300,13 +23300,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "动态颜色"
+            "value" : "App列表动态颜色"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "動態顏色"
+            "value" : "App列表動態顏色"
           }
         }
       }
@@ -23531,7 +23531,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Frame Shortcut Icon"
+            "value" : "Add Border to App Icons"
           }
         },
         "es" : {
@@ -23603,13 +23603,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在App图标外加边框"
+            "value" : "App图标增加边框"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在App圖示加上邊框"
+            "value" : "App圖標增加邊框"
           }
         }
       }

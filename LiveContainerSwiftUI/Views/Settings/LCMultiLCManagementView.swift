@@ -110,6 +110,12 @@ struct LCMultiLCManagementView : View, InstallAnotherLCButtonDelegate {
                 }
             } header: {
                 Text("lc.common.miscellaneous".loc)
+            } footer: {
+                // The multi-LC explanation moved here from
+                // the settings root (Ann 2026-11-27: the
+                // group footer there is gone; each page
+                // carries its own description).
+                Text("lc.settings.multiLCDesc".loc)
             }
         }
         .environment(\.editMode, .constant(.active))

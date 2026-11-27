@@ -168,15 +168,6 @@ struct LCSettingsView: View {
                     }
                 } header: {
                     Text("lc.settings.backgroundMultitask".loc)
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if (store != .Unknown && store != .ADP) || LCUtils.isAppGroupAltStoreLike() {
-                            Text("lc.settings.multiLCDesc".loc)
-                        }
-                        if #available(iOS 16.1, *) {
-                            Text("lc.settings.multitaskDesc".loc)
-                        }
-                    }
                 }
 
                 // Source Management (Ann 2026-11-27): opens
@@ -236,33 +227,11 @@ struct LCSettingsView: View {
                             Text("lc.settings.darkModeIcon".loc)
                         }
                     }
-                    
-                } header: {
-                    Text("lc.settings.interface".loc)
-                } footer: {
-                    Text("lc.settings.dynamicColors.desc".loc)
-                }
-                Section{
                     Toggle(isOn: $frameShortIcon) {
                         Text("lc.settings.FrameIcon".loc)
                     }
-                    Picker(selection: $selected32BitEmulator) {
-                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
-                            Text("lc.common.none".loc).tag("")
-                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath!)
-                        }
-                    } label: {
-                        Text("lc.settings.selected32BitEmulator".loc)
-                    }
-                    Button {
-                        clearNotifications()
-                    } label: {
-                        Text("lc.settings.clearNotifications".loc)
-                    }
                 } header: {
-                    Text("lc.common.miscellaneous".loc)
-                } footer: {
-                    Text("lc.settings.FrameIconDesc".loc)
+                    Text("lc.settings.interface".loc)
                 }
 
                 Section {
@@ -274,6 +243,11 @@ struct LCSettingsView: View {
                     }
                     Toggle(isOn: $dontSignApp) {
                         Text("lc.settings.dontSign".loc)
+                    }
+                    Button {
+                        clearNotifications()
+                    } label: {
+                        Text("lc.settings.clearNotifications".loc)
                     }
                 } header: {
                     Text("lc.settings.behavior".loc)
@@ -307,6 +281,14 @@ struct LCSettingsView: View {
                         LCDataManagementView()
                     } label: {
                         Text("lc.settings.dataManagement".loc)
+                    }
+                    Picker(selection: $selected32BitEmulator) {
+                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
+                            Text("lc.common.none".loc).tag("")
+                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath!)
+                        }
+                    } label: {
+                        Text("lc.settings.selected32BitEmulator".loc)
                     }
                 }
                 
