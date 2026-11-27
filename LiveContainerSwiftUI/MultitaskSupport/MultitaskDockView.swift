@@ -1911,8 +1911,14 @@ enum LCBreathingLightColor: String, CaseIterable {
     // ever shipped — and later the same day gray and the
     // custom mint retired for stock Apple teal and
     // brown, again at her word; a stored mint/gray value
-    // simply falls back to standard).
-    case standard, red, orange, yellow, green, teal, cyan, blue, indigo, purple, pink, lightPink, rose, brown, gold
+    // simply falls back to standard). Later that morning
+    // teal, rose and yellow retired too, again at her
+    // word — teal duplicated cyan and sat too close to
+    // green, rose duplicated red — replaced by lime,
+    // lavender and matcha (custom hexes below, seated
+    // in hue order); stored values of retired cases
+    // fall back to standard the same way.)
+    case standard, red, orange, matcha, lime, green, cyan, blue, indigo, purple, lavender, pink, lightPink, brown, gold
 
     static var current: LCBreathingLightColor {
         LCBreathingLightColor(rawValue: LCUtils.appGroupUserDefault.string(forKey: "LCBreathingLightColor") ?? "") ?? .standard
@@ -1925,16 +1931,16 @@ enum LCBreathingLightColor: String, CaseIterable {
         case .standard: return nil
         case .red: return .systemRed
         case .orange: return .systemOrange
-        case .yellow: return .systemYellow
+        case .matcha: return UIColor(red: 0.663, green: 0.741, blue: 0.478, alpha: 1) // #A9BD7A
+        case .lime: return UIColor(red: 0.659, green: 0.851, blue: 0.118, alpha: 1) // #A8D91E
         case .green: return .systemGreen
-        case .teal: return .systemTeal
         case .cyan: return UIColor(red: 0.196, green: 0.678, blue: 0.902, alpha: 1) // #32ADE6
         case .blue: return .systemBlue
         case .indigo: return .systemIndigo
         case .purple: return .systemPurple
+        case .lavender: return UIColor(red: 0.718, green: 0.651, blue: 0.949, alpha: 1) // #B7A6F2
         case .pink: return UIColor(red: 1.0, green: 0.412, blue: 0.706, alpha: 1) // #FF69B4
         case .lightPink: return UIColor(red: 1.0, green: 0.561, blue: 0.671, alpha: 1) // #FF8FAB
-        case .rose: return .systemPink // #FF2D55 — the old "pink"
         case .brown: return .systemBrown
         case .gold: return UIColor(red: 0.890, green: 0.702, blue: 0.255, alpha: 1) // #E3B341
         }
