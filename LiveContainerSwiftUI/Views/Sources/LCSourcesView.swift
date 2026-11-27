@@ -83,28 +83,30 @@ struct LCSourcesView: View {
                         }
                     }
                 }
+                // Two separate trailing items, exactly
+                // like the App page's top-right pair (Ann
+                // 2026-11-27: align size, spacing and
+                // colour with that page — no shared pill,
+                // no zero-spacing HStack; the system lays
+                // the two glass buttons out with its own
+                // standard gap). Trailing items render in
+                // reverse declaration order, so the add
+                // button is declared first to sit at the
+                // edge and the sort menu second, on its
+                // left. The toolbar never scrolls, so the
+                // menu's anchor stays out of the scroll
+                // flow and cannot drift. The sort item
+                // only exists on the sources segment:
+                // updates and downloads have nothing to
+                // sort, leaving the add button alone.
                 ToolbarItem(placement: .topBarTrailing) {
-                    // One liquid-glass pill, two buttons
-                    // (Ann 2026-11-27, her placement): the
-                    // sort menu on the left, add-source on
-                    // the right. The toolbar never scrolls,
-                    // so the menu's anchor stays out of the
-                    // scroll flow — the drift that two
-                    // in-content fixes could not cure (the
-                    // iOS 26 menu-dismissal snapshot lagging
-                    // a scrolling anchor) cannot happen up
-                    // here, exactly like the App page's sort
-                    // menu. The sort half only exists on the
-                    // sources segment: updates and downloads
-                    // have nothing to sort, and their pill
-                    // shrinks to the add button alone.
-                    HStack(spacing: 0) {
-                        if selectedSegment == 0, !viewModel.enabledSources.isEmpty {
-                            sortMenuButton
-                        }
-                        Button("lc.sources.addSource".loc, systemImage: "plus") {
-                            isManagingSources = true
-                        }
+                    Button("lc.sources.addSource".loc, systemImage: "plus") {
+                        isManagingSources = true
+                    }
+                }
+                if selectedSegment == 0, !viewModel.enabledSources.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        sortMenuButton
                     }
                 }
             }
@@ -336,8 +338,9 @@ struct LCSourcesView: View {
     /// The filter chips (Ann 2026-11-26, second round):
     /// all sources + one chip per source, scrolling
     /// sideways, the whole row theirs since the sort
-    /// button moved into the toolbar's glass pill (Ann
-    /// 2026-11-27). (A per-source refresh / remove menu
+    /// button moved into the toolbar as its own item
+    /// beside the add button (Ann 2026-11-27). (A
+    /// per-source refresh / remove menu
     /// briefly lived here too; Ann removed it the same
     /// evening — removal lives in Manage Sources, and
     /// the toolbar refresh turns single-source while a
