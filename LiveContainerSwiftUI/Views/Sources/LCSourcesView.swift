@@ -83,30 +83,35 @@ struct LCSourcesView: View {
                         }
                     }
                 }
-                // Two separate trailing items, exactly
-                // like the App page's top-right pair (Ann
-                // 2026-11-27: align size, spacing and
-                // colour with that page — no shared pill,
-                // no zero-spacing HStack; the system lays
-                // the two glass buttons out with its own
-                // standard gap). Trailing items render in
-                // reverse declaration order, so the add
-                // button is declared first to sit at the
-                // edge and the sort menu second, on its
-                // left. The toolbar never scrolls, so the
-                // menu's anchor stays out of the scroll
-                // flow and cannot drift. The sort item
-                // only exists on the sources segment:
-                // updates and downloads have nothing to
-                // sort, leaving the add button alone.
+                // The tweaks page's top-right pair, copied
+                // over (Ann 2026-11-27: she compared the
+                // two pages on device — the tweaks pair
+                // renders at the standard size she wants,
+                // while this page's add button read larger
+                // in the shared pill — so the pair's whole
+                // construction moves here, with the sort
+                // menu standing in the signature button's
+                // slot). Same shape as LCTweaksView: two
+                // separate trailing items, each a Label-
+                // labelled control at the default size,
+                // system spacing, no shared pill. The sort
+                // item mirrors the signature item's inside
+                // conditional too: it only has content on
+                // the sources segment — updates and
+                // downloads have nothing to sort, leaving
+                // the add button alone. The toolbar never
+                // scrolls, so the menu's anchor stays out
+                // of the scroll flow and cannot drift.
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("lc.sources.addSource".loc, systemImage: "plus") {
-                        isManagingSources = true
+                    if selectedSegment == 0, !viewModel.enabledSources.isEmpty {
+                        sortMenuButton
                     }
                 }
-                if selectedSegment == 0, !viewModel.enabledSources.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        sortMenuButton
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isManagingSources = true
+                    } label: {
+                        Label("lc.sources.addSource".loc, systemImage: "plus")
                     }
                 }
             }
