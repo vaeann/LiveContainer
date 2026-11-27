@@ -15,6 +15,14 @@ import CryptoKit
 struct LCSourcesView: View {
     @StateObject private var viewModel = AltStoreSourcesViewModel()
     @State private var errorMessage: String?
+    /// The little reminder bar's current showing (Ann
+    /// 2026-11-27): ignore / unignore / prioritize /
+    /// cancel-download confirm themselves up here, the
+    /// operations whose own rows barely change when they
+    /// land. One at a time; a new one replaces the old
+    /// and restarts the three-second clock.
+    @State private var activeToast: LCSourceToastData?
+    @State private var toastDismissTask: Task<Void, Never>?
     // Must be StateObjects, not ObservedObjects with default
     // instances: the tab view re-creates this view whenever the badge
     // count is published, and an ObservedObject gets swapped for the
@@ -218,6 +226,61 @@ struct LCSourcesView: View {
             sharedModel.deepLink = nil
             handleURL(url: link)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallPrioritizeJobNotification)) { obj in
+            // The row menu posts this to the queue; the
+            // reminder answers it here (Ann 2026-11-27).
+            if let bundleID = obj.object as? String, let name = appName(forBundleID: bundleID) {
+                showToast(.success, "lc.sources.toast.prioritized %@".localizeWithFormat(name))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallCancelJobNotification)) { obj in
+            if let bundleID = obj.object as? String, let name = appName(forBundleID: bundleID) {
+                showToast(.success, "lc.sources.toast.cancelled %@".localizeWithFormat(name))
+            }
+        }
+        .overlay(alignment: .top) {
+            if let activeToast {
+                LCSourceToastView(toast: activeToast) {
+                    activeToast.undo?()
+                    dismissToast()
+                }
+                .padding(.top, 6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(1)
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: activeToast?.id)
+    }
+
+    // MARK: - Reminder bar
+
+    private func showToast(_ kind: LCToastKind, _ message: String, undo: (() -> Void)? = nil) {
+        let toast = LCSourceToastData(kind: kind, message: message, undo: undo)
+        activeToast = toast
+        toastDismissTask?.cancel()
+        toastDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled, activeToast?.id == toast.id else { return }
+            activeToast = nil
+        }
+    }
+
+    private func dismissToast() {
+        toastDismissTask?.cancel()
+        activeToast = nil
+    }
+
+    /// App display name for a bundle id, for the reminder
+    /// texts that start life as a bare bundle id (the
+    /// queue notifications carry nothing else).
+    private func appName(forBundleID bundleID: String) -> String? {
+        for item in viewModel.sources {
+            guard let source = item.source else { continue }
+            if let app = source.apps.first(where: { $0.bundleIdentifier == bundleID }) {
+                return app.name
+            }
+        }
+        return nil
     }
 
     /// The segment picker, riding as the first row of
@@ -707,18 +770,31 @@ struct LCSourcesView: View {
         updatableApps.filter { !LCSourceUpdateIgnore.isIgnored(app: $0.app) }.count
     }
 
-    func ignoreUpdate(for app: AltStoreSourceApp) {
+    func ignoreUpdate(for app: AltStoreSourceApp, announce: Bool = true) {
         guard let version = app.latestVersion?.version else { return }
         LCSourceUpdateIgnore.setIgnoredVersion(version, for: app.bundleIdentifier)
         ignoreTick += 1
+        // The reminder bar confirms it, with an undo
+        // (Ann 2026-11-27): the undo itself stays quiet,
+        // it just puts things back.
+        if announce {
+            showToast(.success, "lc.sources.toast.ignored %@".localizeWithFormat(app.name)) {
+                unignoreUpdate(for: app, announce: false)
+            }
+        }
     }
 
     /// Lifts an ignore (Ann 2026-11-27): offered by the
     /// updates segment's Ignored button and by either
     /// segment's long-press menu.
-    func unignoreUpdate(for app: AltStoreSourceApp) {
+    func unignoreUpdate(for app: AltStoreSourceApp, announce: Bool = true) {
         LCSourceUpdateIgnore.setIgnoredVersion(nil, for: app.bundleIdentifier)
         ignoreTick += 1
+        if announce {
+            showToast(.success, "lc.sources.toast.unignored %@".localizeWithFormat(app.name)) {
+                ignoreUpdate(for: app, announce: false)
+            }
+        }
     }
 
     // MARK: - Row actions
