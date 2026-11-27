@@ -19,6 +19,13 @@ struct LCTabView: View {
     @State var shouldToggleMainWindowOpen = false
     @Environment(\.scenePhase) var scenePhase
     @StateObject var downloadHelper = DownloadHelper()
+    // One shared sources view model for the sources tab
+    // and the settings page's source-management entry
+    // (Ann 2026-11-27): two instances would drift apart —
+    // the view model loads its list once per instance, so
+    // sources added or removed in one place would never
+    // show up in the other until a relaunch.
+    @StateObject var sourcesViewModel = AltStoreSourcesViewModel()
 
     let pub = NotificationCenter.default.publisher(for: UIScene.didDisconnectNotification)
     
@@ -53,6 +60,7 @@ struct LCTabView: View {
         }
         .downloadCapsule(helper: downloadHelper, sharedModel: sharedModel)
         .environmentObject(downloadHelper)
+        .environmentObject(sourcesViewModel)
         .alert("lc.common.error".loc, isPresented: $errorShow){
             Button("lc.common.ok".loc, action: {
             })

@@ -70,8 +70,10 @@ struct LCSettingsView: View {
     @AppStorage("BKNoWatchdogs") var disableLiveProcessWatchdog = false
     
     @EnvironmentObject private var sharedModel : SharedModel
-    
+    @EnvironmentObject var sourcesViewModel: AltStoreSourcesViewModel
+
     @State private var isViewAppeared = false
+    @State private var isManagingSources = false
     
     let storeName = LCUtils.getStoreName()
     
@@ -122,8 +124,15 @@ struct LCSettingsView: View {
                         Text("lc.settings.jitLessDesc".loc)
                     }
                 }
-                if (store != .Unknown && store != .ADP) || LCUtils.isAppGroupAltStoreLike() {
-                    Section{
+                // Background & Multitasking (Ann 2026-11-27):
+                // Multiple LiveContainers, Multitask and
+                // Background Keep-Alive used to be three
+                // separate cards; they now share one group.
+                // Each row keeps its own availability rules,
+                // and the second-instance diagnose link that
+                // lived in the multi-LC card stays with it.
+                Section {
+                    if (store != .Unknown && store != .ADP) || LCUtils.isAppGroupAltStoreLike() {
                         NavigationLink {
                             LCMultiLCManagementView()
                         } label: {
@@ -132,39 +141,58 @@ struct LCSettingsView: View {
                             } else if sharedModel.multiLCStatus == 2 {
                                 Text("lc.settings.multiLCIsSecond".loc)
                             }
-                            
                         }
                         .disabled(sharedModel.multiLCStatus == 2)
-                        
-                        if(sharedModel.multiLCStatus == 2) {
+
+                        if sharedModel.multiLCStatus == 2 {
                             NavigationLink {
                                 LCJITLessDiagnoseView()
                             } label: {
                                 Text("lc.settings.jitlessDiagnose".loc)
                             }
                         }
-                    } footer: {
-                        Text("lc.settings.multiLCDesc".loc)
                     }
-                }
-                
-                if #available(iOS 16.1, *) {
-                    Section {
+
+                    if #available(iOS 16.1, *) {
                         NavigationLink {
                             LCMultitaskSettingView()
                         } label: {
                             Text("lc.appBanner.multitask".loc)
                         }
-                    } footer: {
-                        Text("lc.settings.multitaskDesc".loc)
                     }
-                }
 
-                Section {
                     NavigationLink {
                         LCKeepAliveSettingsView()
                     } label: {
                         Text("lc.keepAlive.entry".loc)
+                    }
+                } header: {
+                    Text("lc.settings.backgroundMultitask".loc)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if (store != .Unknown && store != .ADP) || LCUtils.isAppGroupAltStoreLike() {
+                            Text("lc.settings.multiLCDesc".loc)
+                        }
+                        if #available(iOS 16.1, *) {
+                            Text("lc.settings.multitaskDesc".loc)
+                        }
+                    }
+                }
+
+                // Source Management (Ann 2026-11-27): opens
+                // the same manage-sources sheet as the
+                // sources tab, on the shared view model
+                // injected by LCTabView. Hidden in the
+                // second instance, which has no sources tab.
+                if sharedModel.multiLCStatus != 2 {
+                    Section {
+                        Button {
+                            isManagingSources = true
+                        } label: {
+                            Text("lc.settings.manageSources".loc)
+                        }
+                    } header: {
+                        Text("lc.settings.sourceManagement".loc)
                     }
                 }
 
@@ -387,6 +415,15 @@ struct LCSettingsView: View {
                 }
             }
             .navigationBarTitle("lc.tabView.settings".loc)
+            .sheet(isPresented: $isManagingSources) {
+                ManageSourcesSheet(
+                    viewModel: sourcesViewModel,
+                    isPresented: $isManagingSources,
+                    onAdd: { rawValue in
+                        await sourcesViewModel.addSource(from: rawValue)
+                    }
+                )
+            }
             .alert("lc.common.error".loc, isPresented: $errorShow){
             } message: {
                 Text(errorInfo)

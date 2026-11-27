@@ -13,7 +13,10 @@ import UIKit
 import CryptoKit
 
 struct LCSourcesView: View {
-    @StateObject private var viewModel = AltStoreSourcesViewModel()
+    // Owned by LCTabView and shared with the settings
+    // page's source-management entry (Ann 2026-11-27), so
+    // both places always see the same source list.
+    @EnvironmentObject var viewModel: AltStoreSourcesViewModel
     @State private var errorMessage: String?
     /// The little reminder bar's current showing (Ann
     /// 2026-11-27): ignore / unignore / prioritize /

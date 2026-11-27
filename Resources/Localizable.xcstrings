@@ -21343,6 +21343,29 @@
         }
       }
     },
+    "lc.settings.backgroundMultitask" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background & Multitasking"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台多任务"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "後台多任務"
+          }
+        }
+      }
+    },
     "lc.settings.bundleIdMismatch %@ %@" : {
       "comment" : "lc.settings.bundleIdMismatch",
       "extractionState" : "stale",
@@ -26810,6 +26833,29 @@
         }
       }
     },
+    "lc.settings.manageSources" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage Sources"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理源"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理來源"
+          }
+        }
+      }
+    },
     "lc.settings.multiLC" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -30040,6 +30086,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示 FLEX 浮層"
+          }
+        }
+      }
+    },
+    "lc.settings.sourceManagement" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source Management"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源管理"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "來源管理"
           }
         }
       }
