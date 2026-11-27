@@ -172,7 +172,6 @@ public final class DownloadHelper : NSObject, ObservableObject {
         if let running = downloadTask, running.originalRequest?.url == url {
             activeError = nil
             lastResumeData = nil
-            activeRecordID = recordID
             activeDestination = to
             activeURL = url
             pauseRequested = false
@@ -183,6 +182,7 @@ public final class DownloadHelper : NSObject, ObservableObject {
                 cancelled = false
                 isPaused = false
                 isDownloading = true
+                activeRecordID = recordID
             }
             await withUnsafeContinuation { c in
                 continuation = c
@@ -198,12 +198,13 @@ public final class DownloadHelper : NSObject, ObservableObject {
         if let stale = downloadTask {
             stale.cancel()
             downloadTask = nil
-            activeRecordID = nil
             activeDestination = nil
+            await MainActor.run {
+                activeRecordID = nil
+            }
         }
         activeError = nil
         lastResumeData = nil
-        activeRecordID = recordID
         activeDestination = to
         activeURL = url
         pauseRequested = false
@@ -219,6 +220,7 @@ public final class DownloadHelper : NSObject, ObservableObject {
             totalSize = 0
 
             isDownloading = true
+            activeRecordID = recordID
         }
 
         await withUnsafeContinuation { c in
