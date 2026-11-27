@@ -6,9 +6,10 @@
 //  bottom of the multitask settings (Ann 2026-11-27).
 //  "Multitask Guide": the two skeleton figures (edge
 //  handle / expanded dock) side by side on top, the
-//  text and the numbered legend 1-6 below. "Multitask
-//  Gestures": the window four-corner figure on the
-//  left, the legend 7-10 on the right. The figures are
+//  text and the numbered legend 1-7 below. "Window
+//  Bar Gestures": text on the left (title, intro and
+//  the legend 8-11), the window four-corner figure
+//  on the right. The figures are
 //  drawn, not images, on a 430x932 canvas at the real
 //  proportions (dock width 80, icons 54, handle 14x80,
 //  corner gesture areas 44), so they stay truthful at
@@ -113,10 +114,14 @@ private struct LCGuideFigure: View {
                     badge(5, centerX: 90, centerY: 330, s: s)
                 case .corners:
                     cornerWindow(s)
-                    badge(7, centerX: 43, centerY: 121, s: s)
-                    badge(8, centerX: 387, centerY: 121, s: s)
-                    badge(9, centerX: 43, centerY: 792, s: s)
-                    badge(10, centerX: 387, centerY: 792, s: s)
+                    // The badges sit half outside the
+                    // corners (Ann 2026-11-27): centered on
+                    // the corner they covered the shaded
+                    // gesture areas completely.
+                    badge(8, centerX: 31, centerY: 109, s: s)
+                    badge(9, centerX: 399, centerY: 109, s: s)
+                    badge(10, centerX: 31, centerY: 804, s: s)
+                    badge(11, centerX: 399, centerY: 804, s: s)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 50 * s))
@@ -273,18 +278,18 @@ private struct LCGuideFigure: View {
                 }
                 .offset(x: 24 * s, y: 40 * s)
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.30))
+                    .fill(Color.accentColor.opacity(0.38))
                     .frame(width: 44 * s, height: 44 * s)
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.30))
+                    .fill(Color.accentColor.opacity(0.38))
                     .frame(width: 44 * s, height: 44 * s)
                     .offset(x: 300 * s)
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.30))
+                    .fill(Color.accentColor.opacity(0.38))
                     .frame(width: 44 * s, height: 44 * s)
                     .offset(y: 627 * s)
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.30))
+                    .fill(Color.accentColor.opacity(0.38))
                     .frame(width: 44 * s, height: 44 * s)
                     .offset(x: 300 * s, y: 627 * s)
             }
@@ -318,28 +323,37 @@ struct LCMultitaskGuideView: View {
                     LCGuideLegendRow(number: 3, titleKey: "lc.multitask.legend3.title", descKey: "lc.multitask.legend3.desc")
                     LCGuideLegendRow(number: 4, titleKey: "lc.multitask.legend4.title", descKey: "lc.multitask.legend4.desc")
                     LCGuideLegendRow(number: 5, titleKey: "lc.multitask.legend5.title", descKey: "lc.multitask.legend5.desc")
-                    // Legend 6 ends in a link: the corner
-                    // gestures themselves live on the
-                    // gestures page (Ann 2026-11-27).
+                    LCGuideLegendRow(number: 6, titleKey: "lc.multitask.legend6.title", descKey: "lc.multitask.legend6.desc")
+                    // Legend 7 is the handoff to the
+                    // corner gestures (Ann 2026-11-27):
+                    // the note itself, then a line whose
+                    // middle is the link to the gestures
+                    // page — "Tap Window Bar Gestures to
+                    // view the tutorial".
                     HStack(alignment: .top, spacing: 10) {
-                        LCGuideNumberBadge(number: 6)
+                        LCGuideNumberBadge(number: 7)
                             .padding(.top, 1)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("lc.multitask.legend6.title".loc)
-                                .font(.subheadline.weight(.semibold))
-                            Text("lc.multitask.legend6.desc".loc)
+                            Text("lc.multitask.guide.hiddenBarNote".loc)
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
-                            NavigationLink {
-                                LCMultitaskGestureGuideView()
-                            } label: {
-                                HStack(spacing: 3) {
-                                    Text("lc.multitask.gestures.title".loc)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 10, weight: .semibold))
+                            HStack(spacing: 4) {
+                                Text("lc.multitask.guide.tap".loc)
+                                NavigationLink {
+                                    LCMultitaskGestureGuideView()
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Text("lc.multitask.gestures.title".loc)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 10, weight: .semibold))
+                                    }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundColor(.accentColor)
                                 }
-                                .font(.footnote.weight(.semibold))
+                                Text("lc.multitask.guide.toViewTutorial".loc)
                             }
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
                             .padding(.top, 2)
                         }
                     }
@@ -361,32 +375,32 @@ struct LCMultitaskGuideView: View {
     }
 }
 
-/// "Multitask Gestures": the four-corner figure on
-/// the left, the legend 7-10 on the right (Ann
-/// 2026-11-27: one figure only, so it takes the left
-/// half and the text goes beside it).
+/// "Window Bar Gestures": two equal columns (Ann
+/// 2026-11-27) — the title, the intro and the legend
+/// 8-11 on the left, the four-corner figure on the
+/// right at the same size the guide page's figures
+/// get. The numbering continues the guide page's
+/// legend, so the corners are 8-11 here.
 struct LCMultitaskGestureGuideView: View {
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("lc.multitask.gesture.cornersTitle".loc)
-                        .font(.title3.weight(.bold))
-                    Text("lc.multitask.gesture.cornersIntro".loc)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                HStack(alignment: .top, spacing: 14) {
-                    LCGuideFigure(kind: .corners)
-                        .frame(width: 150)
-                    VStack(alignment: .leading, spacing: 14) {
-                        LCGuideLegendRow(number: 7, titleKey: "lc.multitask.legend7.title", descKey: "lc.multitask.legend7.desc")
-                        LCGuideLegendRow(number: 8, titleKey: "lc.multitask.legend8.title", descKey: "lc.multitask.legend8.desc")
-                        LCGuideLegendRow(number: 9, titleKey: "lc.multitask.legend9.title", descKey: "lc.multitask.legend9.desc")
-                        LCGuideLegendRow(number: 10, titleKey: "lc.multitask.legend10.title", descKey: "lc.multitask.legend10.desc")
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("lc.multitask.gesture.cornersTitle".loc)
+                            .font(.title3.weight(.bold))
+                        Text("lc.multitask.gesture.cornersIntro".loc)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    LCGuideLegendRow(number: 8, titleKey: "lc.multitask.legend7.title", descKey: "lc.multitask.legend7.desc")
+                    LCGuideLegendRow(number: 9, titleKey: "lc.multitask.legend8.title", descKey: "lc.multitask.legend8.desc")
+                    LCGuideLegendRow(number: 10, titleKey: "lc.multitask.legend9.title", descKey: "lc.multitask.legend9.desc")
+                    LCGuideLegendRow(number: 11, titleKey: "lc.multitask.legend10.title", descKey: "lc.multitask.legend10.desc")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                LCGuideFigure(kind: .corners)
+                    .frame(maxWidth: .infinity)
             }
             .padding(16)
         }
