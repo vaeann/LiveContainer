@@ -91,9 +91,6 @@ struct LCMultitaskSettingView: View {
                     .tint(.accentColor)
                 }
                 .padding(.vertical, 4)
-                Text("lc.settings.dock.gestureGuide".loc)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
                 // The color opens a sheet of round
                 // swatches instead of a plain list (Ann
                 // 2026-11-27: the list was ugly; a
@@ -122,12 +119,24 @@ struct LCMultitaskSettingView: View {
                     }
                 }
                 .buttonStyle(.plain)
-            } footer: {
-                // The multitask explanation moved here from
-                // the settings root (Ann 2026-11-27: the
-                // group footer there is gone; each page
-                // carries its own description).
-                Text("lc.settings.multitaskDesc".loc)
+            }
+
+            // The tutorial entries (Ann 2026-11-27): the
+            // gesture guide and the multitask explanation
+            // used to sit on this page as footnote text;
+            // they now live on their own pages, drawn as
+            // skeleton figures with numbered legends.
+            Section {
+                NavigationLink {
+                    LCMultitaskGuideView()
+                } label: {
+                    Text("lc.multitask.guide.title".loc)
+                }
+                NavigationLink {
+                    LCMultitaskGestureGuideView()
+                } label: {
+                    Text("lc.multitask.gestures.title".loc)
+                }
             }
         }
         .navigationTitle("lc.appBanner.multitask".loc)
