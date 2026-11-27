@@ -344,11 +344,17 @@ final class LCDownloadStore: ObservableObject {
         persist()
     }
 
-    func removeAll() {
-        for record in packages {
+    /// Clear-all, with one exemption: the record the transfer
+    /// slot is currently working on survives (Ann 2026-11-27 —
+    /// the downloads page's clear-all must not delete the
+    /// package being downloaded; it is hidden from that page
+    /// while in-flight, and deleting its record and partial
+    /// file under a running transfer would corrupt the job).
+    func removeAll(exceptingID: String? = nil) {
+        for record in packages where record.id != exceptingID {
             removeFiles(of: record)
         }
-        packages = []
+        packages.removeAll { $0.id != exceptingID }
         persist()
     }
 

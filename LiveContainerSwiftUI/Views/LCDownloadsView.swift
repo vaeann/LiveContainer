@@ -204,7 +204,11 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         .alert("lc.downloads.clearAll".loc, isPresented: $showClearAllConfirm) {
             Button("lc.common.cancel".loc, role: .cancel) { }
             Button("lc.downloads.clearAll".loc, role: .destructive) {
-                store.removeAll()
+                // Clear-all spares the in-flight record
+                // (Ann 2026-11-27): it is hidden from this
+                // page while downloading and must not be
+                // deleted under its running transfer.
+                store.removeAll(exceptingID: downloadHelper.isDownloading ? downloadHelper.activeRecordID : nil)
             }
         } message: {
             Text("lc.downloads.clearAllMessage".loc)
