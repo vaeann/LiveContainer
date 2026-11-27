@@ -70,10 +70,15 @@ struct LCSettingsView: View {
     @AppStorage("BKNoWatchdogs") var disableLiveProcessWatchdog = false
     
     @EnvironmentObject private var sharedModel : SharedModel
-    @EnvironmentObject var sourcesViewModel: AltStoreSourcesViewModel
+
+    // Downloads-library switches (Ann 2026-11-27): keep
+    // installed packages in the downloads page, and hide
+    // the downloads page itself (which also turns the
+    // keeping off — there would be nowhere to see them).
+    @AppStorage("LCSaveDownloadedPackages") var saveDownloadedPackages = true
+    @AppStorage("LCDownloadsPageHidden") var downloadsPageHidden = false
 
     @State private var isViewAppeared = false
-    @State private var isManagingSources = false
     
     let storeName = LCUtils.getStoreName()
     
@@ -170,18 +175,29 @@ struct LCSettingsView: View {
                     Text("lc.settings.backgroundMultitask".loc)
                 }
 
-                // Source Management (Ann 2026-11-27): opens
-                // the same manage-sources sheet as the
-                // sources tab, on the shared view model
-                // injected by LCTabView. Hidden in the
-                // second instance, which has no sources tab.
+                // Source Management (Ann 2026-11-27): the
+                // manage-sources entry that used to sit
+                // here is gone (the sources tab manages
+                // its own); the section now carries the
+                // downloads-library switches. Hidden in
+                // the second instance, which has no
+                // sources tab.
                 if sharedModel.multiLCStatus != 2 {
                     Section {
-                        Button {
-                            isManagingSources = true
-                        } label: {
-                            Text("lc.settings.manageSources".loc)
+                        Toggle(isOn: $downloadsPageHidden) {
+                            Text("lc.settings.hideDownloadsPage".loc)
                         }
+                        .onChange(of: downloadsPageHidden) { hidden in
+                            // A hidden downloads page turns
+                            // package keeping off with it.
+                            if hidden {
+                                saveDownloadedPackages = false
+                            }
+                        }
+                        Toggle(isOn: $saveDownloadedPackages) {
+                            Text("lc.settings.savePackages".loc)
+                        }
+                        .disabled(downloadsPageHidden)
                     } header: {
                         Text("lc.settings.sourceManagement".loc)
                     }
@@ -387,15 +403,6 @@ struct LCSettingsView: View {
                 }
             }
             .navigationBarTitle("lc.tabView.settings".loc)
-            .sheet(isPresented: $isManagingSources) {
-                ManageSourcesSheet(
-                    viewModel: sourcesViewModel,
-                    isPresented: $isManagingSources,
-                    onAdd: { rawValue in
-                        await sourcesViewModel.addSource(from: rawValue)
-                    }
-                )
-            }
             .alert("lc.common.error".loc, isPresented: $errorShow){
             } message: {
                 Text(errorInfo)

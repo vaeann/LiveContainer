@@ -50,6 +50,9 @@ struct LCSourcesView: View {
     /// button edits this while the all chip is active;
     /// a single source's list uses its per-source mode).
     @AppStorage("LCSourceAppSortAll") private var allSourcesSortRaw: String = LCSourceAppSort.sourceOrder.rawValue
+    // The downloads segment can be switched off in
+    // Settings (Ann 2026-11-27).
+    @AppStorage("LCDownloadsPageHidden") private var downloadsPageHidden = false
     @State private var isManagingSources = false
     @State private var selectedSegment = 0
     @State private var ignoreTick = 0
@@ -79,7 +82,7 @@ struct LCSourcesView: View {
     var body: some View {
         NavigationView {
             Group {
-                if selectedSegment == 2 {
+                if selectedSegment == 2 && !downloadsPageHidden {
                     LCDownloadsView {
                         segmentPicker
                     }
@@ -200,6 +203,14 @@ struct LCSourcesView: View {
                 isViewAppeared = true
             }
         }
+        .onChange(of: downloadsPageHidden) { hidden in
+            // Sitting on the downloads segment when it is
+            // switched off: fall back to the software
+            // segment (its picker tag no longer exists).
+            if hidden && selectedSegment == 2 {
+                selectedSegment = 0
+            }
+        }
         .onChange(of: sharedModel.selectedTab) { tab in
             if tab == .sources {
                 viewModel.loadSourcesIfNeeded()
@@ -294,7 +305,9 @@ struct LCSourcesView: View {
             Picker("lc.sources.segment".loc, selection: $selectedSegment) {
                 Text("lc.sources.segment.software".loc).tag(0)
                 Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
-                Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(visibleDownloadCount)).tag(2)
+                if !downloadsPageHidden {
+                    Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(visibleDownloadCount)).tag(2)
+                }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)

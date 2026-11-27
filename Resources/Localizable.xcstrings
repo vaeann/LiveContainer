@@ -26613,6 +26613,29 @@
         }
       }
     },
+    "lc.settings.hideDownloadsPage" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Downloads Page"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭下载页"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉下載頁"
+          }
+        }
+      }
+    },
     "lc.settings.hideWindowBar" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -30822,6 +30845,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "顯示 FLEX 浮層"
+          }
+        }
+      }
+    },
+    "lc.settings.savePackages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Installation Packages"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存安装包"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存安裝包"
           }
         }
       }

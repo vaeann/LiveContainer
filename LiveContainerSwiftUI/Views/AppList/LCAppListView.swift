@@ -180,6 +180,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
     
+    // Keep installed packages in the downloads library
+    // (Ann 2026-11-27 setting; hiding the downloads page
+    // forces it off in the settings UI).
+    @AppStorage("LCSaveDownloadedPackages") var saveDownloadedPackages = true
     @AppStorage("LCMultitaskMode", store: LCUtils.appGroupUserDefault) var multitaskMode: MultitaskMode = .virtualWindow
     @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     
@@ -982,11 +986,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         // could only ever be installed once. A file that already
         // lives in the library (install launched from the
         // downloads page) is used in place — no copy, no delete.
+        // With package keeping off (Ann 2026-11-27) no copy is
+        // made at all: the file is installed and removed as
+        // before the library existed.
         let store = LCDownloadStore.shared
         let inStore = fileUrl.standardizedFileURL.path.hasPrefix(store.folderURL.standardizedFileURL.path + "/")
         let record = inStore
             ? store.packages.first { store.fileURL(for: $0).standardizedFileURL == fileUrl.standardizedFileURL }
-            : store.beginImport(sourceFileURL: fileUrl)
+            : (saveDownloadedPackages ? store.beginImport(sourceFileURL: fileUrl) : nil)
         do {
             self.installprogressVisible = true
             try await installIpaFile(fileUrl)
@@ -1581,10 +1588,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             
             // Imports through this path are kept in the
             // downloads library too (Ann 2026-11-24), copied
-            // while the security-scoped access above is active.
+            // while the security-scoped access above is active
+            // — unless package keeping is off (Ann 2026-11-27).
             let importStore = LCDownloadStore.shared
             let importInStore = installUrl.standardizedFileURL.path.hasPrefix(importStore.folderURL.standardizedFileURL.path + "/")
-            let importRecord = importInStore ? nil : importStore.beginImport(sourceFileURL: installUrl)
+            let importRecord = importInStore || !saveDownloadedPackages ? nil : importStore.beginImport(sourceFileURL: installUrl)
             do {
                 downloadHelper.isInstallingPhase = true
                 try await installIpaFile(installUrl)
@@ -1627,9 +1635,16 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             // KEPT after install (Ann 2026-11-24) — the old
             // temp-folder download + delete-after-install flow
             // meant a package could only ever be installed once.
+            // With package keeping off (Ann 2026-11-27) that old
+            // flow is exactly what happens: download to a temp
+            // file, install from it, then delete it — the
+            // engine's record hooks all accept a nil record id.
             let store = LCDownloadStore.shared
-            let record = store.beginDownload(sourceURL: urlStr, name: downloadName, bundleID: bundleID, version: version, iconURL: downloadIconURL)
-            let destinationURL = store.fileURL(for: record)
+            let record = saveDownloadedPackages
+                ? store.beginDownload(sourceURL: urlStr, name: downloadName, bundleID: bundleID, version: version, iconURL: downloadIconURL)
+                : nil
+            let destinationURL = record.map { store.fileURL(for: $0) }
+                ?? fileManager.temporaryDirectory.appendingPathComponent("LCInstall-\(UUID().uuidString).ipa")
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.removeItem(at: destinationURL)
             }
@@ -1644,32 +1659,57 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 downloadHelper.setSourceInstallState(bundleID, .downloading)
             }
             do {
-                try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record.id)
+                try await downloadHelper.download(url: installUrl, to: destinationURL, recordID: record?.id)
             } catch {
-                if downloadHelper.currentJobCancelled || downloadHelper.cancelled {
-                    // Cancelled by the user (Ann 2026-11-25) —
-                    // from the source row's menu or the capsule's
-                    // cancel-all alike: a cancel is not a pause,
-                    // so the package leaves the library entirely.
-                    store.remove(record)
+                if let record {
+                    if downloadHelper.currentJobCancelled || downloadHelper.cancelled {
+                        // Cancelled by the user (Ann 2026-11-25) —
+                        // from the source row's menu or the capsule's
+                        // cancel-all alike: a cancel is not a pause,
+                        // so the package leaves the library entirely.
+                        store.remove(record)
+                    } else {
+                        // Keep the interrupted download listed so it
+                        // can be resumed from the downloads page.
+                        store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
+                    }
                 } else {
-                    // Keep the interrupted download listed so it
-                    // can be resumed from the downloads page.
-                    store.markPartial(record, downloadedBytes: downloadHelper.downloadedSize, totalBytes: downloadHelper.totalSize, resumeData: downloadHelper.lastResumeData)
+                    // No library record: the partial temp file
+                    // goes away with the failure.
+                    try? fileManager.removeItem(at: destinationURL)
                 }
                 throw error
             }
             if downloadHelper.currentJobCancelled || downloadHelper.cancelled {
-                store.remove(record)
+                if let record {
+                    store.remove(record)
+                } else {
+                    try? fileManager.removeItem(at: destinationURL)
+                }
                 return
             }
-            store.markCompleted(record)
+            if let record {
+                store.markCompleted(record)
+            }
             downloadHelper.isInstallingPhase = true
             if let bundleID {
                 downloadHelper.setSourceInstallState(bundleID, .installing)
             }
-            try await installIpaFile(destinationURL)
-            finalizeDownloadRecord(record)
+            do {
+                try await installIpaFile(destinationURL)
+            } catch {
+                // Installed or not, an unkept package's temp
+                // file never lingers.
+                if record == nil {
+                    try? fileManager.removeItem(at: destinationURL)
+                }
+                throw error
+            }
+            if let record {
+                finalizeDownloadRecord(record)
+            } else {
+                try? fileManager.removeItem(at: destinationURL)
+            }
         } catch is InstallUserAbort {
             // The download itself completed (the record stays
             // completed); only the install was aborted.
