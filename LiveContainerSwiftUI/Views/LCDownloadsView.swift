@@ -71,6 +71,27 @@ struct LCDownloadsView<SegmentPicker: View>: View {
         self.segmentPicker = segmentPicker()
     }
 
+    /// The packages the page actually shows: the record the
+    /// transfer slot is currently working on is hidden (Ann
+    /// 2026-11-27 — she started it from a source row, its
+    /// progress is on that row's ring and on the capsule, and
+    /// its card here only wore a misleading resume button).
+    /// It reappears the moment the session lets go of it:
+    /// finished (as a complete package) or interrupted (as a
+    /// resumable partial). Paused still counts as in-flight —
+    /// isDownloading stays true while paused.
+    private var visiblePackages: [LCDownloadedPackage] {
+        store.packages.filter { record in
+            !(downloadHelper.isDownloading && record.id == downloadHelper.activeRecordID)
+        }
+    }
+
+    /// Total size over the visible packages, same recipe as
+    /// the store's (complete packages only).
+    private var visibleTotalSize: Int64 {
+        visiblePackages.filter { $0.isComplete }.reduce(0) { $0 + $1.size }
+    }
+
     var body: some View {
         LCSegmentShell {
             segmentPicker
@@ -87,6 +108,12 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                 .padding()
                 .padding(.top, 48)
                 .frame(maxWidth: .infinity, alignment: .center)
+            } else if visiblePackages.isEmpty {
+                // Everything in the library is in-flight
+                // right now (hidden, see visiblePackages):
+                // just the picker, no empty-state claim and
+                // no clear-all capsule over zero cards.
+                Color.clear
             } else {
                 VStack(spacing: 12) {
                     // Total size and clear-all, merged
@@ -98,7 +125,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     Button {
                         showClearAllConfirm = true
                     } label: {
-                        Text("lc.downloads.clearAll".loc + " · " + "lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(store.totalSize)))
+                        Text("lc.downloads.clearAll".loc + " · " + "lc.downloads.totalSize %@".localizeWithFormat(Self.formatSize(visibleTotalSize)))
                             .bold()
                             .frame(maxWidth: .infinity)
                             .frame(height: 40)
@@ -119,7 +146,7 @@ struct LCDownloadsView<SegmentPicker: View>: View {
                     // One card per package, in the
                     // sources segment's card style.
                     VStack(spacing: 12) {
-                        ForEach(store.packages) { record in
+                        ForEach(visiblePackages) { record in
                             LCSwipeActionsRow(rowID: record.id, openRowID: $openRowID, canShare: record.isComplete, onShare: {
                                 packageToShare = record
                             }, onDelete: {

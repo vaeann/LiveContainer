@@ -44,7 +44,17 @@ struct LCSourcesView: View {
     @State private var ignoreTick = 0
 
     @EnvironmentObject private var sharedModel : SharedModel
+    @EnvironmentObject private var downloadHelper: DownloadHelper
     @ObservedObject private var downloadStore = LCDownloadStore.shared
+
+    /// Downloads-segment count, matching what the downloads
+    /// page shows: the in-flight record is hidden there (Ann
+    /// 2026-11-27), so it is not counted here either.
+    private var visibleDownloadCount: Int {
+        downloadStore.packages.filter { record in
+            !(downloadHelper.isDownloading && record.id == downloadHelper.activeRecordID)
+        }.count
+    }
 
     /// Total number of apps across all enabled sources
     /// (the sources tab's count; switched-off sources
@@ -218,7 +228,7 @@ struct LCSourcesView: View {
             Picker("lc.sources.segment".loc, selection: $selectedSegment) {
                 Text("lc.sources.segment.software".loc).tag(0)
                 Text("lc.sources.segment.updatesWithCount".localizeWithFormat(updatableApps.count)).tag(1)
-                Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(downloadStore.count)).tag(2)
+                Text("lc.sources.segment.downloadsWithCount".localizeWithFormat(visibleDownloadCount)).tag(2)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)

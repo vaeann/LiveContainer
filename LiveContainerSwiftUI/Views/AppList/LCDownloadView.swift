@@ -73,7 +73,12 @@ public final class DownloadHelper : NSObject, ObservableObject {
     /// Downloads-library record the active task belongs to, and
     /// the file the finished download must land at. Set for both
     /// install-flow downloads and library-page resumes.
-    private var activeRecordID: String? = nil
+    /// Published (read-only outside) so the downloads page can
+    /// hide the in-flight record (Ann 2026-11-27: a package she
+    /// just started from a source row does not belong in the
+    /// library list until it lands or is interrupted — its
+    /// progress lives on the source row's ring and the capsule).
+    @Published private(set) var activeRecordID: String? = nil
     private var activeDestination: URL? = nil
     /// Resume data of the most recent interrupted download,
     /// captured from the completion error; the install flow
@@ -834,16 +839,17 @@ public struct DownloadCapsuleModifier: ViewModifier {
     // The capsule lives for the whole install session — downloads
     // and the install phases in between — and then hands its
     // place to the success card when the session report sets one.
-    // While the sources tab is on screen the PROGRESS form stays
-    // hidden (Ann 2026-11-25): each row's button is the progress
-    // ring there, so the capsule would only duplicate it and
-    // cover the list. Leaving the tab hands progress back to the
-    // capsule. Result cards (success / batch failures) show on
-    // every tab — they are outcomes, not progress.
+    // The progress form shows on EVERY tab, the sources tab
+    // included (Ann 2026-11-27, reversing the 2026-11-25 rule
+    // that hid it there): the capsule is the session's control
+    // panel — pause / cancel, queue count, the install phase —
+    // while a source row's ring is only that row's progress;
+    // the two are not duplicates, and a capsule that pops in
+    // and out as tabs change reads as a bug. Result cards
+    // (success / batch failures) show on every tab as before.
     private func refreshShow() {
         let resultCard = helper.installCompletion != nil && !helper.isInstallSessionActive
-        let progress = (helper.isDownloading || helper.isInstallSessionActive)
-            && sharedModel.selectedTab != .sources
+        let progress = helper.isDownloading || helper.isInstallSessionActive
         withAnimation(.easeInOut(duration: 0.25)) {
             show = resultCard || progress
         }
