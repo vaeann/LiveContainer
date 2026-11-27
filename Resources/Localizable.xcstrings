@@ -21366,6 +21366,29 @@
         }
       }
     },
+    "lc.settings.behavior" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Behavior"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行为"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "行為"
+          }
+        }
+      }
+    },
     "lc.settings.bundleIdMismatch %@ %@" : {
       "comment" : "lc.settings.bundleIdMismatch",
       "extractionState" : "stale",

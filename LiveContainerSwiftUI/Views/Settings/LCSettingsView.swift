@@ -227,17 +227,6 @@ struct LCSettingsView: View {
                     Text("lc.settings.JitDesc".loc)
                 }
                 
-                Section {
-                    Picker(selection: $selected32BitEmulator) {
-                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
-                            Text("lc.common.none".loc).tag("")
-                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath!)
-                        }
-                    } label: {
-                        Text("lc.settings.selected32BitEmulator".loc)
-                    }
-                }
-                
                 Section{
                     Toggle(isOn: $dynamicColors) {
                         Text("lc.settings.dynamicColors".loc)
@@ -257,28 +246,45 @@ struct LCSettingsView: View {
                     Toggle(isOn: $frameShortIcon) {
                         Text("lc.settings.FrameIcon".loc)
                     }
+                    Picker(selection: $selected32BitEmulator) {
+                        ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
+                            Text("lc.common.none".loc).tag("")
+                            Text(app.appInfo.displayName()).tag(app.appInfo.relativeBundlePath!)
+                        }
+                    } label: {
+                        Text("lc.settings.selected32BitEmulator".loc)
+                    }
+                    Button {
+                        clearNotifications()
+                    } label: {
+                        Text("lc.settings.clearNotifications".loc)
+                    }
                 } header: {
                     Text("lc.common.miscellaneous".loc)
                 } footer: {
                     Text("lc.settings.FrameIconDesc".loc)
                 }
-                
+
                 Section {
                     Toggle(isOn: $silentSwitchApp) {
                         Text("lc.settings.silentSwitchApp".loc)
                     }
-                } footer: {
-                    Text("lc.settings.silentSwitchAppDesc".loc)
-                }
-                
-                Section {
                     Toggle(isOn: $silentOpenWebPage) {
                         Text("lc.settings.silentOpenWebPage".loc)
                     }
+                    Toggle(isOn: $dontSignApp) {
+                        Text("lc.settings.dontSign".loc)
+                    }
+                } header: {
+                    Text("lc.settings.behavior".loc)
                 } footer: {
-                    Text("lc.settings.silentOpenWebPageDesc".loc)
+                    VStack(alignment: .leading) {
+                        Text("lc.settings.silentSwitchAppDesc".loc)
+                        Text("lc.settings.silentOpenWebPageDesc".loc)
+                        Text("lc.settings.dontSignDesc".loc)
+                    }
                 }
-                
+
                 if sharedModel.isHiddenAppUnlocked {
                     Section {
                         Toggle(isOn: $strictHiding) {
@@ -286,22 +292,6 @@ struct LCSettingsView: View {
                         }
                     } footer: {
                         Text("lc.settings.strictHidingDesc".loc)
-                    }
-                }
-                
-                Section {
-                    Toggle(isOn: $dontSignApp) {
-                        Text("lc.settings.dontSign".loc)
-                    }
-                } footer: {
-                    Text("lc.settings.dontSignDesc".loc)
-                }
-
-                Section {
-                    Button {
-                        clearNotifications()
-                    } label: {
-                        Text("lc.settings.clearNotifications".loc)
                     }
                 }
 
