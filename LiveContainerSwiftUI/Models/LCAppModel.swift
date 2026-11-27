@@ -454,23 +454,7 @@ class LCAppModel: ObservableObject, Hashable {
                 guard let signProgress else {
                     return
                 }
-                // This handler runs on the signing thread,
-                // not the main one (patchExecAndSignIfNeed
-                // calls it straight through, and signApp's
-                // executor after its MainActor hops is the
-                // generic one): writing the @Published flag
-                // here fired the object change on a
-                // background thread, and the observing
-                // banner/list views then modified layout
-                // there — the "layout engine from a
-                // background thread" exception that killed
-                // the app on a freshly installed app's first
-                // launch (Ann 2026-11-27, Zhihu). The two
-                // signTweaks progress closures below hop for
-                // this same write; this one was missed.
-                DispatchQueue.main.async {
-                    self.isSigningInProgress = true
-                }
+                self.isSigningInProgress = true
                 self.observer = signProgress.observe(\.fractionCompleted) { p, v in
                     DispatchQueue.main.async {
                         self.signProgress = signProgress.fractionCompleted
