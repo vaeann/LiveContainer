@@ -23531,7 +23531,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add Border to App Icons"
+            "value" : "Add Border to Home Screen Icons"
           }
         },
         "es" : {
@@ -23603,13 +23603,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "App图标增加边框"
+            "value" : "桌面图标增加边框"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "App圖標增加邊框"
+            "value" : "桌面圖標增加邊框"
           }
         }
       }
