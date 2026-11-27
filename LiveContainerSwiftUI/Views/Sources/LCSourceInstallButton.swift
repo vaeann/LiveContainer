@@ -39,11 +39,9 @@ func lcSourceInstallStatusText(phase: LCSourceInstallPhase, bundleID: String, he
 ///   the arc is the download progress and the centre pauses /
 ///   resumes the active download; a dimmed ring while queued; a
 ///   full ring with a spinner while installing;
-/// - the app is not installed and the exact version already
-///   sits completed in the downloads library: the cloud
-///   button, which installs the kept package directly (an
-///   outdated app keeps its Update capsule instead — the
-///   library copy is then used silently by install());
+/// - the exact version already sits completed in the downloads
+///   library while the app is not installed (or outdated): the
+///   cloud button, which installs the kept package directly;
 /// - otherwise the classic GET / UPDATE / OPEN capsule.
 struct LCSourceInstallButton: View {
     let app: AltStoreSourceApp
@@ -65,19 +63,10 @@ struct LCSourceInstallButton: View {
 
     /// The kept package for the version this button would install.
     private var storedPackage: LCDownloadedPackage? {
-        // The cloud form belongs to Get only (Ann
-        // 2026-11-27, later): an app sitting in the
-        // updates group is there because a newer version
-        // exists, so its button must say Update — the
-        // cloud pre-empted it whenever the new version's
-        // package already sat in the library, mislabelling
-        // the action (the tap did install the new version,
-        // just under the wrong sign). Nothing is lost:
-        // install() checks the library first and installs
-        // the kept package without re-downloading. The
-        // Ignored button is likewise never pre-empted —
-        // it is a toggle, not an install path.
-        guard buttonState == .get, let version = app.latestVersion?.version else { return nil }
+        // The Ignored button is a toggle, not an install
+        // path: it must not be pre-empted by the cloud
+        // button (Ann 2026-11-27).
+        guard buttonState == .get || buttonState == .update, let version = app.latestVersion?.version else { return nil }
         return store.packages.first { $0.isComplete && $0.bundleID == app.bundleIdentifier && $0.version == version }
     }
 
