@@ -79,6 +79,13 @@ public final class DownloadHelper : NSObject, ObservableObject {
     /// library list until it lands or is interrupted — its
     /// progress lives on the source row's ring and the capsule).
     @Published private(set) var activeRecordID: String? = nil
+    /// Bundle id of a download adopted at launch (Ann
+    /// 2026-11-27 audit): its source row wears the progress
+    /// ring like any live download, and when the task ends
+    /// with nobody waiting, the ring state is cleared here
+    /// rather than by the queue processor (which never ran
+    /// for it).
+    private(set) var reattachedBundleID: String? = nil
     private var activeDestination: URL? = nil
     /// Resume data of the most recent interrupted download,
     /// captured from the completion error; the install flow
@@ -140,11 +147,51 @@ public final class DownloadHelper : NSObject, ObservableObject {
                 self.activeDestination = LCDownloadStore.shared.fileURL(for: record)
                 self.downloadName = record.appName
                 self.downloadIconURL = record.iconURL.flatMap { URL(string: $0) }
+                // The source row rejoins the live states
+                // too (Ann 2026-11-27 audit): without this
+                // the row showed Get, and tapping it threw
+                // the half-finished transfer away and
+                // started over.
+                if let bundleID = record.bundleID {
+                    self.activeSourceBundleID = bundleID
+                    self.reattachedBundleID = bundleID
+                    self.setSourceInstallState(bundleID, .downloading)
+                }
             }
         }
     }
 
     func download(url: URL, to: URL, recordID: String? = nil) async throws {
+        // A task adopted at launch that is fetching exactly
+        // this URL is not stale — it IS this download (Ann
+        // 2026-11-27 audit). Adopt it as the job's transfer:
+        // hook the waiter onto its completion instead of
+        // cancelling it and starting from zero. Ownership
+        // passes to the job, whose processor clears the
+        // source-row state when it ends.
+        if let running = downloadTask, running.originalRequest?.url == url {
+            activeError = nil
+            lastResumeData = nil
+            activeRecordID = recordID
+            activeDestination = to
+            activeURL = url
+            pauseRequested = false
+            pausedResumeData = nil
+            currentJobCancelled = false
+            reattachedBundleID = nil
+            await MainActor.run {
+                cancelled = false
+                isPaused = false
+                isDownloading = true
+            }
+            await withUnsafeContinuation { c in
+                continuation = c
+            }
+            if let activeError {
+                throw activeError
+            }
+            return
+        }
         // A task adopted at launch may still be running; stop it
         // (its record stays partial and resumable) before the new
         // download takes over the single active slot.
@@ -428,6 +475,18 @@ extension DownloadHelper: URLSessionDownloadDelegate {
         } else if continuation == nil, let recordID {
             // e.g. an HTTP error body "downloaded" fine.
             LCDownloadStore.shared.markPartial(id: recordID, downloadedBytes: downloadedSize, totalBytes: totalSize, resumeData: nil)
+        }
+
+        // An adopted download that ended with nobody
+        // waiting leaves its source-row ring behind (Ann
+        // 2026-11-27 audit): the queue processor clears
+        // rings for jobs it ran, but this one never had a
+        // job. (When a job adopted it mid-flight the
+        // marker is already nil and the processor owns
+        // the clearing.)
+        if continuation == nil, let reattachedBundleID {
+            clearSourceInstallState(reattachedBundleID)
+            self.reattachedBundleID = nil
         }
 
         if let continuation {

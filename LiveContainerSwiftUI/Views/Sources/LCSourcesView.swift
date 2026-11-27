@@ -304,13 +304,41 @@ struct LCSourcesView: View {
                     }
                     // 加载中不显示任何指示器（Ann 2026-11-22 晚定：
                     // 原来的转圈 +「加载中」占着内容区碍眼，删了）。
-                } else {
+                } else if allSourcesSortMode == .recentlyUpdated {
+                    // Date order mixes every source's apps
+                    // into one stream, so the error cards
+                    // have no home inside it and ride on
+                    // top, as before.
                     ForEach(viewModel.enabledSources, id: \.id) { item in
                         sourceErrorCard(item: item)
                     }
                     ForEach(allSourcesApps, id: \.app.id) { pair in
                         sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: false)
                             .padding(.horizontal)
+                    }
+                    if totalSourceAppsCount == 0 {
+                        VStack(spacing: 8) {
+                            Text("lc.sources.section.noApps".loc)
+                                .foregroundStyle(.gray)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 160, alignment: .center)
+                        .padding(.horizontal)
+                    }
+                } else {
+                    // Source order: each source's error card
+                    // sits with its own apps instead of all
+                    // the cards piling up at the top of the
+                    // list (Ann 2026-11-27 audit).
+                    ForEach(viewModel.enabledSources, id: \.id) { item in
+                        sourceErrorCard(item: item)
+                        if let source = item.source {
+                            ForEach(source.apps) { app in
+                                sourceAppBanner(app: app, source: source, inUpdatesTab: false)
+                                    .padding(.horizontal)
+                            }
+                        }
                     }
                     if totalSourceAppsCount == 0 {
                         VStack(spacing: 8) {
@@ -425,16 +453,26 @@ struct LCSourcesView: View {
     /// segments it refreshes every enabled source.
     private var refreshTargetItem: AltStoreSourcesViewModel.SourceItem? {
         guard selectedSegment == 0 else { return nil }
+        // While searching, the chips row is covered by the
+        // results and the user cannot see which chip is
+        // selected — a refresh then means "everything on
+        // screen", so it refreshes all sources (Ann
+        // 2026-11-27 audit).
+        guard !isFiltering(sourcesSearchContext) else { return nil }
         return selectedChipItem
     }
 
     /// A failed source's error card, shown wherever its
-    /// apps would have been listed.
+    /// apps would have been listed. Two wordings (Ann
+    /// 2026-11-27 audit): a source with nothing loaded is
+    /// a plain failure; a source still showing its last
+    /// good load says so, so the stale rows below it are
+    /// not mistaken for fresh ones.
     @ViewBuilder
     private func sourceErrorCard(item: AltStoreSourcesViewModel.SourceItem) -> some View {
         if let error = item.error {
             VStack(alignment: .leading, spacing: 6) {
-                Text("lc.sources.section.error".loc)
+                Text(item.source == nil ? "lc.sources.section.error".loc : "lc.sources.section.errorStale".loc)
                     .font(.subheadline)
                     .bold()
                 Text(error)
@@ -522,7 +560,12 @@ struct LCSourcesView: View {
                 Button {
                     updateAll()
                 } label: {
-                    Text("lc.sources.updateAll %lld".localizeWithFormat(updatableApps.count))
+                    // The count is the unignored count, the
+                    // badge's own yardstick (Ann 2026-11-27):
+                    // the button used to promise every row
+                    // in the list, ignored ones included,
+                    // while the badge counted fewer.
+                    Text("lc.sources.updateAll %lld".localizeWithFormat(updateBadgeCount))
                         .bold()
                         .frame(maxWidth: .infinity)
                         .frame(height: 40)
@@ -539,6 +582,11 @@ struct LCSourcesView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal)
+                // Every row ignored: nothing to update, so
+                // the button rests instead of spinning on
+                // an empty list.
+                .disabled(updateBadgeCount == 0)
+                .opacity(updateBadgeCount == 0 ? 0.5 : 1)
 
                 ForEach(updatableApps, id: \.app.id) { pair in
                     sourceAppBanner(app: pair.app, source: pair.source, inUpdatesTab: true)
@@ -561,7 +609,16 @@ struct LCSourcesView: View {
         let installed = installedModel(for: app.bundleIdentifier)
         let update = hasUpdate(for: app)
         let ignored = LCSourceUpdateIgnore.isIgnored(app: app)
-        return installed == nil ? .get : (update && (inUpdatesTab || !ignored) ? .update : .open)
+        guard installed != nil else { return .get }
+        guard update else { return .open }
+        // An ignored update (Ann 2026-11-27): on the
+        // sources segment the row rests at Open; on the
+        // updates segment it shows an Ignored button whose
+        // tap lifts the ignore and turns it back to Update.
+        if ignored {
+            return inUpdatesTab ? .ignored : .open
+        }
+        return .update
     }
 
     @ViewBuilder
@@ -579,10 +636,13 @@ struct LCSourcesView: View {
                     launchInstalledApp(app)
                 case .get, .update:
                     install(app: app)
+                case .ignored:
+                    unignoreUpdate(for: app)
                 }
             },
             copyAction: { copyLatestDownloadURL(app) },
             ignoreAction: (update && !ignored) ? { ignoreUpdate(for: app) } : nil,
+            unignoreAction: (update && ignored) ? { unignoreUpdate(for: app) } : nil,
             installVersionAction: { version in install(app: app, version: version) }
         )
     }
@@ -605,9 +665,9 @@ struct LCSourcesView: View {
 
     /// Installed apps whose source offers a newer version, across all
     /// sources. One entry per bundle id (the newest offer wins), in
-    /// first-appearance order. Ignored versions stay in this list.
-    /// Deliberately unfiltered: the badge count and update-all act
-    /// on the whole list, and the updates segment shows it as-is.
+    /// first-appearance order. Ignored versions stay in this list —
+    /// the updates segment shows them with an Ignored button — but
+    /// the badge count and Update All skip them (Ann 2026-11-27).
     var updatableApps: [(source: AltStoreSource, app: AltStoreSourceApp)] {
         _ = ignoreTick
         // One lookup table per evaluation instead of a
@@ -653,6 +713,14 @@ struct LCSourcesView: View {
         ignoreTick += 1
     }
 
+    /// Lifts an ignore (Ann 2026-11-27): offered by the
+    /// updates segment's Ignored button and by either
+    /// segment's long-press menu.
+    func unignoreUpdate(for app: AltStoreSourceApp) {
+        LCSourceUpdateIgnore.setIgnoredVersion(nil, for: app.bundleIdentifier)
+        ignoreTick += 1
+    }
+
     // MARK: - Row actions
 
     private func launchInstalledApp(_ app: AltStoreSourceApp) {
@@ -674,7 +742,10 @@ struct LCSourcesView: View {
     }
 
     private func updateAll() {
-        let items: [[String: Any]] = updatableApps.compactMap { entry in
+        // Ignored versions are skipped (Ann 2026-11-27):
+        // ignoring means "not this one", and Update All
+        // used to steamroll straight over it.
+        let items: [[String: Any]] = updatableApps.filter { !LCSourceUpdateIgnore.isIgnored(app: $0.app) }.compactMap { entry in
             guard let downloadURL = entry.app.latestVersion?.downloadURL else { return nil }
             var item: [String: Any] = ["url": downloadURL, "name": entry.app.name, "bundleID": entry.app.bundleIdentifier]
             if let iconURL = entry.app.iconURL {
@@ -790,22 +861,33 @@ struct LCSourcesView: View {
         return results
     }
 
+    /// Adds a source and hands back the failure text, if
+    /// any (Ann 2026-11-27 audit): the Manage Sources
+    /// sheet shows it inline under its input, while the
+    /// deep-link path turns it into the page's alert.
     @MainActor
-    private func handleAddSource(_ rawValue: String) async -> Bool {
+    private func handleAddSource(_ rawValue: String) async -> String? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        let error = await viewModel.addSource(from: trimmed)
-        if let error {
-            errorMessage = error
-            return false
-        }
-        return true
+        guard !trimmed.isEmpty else { return "lc.sources.error.invalidUrl".loc }
+        return await viewModel.addSource(from: trimmed)
     }
     
     @MainActor
     private func install(app: AltStoreSourceApp, version: AltStoreSourceAppVersion? = nil) {
         guard let downloadURL = (version ?? app.latestVersion)?.downloadURL else {
             errorMessage = "lc.sources.error.missingDownload".loc
+            return
+        }
+        // A complete copy of exactly this version already
+        // in the downloads library installs from disk
+        // instead of downloading again (Ann 2026-11-27
+        // audit): the main button's cloud form only covers
+        // the latest version, so the version list's
+        // Install used to re-download a package the
+        // library already held.
+        if let versionString = (version ?? app.latestVersion)?.version,
+           let stored = LCDownloadStore.shared.packages.first(where: { $0.isComplete && $0.bundleID == app.bundleIdentifier && $0.version == versionString }) {
+            NotificationCenter.default.post(name: NSNotification.InstallLocalFileNotification, object: LCDownloadStore.shared.fileURL(for: stored))
             return
         }
         // Installing over an installed app is an update: replace in place
@@ -836,7 +918,11 @@ struct LCSourcesView: View {
                 }
                 if let sourceUrl {
                     DataManager.shared.model.selectedTab = .sources
-                    Task { await handleAddSource(sourceUrl) }
+                    Task {
+                        if let error = await handleAddSource(sourceUrl) {
+                            errorMessage = error
+                        }
+                    }
                 }
             }
         }

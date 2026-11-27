@@ -34,6 +34,9 @@ struct LCSourceAppBanner: View {
     let action: () -> Void
     let copyAction: () -> Void
     let ignoreAction: (() -> Void)?
+    /// Lifts this version's ignore (Ann 2026-11-27);
+    /// offered exactly when ignoreAction is not.
+    let unignoreAction: (() -> Void)?
     let installVersionAction: (AltStoreSourceAppVersion) -> Void
 
     @AppStorage("dynamicColors") private var dynamicColors = true
@@ -106,7 +109,12 @@ struct LCSourceAppBanner: View {
             }
             .allowsHitTesting(false)
             Spacer()
-            copyButton
+            // No download URL, no copy button (Ann
+            // 2026-11-27 audit): it used to flash its
+            // checkmark having copied nothing.
+            if app.latestVersion?.downloadURL != nil {
+                copyButton
+            }
             // The version sits under the button (Ann
             // 2026-11-26, second round): it belongs to
             // the action — "GET, and this is the version
@@ -168,6 +176,13 @@ struct LCSourceAppBanner: View {
                     ignoreAction()
                 } label: {
                     Label("lc.sources.ignoreVersion".loc, systemImage: "bell.slash")
+                }
+            }
+            if let unignoreAction {
+                Button {
+                    unignoreAction()
+                } label: {
+                    Label("lc.sources.action.unignore".loc, systemImage: "bell")
                 }
             }
         }

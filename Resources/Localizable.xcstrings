@@ -30970,6 +30970,29 @@
         }
       }
     },
+    "lc.sources.action.ignored" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignored"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已忽略"
+          }
+        }
+      }
+    },
     "lc.sources.action.open" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -31265,6 +31288,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "等待下載"
+          }
+        }
+      }
+    },
+    "lc.sources.action.unignore" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unignore This Version"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消忽略此版本"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消忽略此版本"
           }
         }
       }
@@ -33130,6 +33176,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法刷新源頭。"
+          }
+        }
+      }
+    },
+    "lc.sources.section.errorStale" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refresh failed — showing the last loaded content."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新失败，显示的是上次加载的内容。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新失敗，顯示的是上次載入的內容。"
           }
         }
       }

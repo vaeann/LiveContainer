@@ -209,12 +209,18 @@ enum LCSourceAppButtonState {
     case get
     case open
     case update
+    /// The updates segment's form for an ignored update
+    /// (Ann 2026-11-27): the button says Ignored, and
+    /// tapping it lifts the ignore instead of updating —
+    /// it turns back into Update.
+    case ignored
 
     var title: String {
         switch self {
         case .get: return "lc.sources.action.get".loc
         case .open: return "lc.sources.action.open".loc
         case .update: return "lc.sources.action.update".loc
+        case .ignored: return "lc.sources.action.ignored".loc
         }
     }
 }

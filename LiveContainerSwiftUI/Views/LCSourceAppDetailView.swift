@@ -101,17 +101,22 @@ struct LCSourceAppDetailView: View {
                         }
                     )
                     Spacer()
-                    Button {
-                        copyAction()
-                        copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            copied = false
+                    // Same rule as the row (Ann 2026-11-27
+                    // audit): no download URL, no copy
+                    // button.
+                    if app.latestVersion?.downloadURL != nil {
+                        Button {
+                            copyAction()
+                            copied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                copied = false
+                            }
+                        } label: {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .frame(width: 36, height: 36)
                         }
-                    } label: {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .frame(width: 36, height: 36)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                     LCSourceInstallButton(
                         app: app,
                         buttonState: liveButtonState,

@@ -256,6 +256,15 @@ final class AltStoreSourcesViewModel: ObservableObject {
         sources.append(SourceItem(url: normalizedURL, isLoading: true))
         persistSources()
         await refreshSource(url: normalizedURL)
+        // A fetch failure is the add's failure too (Ann
+        // 2026-11-27 audit): it used to vanish into the
+        // item's error card behind the sheet, so the add
+        // looked successful and the input cleared. The
+        // source stays added — its card on the page offers
+        // the retry — but the caller hears about it.
+        if let item = sources.first(where: { $0.url == normalizedURL }), let error = item.error {
+            return error
+        }
         return nil
     }
     

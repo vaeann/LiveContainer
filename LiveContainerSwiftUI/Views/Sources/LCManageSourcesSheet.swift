@@ -13,9 +13,14 @@ import UIKit
 struct ManageSourcesSheet: View {
     @ObservedObject var viewModel: AltStoreSourcesViewModel
     @Binding var isPresented: Bool
-    let onAdd: (String) async -> Bool
-    
+    /// Adds a source; nil means success, otherwise the
+    /// failure text to show under the input (Ann
+    /// 2026-11-27 audit — a failed fetch used to clear
+    /// the input and look like success).
+    let onAdd: (String) async -> String?
+
     @State private var manualSourceValue = ""
+    @State private var addError: String?
     @State private var isAddingManual = false
     @State private var sourcePendingRemoval: AltStoreSourcesViewModel.SourceItem?
     @FocusState private var isManualFieldFocused: Bool
@@ -107,6 +112,12 @@ struct ManageSourcesSheet: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(manualSourceValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isAddingManual)
+
+                        if let addError {
+                            Text(addError)
+                                .font(.footnote)
+                                .foregroundColor(.red)
+                        }
                     }
                     .padding(.vertical, 4)
                 } header: {
@@ -160,9 +171,14 @@ struct ManageSourcesSheet: View {
         let trimmed = manualSourceValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAddingManual else { return }
         isAddingManual = true
+        addError = nil
         Task {
-            let success = await onAdd(trimmed)
-            if success {
+            if let error = await onAdd(trimmed) {
+                // Keep the input so it can be fixed and
+                // retried; the source itself was added and
+                // its card on the page offers a retry too.
+                addError = error
+            } else {
                 manualSourceValue = ""
                 isManualFieldFocused = false
             }

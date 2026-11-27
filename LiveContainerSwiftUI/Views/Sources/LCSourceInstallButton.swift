@@ -63,7 +63,10 @@ struct LCSourceInstallButton: View {
 
     /// The kept package for the version this button would install.
     private var storedPackage: LCDownloadedPackage? {
-        guard buttonState != .open, let version = app.latestVersion?.version else { return nil }
+        // The Ignored button is a toggle, not an install
+        // path: it must not be pre-empted by the cloud
+        // button (Ann 2026-11-27).
+        guard buttonState == .get || buttonState == .update, let version = app.latestVersion?.version else { return nil }
         return store.packages.first { $0.isComplete && $0.bundleID == app.bundleIdentifier && $0.version == version }
     }
 
@@ -159,15 +162,18 @@ struct LCSourceInstallButton: View {
         Button {
             action()
         } label: {
+            // The Ignored state rests grey (Ann 2026-11-27):
+            // it is a toggle waiting to be lifted, not a
+            // call to action, so it does not wear the tint.
             Text(buttonState.title)
                 .bold()
-                .foregroundColor(.white)
+                .foregroundColor(buttonState == .ignored ? .secondary : .white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.1)
                 .padding(.horizontal, wide ? 0 : 18)
                 .frame(maxWidth: wide ? .infinity : nil)
                 .frame(height: wide ? 36 : 32)
-                .background(Capsule().fill(tint))
+                .background(Capsule().fill(buttonState == .ignored ? Color(UIColor.tertiarySystemFill) : tint))
                 .clipShape(Capsule())
         }
         .buttonStyle(BasicButtonStyle())
